@@ -72,6 +72,7 @@
 
 /* Few ZM options that are needed by the source code */
 #cmakedefine ZM_MEM_MAPPED 1
+#cmakedefine01 ZM_NO_FFMPEG_ENGINE
 
 /* Its safe to assume that signal return type is void. This is a fix for zm_signal.h */
 #define RETSIGTYPE void

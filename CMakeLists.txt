@@ -8,6 +8,9 @@ file (STRINGS "version" zoneminder_VERSION)
 # make API version a minor of ZM version
 set(zoneminder_API_VERSION "${zoneminder_VERSION}.1")
 
+# Using features from C++11
+set (CMAKE_CXX_STANDARD 11)
+
 # Make sure the submodules are there
 if( NOT EXISTS "${CMAKE_SOURCE_DIR}/web/api/app/Plugin/Crud/Lib/CrudControllerTrait.php" )
 message( SEND_ERROR "The git submodules are not available. Please run
@@ -127,6 +130,8 @@ set(ZM_NO_MMAP "OFF" CACHE BOOL
     experience problems with the shared memory. default: OFF")
 set(ZM_NO_FFMPEG "OFF" CACHE BOOL 
     "Set to ON to skip ffmpeg checks and force building ZM without ffmpeg. default: OFF")
+set(ZM_NO_FFMPEG_ENGINE OFF CACHE BOOL 
+    "Set to ON to exclude the Ffmpeg engine Source type (experimental, not to be confused with the Ffmpeg Source type). default: OFF")
 set(ZM_NO_LIBVLC "OFF" CACHE BOOL 
 "Set to ON to skip libvlc checks and force building ZM without libvlc. default: OFF")
 set(ZM_NO_CURL "OFF" CACHE BOOL 
@@ -510,6 +515,27 @@ if(NOT ZM_NO_FFMPEG)
 		set(optlibsnotfound "${optlibsnotfound} AVDevice")
 	endif(AVDEVICE_LIBRARIES)
 
+	if(NOT ZM_NO_FFMPEG_ENGINE)
+		# avfilter (using find_library and find_path)
+		find_library(AVFILTER_LIBRARIES avfilter)
+		if(AVFILTER_LIBRARIES)
+			set(HAVE_LIBAVFILTER 1)
+			list(APPEND ZM_BIN_LIBS "${AVFILTER_LIBRARIES}")
+			find_path(AVFILTER_INCLUDE_DIR "libavfilter/avfilter.h" /usr/include/ffmpeg)
+			if(AVFILTER_INCLUDE_DIR)
+				include_directories("${AVFILTER_INCLUDE_DIR}")
+				set(CMAKE_REQUIRED_INCLUDES "${AVFILTER_INCLUDE_DIR}")
+			endif(AVFILTER_INCLUDE_DIR)
+			mark_as_advanced(FORCE AVFILTER_LIBRARIES AVFILTER_INCLUDE_DIR)
+			check_include_file("libavfilter/avfilter.h" HAVE_LIBAVFILTER_AVFILTER_H)
+			set(optlibsfound "${optlibsfound} AVFilter")
+			set(ZM_NO_FFMPEG_ENGINE 0)
+		else(AVFILTER_LIBRARIES)
+			set(optlibsnotfound "${optlibsnotfound} AVFilter")
+			set(ZM_NO_FFMPEG_ENGINE 1)
+		endif(AVFILTER_LIBRARIES)
+	endif(NOT ZM_NO_FFMPEG_ENGINE)
+
 	# avutil (using find_library and find_path)
 	find_library(AVUTIL_LIBRARIES avutil)
 	if(AVUTIL_LIBRARIES)
@@ -572,6 +598,8 @@ if(NOT ZM_NO_FFMPEG)
 		mark_as_advanced(FFMPEG_EXECUTABLE)
 	endif(FFMPEG_EXECUTABLE)
 
+elseif(NOT ZM_NO_FFMPEG)
+	set(ZM_NO_FFMPEG_ENGINE 1)
 endif(NOT ZM_NO_FFMPEG)
 
 # Do not check for libvlc if ZM_NO_LIBVLC is on

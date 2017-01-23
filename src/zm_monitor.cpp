@@ -40,6 +40,7 @@
 #include "zm_file_camera.h"
 #if HAVE_LIBAVFORMAT
 #include "zm_ffmpeg_camera.h"
+#include "zm_ffmpeg_engine_camera.h"
 #endif // HAVE_LIBAVFORMAT
 #if HAVE_LIBVLC
 #include "zm_libvlc_camera.h"
@@ -2369,6 +2370,26 @@ int Monitor::LoadFileMonitors( const char *file, Monitor **&monitors, Purpose pu
 }
 
 #if HAVE_LIBAVFORMAT
+static const char* ZM_METHOD = "zm-method";
+static const char* ZM_METHOD_FFMPEG_ENGINE = "ffmpeg-engine";
+
+const char* eatws(const char* s) { // eat whitespace
+	while(s && (*s == ' ' || *s == '\t'))
+		s++;
+	
+	return s;
+}
+
+bool isOptionSet(const char* options, const char* key, const char* value) {
+	const char* s = strstr(options, key);
+	if(!s) return false;
+	s = eatws(s+= strlen(key));
+	if(*s != '=') return false;
+	s = eatws(++s);
+	
+	return strcmp(s, value) == 0;
+}
+
 int Monitor::LoadFfmpegMonitors( const char *file, Monitor **&monitors, Purpose purpose ) {
     std::string sql = "select Id, Name, ServerId, StorageId, Function+0, Enabled, LinkedMonitors, Path, Method, Options, Width, Height, Colours, Palette, Orientation+0, Deinterlacing, SaveJPEGs, VideoWriter, EncoderParameters, RecordAudio, Brightness, Contrast, Hue, Colour, EventPrefix, LabelFormat, LabelX, LabelY, LabelSize, ImageBufferCount, WarmupCount, PreEventCount, PostEventCount, StreamReplayBuffer, AlarmFrameCount, SectionLength, FrameSkip, MotionFrameSkip, AnalysisFPS, AnalysisUpdateDelay, MaxFPS, AlarmMaxFPS, FPSReportInterval, RefBlendPerc, AlarmRefBlendPerc, TrackMotion, Exif from Monitors where Function != 'None' and Type = 'Ffmpeg'";
   if ( file[0] ) {
@@ -2450,21 +2471,42 @@ int Monitor::LoadFfmpegMonitors( const char *file, Monitor **&monitors, Purpose 
     int track_motion = atoi(dbrow[col]); col++;
     bool embed_exif = (*dbrow[col] != '0'); col++;
 
-    Camera *camera = new FfmpegCamera(
-      id,
-      path, // File
-      method,
-      options,
-      width,
-      height,
-      colours,
-      brightness,
-      contrast,
-      hue,
-      colour,
-      purpose==CAPTURE,
-      record_audio
-    );
+	Camera *camera = NULL;
+#if(!ZM_NO_FFMPEG_ENGINE)
+	if(isOptionSet(options, ZM_METHOD, ZM_METHOD_FFMPEG_ENGINE))
+		camera = newFfmpegEngineCamera(
+					id,
+					path, // File
+					method,
+					options,
+					width,
+					height,
+					colours,
+					brightness,
+					contrast,
+					hue,
+					colour,
+					purpose==CAPTURE,
+					record_audio,
+					analysis_fps
+				  );
+#endif
+	if(!camera)
+		camera = new FfmpegCamera(
+			  id,
+			  path, // File
+			  method,
+			  options,
+			  width,
+			  height,
+			  colours,
+			  brightness,
+			  contrast,
+			  hue,
+			  colour,
+			  purpose==CAPTURE,
+			  record_audio
+			);
 
     monitors[i] = new Monitor(
       id,
@@ -2716,21 +2758,41 @@ Monitor *Monitor::Load( unsigned int p_id, bool load_zones, Purpose purpose ) {
     );
   } else if ( type == "Ffmpeg" ) {
 #if HAVE_LIBAVFORMAT
-    camera = new FfmpegCamera(
-      id,
-      path.c_str(),
-      method,
-      options,
-      width,
-      height,
-      colours,
-      brightness,
-      contrast,
-      hue,
-      colour,
-      purpose==CAPTURE,
-      record_audio
-    );
+#if(!ZM_NO_FFMPEG_ENGINE)
+	if(isOptionSet(options.c_str(), ZM_METHOD, ZM_METHOD_FFMPEG_ENGINE))
+		camera = newFfmpegEngineCamera(
+					id,
+					path.c_str(),
+					method,
+					options,
+					width,
+					height,
+					colours,
+					brightness,
+					contrast,
+					hue,
+					colour,
+					purpose==CAPTURE,
+					record_audio,
+					analysis_fps
+				  );
+#endif
+	if(!camera)
+		camera = new FfmpegCamera(
+		  id,
+		  path.c_str(),
+		  method,
+		  options,
+		  width,
+		  height,
+		  colours,
+		  brightness,
+		  contrast,
+		  hue,
+		  colour,
+		  purpose==CAPTURE,
+		  record_audio
+		);
 #else // HAVE_LIBAVFORMAT
     Fatal( "You must have ffmpeg libraries installed to use ffmpeg cameras for monitor %d", id );
 #endif // HAVE_LIBAVFORMAT
