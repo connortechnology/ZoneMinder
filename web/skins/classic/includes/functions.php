@@ -46,8 +46,15 @@ function xhtmlHeaders( $file, $title ) {
   <meta charset="utf-8">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <title><?php echo ZM_WEB_TITLE_PREFIX ?> - <?php echo validHtmlStr($title) ?></title>
-  <link rel="icon" type="image/ico" href="graphics/favicon.ico"/>
-  <link rel="shortcut icon" href="graphics/favicon.ico"/>
+<?php
+if ( file_exists( "skins/$skin/css/$css/graphics/favicon.ico" ) ) {
+  echo "<link rel=\"icon\" type=\"image/ico\" href=\"skins/$skin/css/$css/graphics/favicon.ico\"/>";
+  echo "<link rel=\"shortcut icon\" href=\"skins/$skin/css/$css/graphics/favicon.ico\"/>";
+} else {
+  echo '<link rel="icon" type="image/ico" href="graphics/favicon.ico"/>';
+  echo '<link rel="shortcut icon" href="graphics/favicon.ico"/>';
+}
+?>
   <link rel="stylesheet" href="css/reset.css" type="text/css"/>
   <link rel="stylesheet" href="css/overlay.css" type="text/css"/>
   <link rel="stylesheet" href="css/bootstrap.min.css" type="text/css"/>
@@ -128,6 +135,10 @@ function xhtmlHeaders( $file, $title ) {
 	if ( $cssJsFile ) {
 ?>
   <script type="text/javascript" src="<?php echo $cssJsFile ?>"></script>
+<?php
+} else {
+?>
+  <script type="text/javascript" src="skins/classic/js/classic.js"></script>
 <?php } ?>
   <script type="text/javascript" src="<?php echo $skinJsFile ?>"></script>
   <script type="text/javascript" src="js/logger.js"></script>
@@ -143,19 +154,17 @@ function xhtmlHeaders( $file, $title ) {
 } // end function xhtmlHeaders( $file, $title )
 
 function getNavBarHTML() {
-
-
   $versionClass = (ZM_DYN_DB_VERSION&&(ZM_DYN_DB_VERSION!=ZM_VERSION))?'errorText':'';
 
+
   ob_start();
-  global $CLANG;
-  global $VLANG;
   global $running;
   if ( $running == null )
     $running = daemonCheck();
   $status = $running?translate('Running'):translate('Stopped');
   global $user;
   global $bwArray;
+  global $view;
 ?>
 <div class="navbar navbar-inverse navbar-static-top">
 	<div class="container-fluid">
@@ -179,19 +188,19 @@ function getNavBarHTML() {
 <?php if ( ZM_OPT_X10 && canView( 'Devices' ) ) { ?>
 			<li><a href="?view=devices">Devices</a></li>
 <?php } ?>
-<li><a href="?view=groups"><?php echo translate('Groups') ?></a></li>
-      <li><a href="?view=filter"><?php echo translate('Filters') ?></a></li>
+<li><a href="?view=groups"<?php echo $view=='groups'?' class="selected"':''?>><?php echo translate('Groups') ?></a></li>
+      <li><a href="?view=filter"<?php echo $view=='filter'?' class="selected"':''?>><?php echo translate('Filters') ?></a></li>
 
 <?php 
   if ( canView( 'Stream' ) ) {
 ?>
-  <li><a href="?view=cycle"><?php echo translate('Cycle') ?></a></li>
-      <li><a href="?view=montage"><?php echo translate('Montage') ?></a></li>
+  <li><a href="?view=cycle"<?php echo $view=='cycle'?' class="selected"':''?>><?php echo translate('Cycle') ?></a></li>
+      <li><a href="?view=montage"<?php echo $view=='montage'?' class="selected"':''?>><?php echo translate('Montage') ?></a></li>
 <?php
    }
   if ( canView('Events') ) {
  ?>
-   <li><a href="?view=montagereview"><?php echo translate('MontageReview')?></a></li>
+   <li><a href="?view=montagereview"<?php echo $view=='montagereview'?' class="selected"':''?>><?php echo translate('MontageReview')?></a></li>
 <?php
   }
 ?>
@@ -213,7 +222,7 @@ function getNavBarHTML() {
 	</div> <!-- End .container-fluid -->
 	<div class="container-fluid">
   <div class="pull-left">
-    <?php echo makePopupLink( '?view=bandwidth', 'zmBandwidth', 'bandwidth', $bwArray[$_COOKIE['zmBandwidth']], ($user && $user['MaxBandwidth'] != 'low' ) ) ?> <?php echo translate('BandwidthHead') ?>
+    <?php echo makePopupLink( '?view=bandwidth', 'zmBandwidth', 'bandwidth', $bwArray[$_COOKIE['zmBandwidth']] . ' ' . translate('BandwidthHead'), ($user && $user['MaxBandwidth'] != 'low' ) ) ?>
   </div>
   <div class="pull-right">
 	  <?php echo makePopupLink( '?view=version', 'zmVersion', 'version', '<span class="'.$versionClass.'">v'.ZM_VERSION.'</span>', canEdit( 'System' ) ) ?>

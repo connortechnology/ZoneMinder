@@ -45,6 +45,10 @@ function newWindow( url, name, width, height ) {
 }
 
 function getPopupSize( tag, width, height ) {
+  if ( typeof popupSizes == 'undefined' ) {
+    Error( "Can't find any window sizes" );
+    return( { 'width': 0, 'height': 0 } );
+  }
   var popupSize = Object.clone( popupSizes[tag] );
   if ( !popupSize ) {
     Error( "Can't find window size for tag '"+tag+"'" );
@@ -83,7 +87,6 @@ function getPopupSize( tag, width, height ) {
     Warning( "Adjusting to minimum height ("+popupSize.minHeight+") when getting popup size for tag '"+tag+"' because calculated height is " + popupSize.height );
     popupSize.height = popupSize.minHeight;
   }
-  Debug( popupSize );
   return( popupSize );
 }
 

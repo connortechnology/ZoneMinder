@@ -68,7 +68,7 @@ $widths = array(
   ''  => 'auto',
   160 => 160,
   320 => 320,
-  352  => 352,
+  352 => 352,
   640 => 640,
   1280 => 1280 );
 
@@ -161,9 +161,7 @@ if ( $showZones ) {
 <?php
 }
 ?>
-        <a href="#" onclick="closeWindow()"><?php echo translate('Close') ?></a>
       </div>
-      <h2><?php echo translate('Montage') ?></h2>
       <div id="headerControl">
         <span id="groupControl"><label><?php echo translate('Group') ?>:</label>
 <?php
@@ -266,5 +264,4 @@ foreach ( $monitors as $monitor ) {
       </div>
     </div>
   </div>
-</body>
-</html>
+<?php xhtmlFooter() ?>
