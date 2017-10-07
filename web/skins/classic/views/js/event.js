@@ -47,15 +47,16 @@ function changeScale() {
   var newWidth = ( baseWidth * scale ) / SCALE_BASE;
   var newHeight = ( baseHeight * scale ) / SCALE_BASE;
 
-	if ( vid ) {
-    // Using video.js
-		vid.width = newWidth;
-		vid.height = newHeight;
-	} else {
+  if ( vid ) {
+  // Using video.js
+    Cookie.write( 'zmEventScale'+eventData.MonitorId, scale, { duration: 10*365 } );
+    location.reload(true);
+    return;
+  } else {
     streamScale( scale );
-		var streamImg = document.getElementById('evtStream');
-		streamImg.style.width = newWidth + "px";
-		streamImg.style.height = newHeight + "px";
+    var streamImg = document.getElementById('evtStream');
+    streamImg.style.width = newWidth + "px";
+    streamImg.style.height = newHeight + "px";
     Cookie.write( 'zmEventScale'+eventData.MonitorId, scale, { duration: 10*365 } );
   }
 }
