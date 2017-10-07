@@ -20,6 +20,11 @@
 
 $servers = Server::find_all();
 $storage_areas = Storage::find_all();
+$StorageById = array();
+foreach ( $storage_areas as $S ) {
+  $StorageById[$S->Id()] = $S;
+}
+
 $show_storage_areas = count($storage_areas) > 1 and canEdit( 'System' ) ? 1 : 0;
 if ( $running == null ) 
   $running = daemonCheck();
@@ -114,55 +119,34 @@ xhtmlHeaders( __FILE__, translate('Console') );
     <div class="controlHeader">
       <span id="groupControl"><label><?php echo translate('Group') ?>:</label>
 <?php
-  $group_id = 0;
-  if ( isset($_REQUEST['group']) ) {
-    $group_id = $_REQUEST['group'];
-  } else if ( isset($_COOKIE['zmGroup'] ) ) {
-    $group_id = $_COOKIE['zmGroup'];
-  }
-  $subgroup_id = 0;
-  if ( isset($_REQUEST['subgroup']) ) {
-    $subgroup_id = $_REQUEST['subgroup'];
-  } else if ( isset($_COOKIE['zmSubGroup'] ) ) {
-    $subgroup_id = $_COOKIE['zmSubGroup'];
-  }
+# This will end up with the group_id of the deepest selection
+$group_id = Group::get_group_dropdowns();
+$groupSql = Group::get_group_sql( $group_id );
+?>
+</span>
+<span id="monitorControl"><label><?php echo translate('Monitor') ?>:</label>
+<?php
 
-  $groups = array(0=>'All');
-  foreach ( Group::find_all( array('ParentId'=>null) ) as $Group ) {
-    $groups[$Group->Id()] = $Group->Name();
-  }
-  echo htmlSelect( 'group', $groups, $group_id, 'changeGroup(this);' );
-  $groups = array(0=>'All');
-  if ( $group_id ) {
-    foreach ( Group::find_all( array('ParentId'=>$group_id) ) as $Group ) {
-      $groups[$Group->Id()] = $Group->Name();
-    }
-  }
-  echo htmlSelect( 'subgroup', $groups, $subgroup_id, 'changeSubGroup(this);' );
-
-  $group = NULL;
-  if ( $group_id ) {
-	  if ( $group = dbFetchOne( 'SELECT MonitorIds FROM Groups WHERE Id = ?', NULL, array($group_id) ) )
-		  $groupIds = array_flip(explode( ',', $group['MonitorIds'] ));
-    if ( $subgroup_id ) {
-      if ( $group = dbFetchOne( 'SELECT MonitorIds FROM Groups WHERE Id = ?', NULL, array($subgroup_id) ) )
-        $groupIds = array_merge( $groupIds, array_flip(explode( ',', $group['MonitorIds'] ) ) );
-    } else {
-      foreach ( dbFetchAll( 'SELECT MonitorIds FROM Groups WHERE ParentId = ?', NULL, array($group_id) ) as $group )
-        $groupIds = array_merge( $groupIds, array_flip(explode( ',', $group['MonitorIds'] ) ) );
-    }
+  $monitor_id = 0;
+  if ( isset( $_REQUEST['monitor_id'] ) ) {
+    $monitor_id = $_REQUEST['monitor_id'];
+  } else if ( isset($_COOKIE['zmMonitorId']) ) {
+    $monitor_id = $_COOKIE['zmMonitorId'];
   }
 
   $maxWidth = 0;
   $maxHeight = 0;
   # Used to determine if the Cycle button should be made available
-  $monitors = dbFetchAll( 'SELECT * FROM Monitors ORDER BY Sequence ASC' );
+
+  $monitors = dbFetchAll( 'SELECT * FROM Monitors'.($groupSql?' WHERE '.$groupSql:'').' ORDER BY Sequence ASC' );
   $displayMonitors = array();
+  $monitors_dropdown = array(''=>'All');
+
   for ( $i = 0; $i < count($monitors); $i++ ) {
-    if ( !visibleMonitor( $monitors[$i]['Id'] ) ) {
+    if ( $monitor_id and ( $monitors[$i]['Id'] != $monitor_id ) ) {
       continue;
     }
-    if ( $group && !empty($groupIds) && !array_key_exists( $monitors[$i]['Id'], $groupIds ) ) {
+    if ( !visibleMonitor( $monitors[$i]['Id'] ) ) {
       continue;
     }
     if ( $monitors[$i]['Function'] != 'None' ) {
@@ -172,11 +156,14 @@ xhtmlHeaders( __FILE__, translate('Console') );
       if ( $maxHeight < $scaleHeight ) $maxHeight = $scaleHeight;
     }
     $displayMonitors[] = $monitors[$i];
+    $monitors_dropdown[$monitors[$i]['Id']] = $monitors[$i]['Name'];
   }
+
+  echo htmlSelect( 'monitor_id', $monitors_dropdown, $monitor_id, array('onchange'=>'changeMonitor(this);') );
 
   $cycleWidth = $maxWidth;
   $cycleHeight = $maxHeight;
-$zoneCount = 0;
+  $zoneCount = 0;
 
 for( $i = 0; $i < count($displayMonitors); $i += 1 ) {
   $monitor = $displayMonitors[$i];
@@ -224,7 +211,7 @@ for( $i = 0; $i < count($displayMonitors); $i += 1 ) {
 <?php } ?>
             <th class="colZones"><a href="<?php echo $_SERVER['PHP_SELF'] ?>?view=zones_overview"><?php echo translate('Zones') ?></a></th>
 <?php if ( canEdit('Monitors') ) { ?>
-            <th class="colMark"><?php echo translate('Mark') ?></th>
+            <th class="colMark"><input type="checkbox" name="toggleCheck" value="1" onclick="toggleCheckbox( this, 'markMids[]' );"<?php if ( !canEdit( 'Monitors' ) ) { ?> disabled="disabled"<?php } ?>/> <?php echo translate('All') ?></th>
 <?php } ?>
           </tr>
         </thead>
@@ -285,7 +272,7 @@ for( $monitor_i = 0; $monitor_i < count($displayMonitors); $monitor_i += 1 ) {
   echo '<td class="colSource">'. makePopupLink( '?view=monitor&amp;mid='.$monitor['Id'], 'zmMonitor'.$monitor['Id'], 'monitor', '<span class="'.$dclass.'">'.$source.'</span>', canEdit( 'Monitors' ) ).'</td>';
   if ( $show_storage_areas ) {
 ?>
-            <td class="colStorage"><?php $Storage = new Storage( $monitor['StorageId'] ); echo $Storage->Name(); ?></td>
+            <td class="colStorage"><?php if ( isset( $StorageById[ $monitor['StorageId'] ] ) ) { echo $StorageById[ $monitor['StorageId'] ]->Name(); } ?></td>
 <?php
   }
 
