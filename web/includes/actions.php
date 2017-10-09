@@ -615,13 +615,15 @@ Warning("Addterm");
       }
       $view = 'none';
     }
-    if ( !empty($_REQUEST['gid']) && $action == 'delete' ) {
-      dbQuery( 'DELETE FROM Groups WHERE Id = ?', array($_REQUEST['gid']) );
-      if ( isset($_COOKIE['zmGroup']) ) {
-        if ( $_REQUEST['gid'] == $_COOKIE['zmGroup'] ) {
-          unset( $_COOKIE['zmGroup'] );
-          setcookie( 'zmGroup', '', time()-3600*24*2 );
-          $refreshParent = true;
+    if ( !empty($_REQUEST['markGids']) && $action == 'delete' ) {
+      foreach( $_REQUEST['markGids'] as $markGid ) {
+        dbQuery( 'DELETE FROM Groups WHERE Id = ?', array($markGid) );
+        if ( isset($_COOKIE['zmGroup']) ) {
+          if ( $_REQUEST['gid'] == $_COOKIE['zmGroup'] ) {
+            unset( $_COOKIE['zmGroup'] );
+            setcookie( 'zmGroup', '', time()-3600*24*2 );
+            $refreshParent = true;
+          }
         }
       }
     }

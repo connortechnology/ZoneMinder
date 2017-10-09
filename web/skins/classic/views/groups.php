@@ -75,7 +75,7 @@ function group_line( $Group ) {
     $html .= validHtmlStr($Group->Name());
   }
   $html .= '</td><td class="colIds">'. monitorIdsToNames( $Group->MonitorIds(), 30 ).'</td>
-                <td class="colSelect"><input type="checkbox" name="gid" value="'. $Group->Id() .'" onclick="configureButtons(this);"/></td>
+                <td class="colSelect"><input type="checkbox" name="markGids[]" value="'. $Group->Id() .'" onclick="configureButtons(this);"/></td>
               </tr>
   ';
   if ( isset( $children[$Group->Id()] ) ) {
