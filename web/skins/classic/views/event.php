@@ -150,10 +150,10 @@ if ( $Event->SaveJPEGs() & 3 ) { // Analysis or Jpegs
         <div id="videoEvent"><a href="#" onclick="videoEvent();"><?php echo translate('Video') ?></a></div>
         <div id="exportEvent"><a href="#" onclick="exportEvent();"><?php echo translate('Export') ?></a></div>
       </div>
-      <div id="eventVideo" class="">
 <?php
 if ( $Event->DefaultVideo() ) {
 ?>
+      <div id="eventVideo" class="">
         <div id="videoFeed">
           <video id="videoobj" class="video-js vjs-default-skin" width="<?php echo reScale( $Event->Width(), $scale ) ?>" height="<?php echo reScale( $Event->Height(), $scale ) ?>" data-setup='{ "controls": true, "playbackRates": [0.5, 1, 1.5, 2, 4, 8, 16, 32, 64, 128, 256], "autoplay": true, "preload": "auto", "plugins": { "zoomrotate": { "zoom": "<?php echo $Zoom ?>"}}}'>
           <source src="<?php echo $Event->getStreamSrc( array( 'mode'=>'mpeg','format'=>'h264' ) ); ?>" type="video/mp4">
@@ -172,16 +172,14 @@ if ( $Event->DefaultVideo() ) {
         vjsReplay(<?php echo (strtotime($Event->StartTime()) + $Event->Length())*1000 ?>);
         </script>
 
-      <p id="replayAllCountDown"></p>
-      <p id="dvrControlsVjs" class="dvrControls">
-        <input type="button" value="&lt;+" id="prevBtnVjs" title="<?php echo translate('Prev') ?>" class="active" onclick="streamPrev( true );"/>
-        <input type="button" value="+&gt;" id="nextBtnVjs" title="<?php echo translate('Next') ?>" class="active" onclick="streamNext( true );"/>
+      <p id="dvrControls" class="dvrControls">
+        <input type="button" value="&lt;+" id="prevBtn" title="<?php echo translate('Prev') ?>" class="inactive" onclick="streamPrev( true );"/>
+        <input type="button" value="+&gt;" id="nextBtn" title="<?php echo translate('Next') ?>" class="inactive" onclick="streamNext( true );"/>
       </p>
-
+      </div><!--eventVideo-->
 <?php
 }  // end if DefaultVideo
 ?>
-      </div><!--eventVideo-->
 <?php if (!$Event->DefaultVideo()) { ?>
       <div id="imageFeed">
 <?php
@@ -219,11 +217,11 @@ if ( ZM_WEB_STREAM_METHOD == 'mpeg' && ZM_MPEG_LIVE_FORMAT ) {
            <div class="progressBox" id="progressBox<?php echo $i ?>" title=""></div>
 <?php } ?>
         </div><!--progressBar-->
-        <div id="alarmCueJpeg" class="alarmCue" style="width: <?php echo reScale($Event->Width(), $scale);?>px;"><?php renderAlarmCues ();?></div>
+        <div id="alarmCueJpeg" class="alarmCue" style="width: <?php echo reScale($Event->Width(), $scale);?>px;"></div>
       </div><!--imageFeed-->
       </div>
 <?php } /*end if !DefaultVideo*/ ?>
-<?php 
+<?php
   if ( $Event->SaveJPEGs() & 3 ) { // frames or analysis
 ?>
       <div id="eventStills" class="hidden">
@@ -265,11 +263,5 @@ if ( ZM_WEB_STREAM_METHOD == 'mpeg' && ZM_MPEG_LIVE_FORMAT ) {
 } // end if Event exists
 ?>
   </div><!--page-->
-<!-- Alarm Cues on video.  -->
-<script type="text/javascript">
-  alarmHtml = '<div class="alarmCue">' + alarmHtml + '</div>'
-  $j(".vjs-progress-control").append(alarmHtml);
-  $j(".vjs-control-bar").addClass("vjs-zm");
-</script>
 </body>
 </html>

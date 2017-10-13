@@ -161,7 +161,10 @@ function generateAuthHash( $useRemoteAddr ) {
       }
       $auth = md5( $authKey );
       if ( session_status() == PHP_SESSION_NONE ) {
-        Warning("Session is not active. AuthHash will not be cached.");
+        $backTrace = debug_backtrace();
+        $file = $backTrace[1]['file'];
+        $line = $backTrace[1]['line'];
+        Warning("Session is not active. AuthHash will not be cached. called from $file:$line");
       }
       $_SESSION['AuthHash'] = $auth;
       $_SESSION['AuthHashGeneratedAt'] = time();
@@ -2194,15 +2197,20 @@ function getStreamMode( ) {
 function folder_size($dir) {
     $size = 0;
     foreach (glob(rtrim($dir, '/').'/*', GLOB_NOSORT) as $each) {
-        $size += is_file($each) ? filesize($each) : folderSize($each);
+        $size += is_file($each) ? filesize($each) : folder_size($each);
     }
     return $size;
 } // end function folder_size
 
-function human_filesize($bytes, $decimals = 2) {
-  $sz = 'BKMGTP';
-  $factor = floor((strlen($bytes) - 1) / 3);
-  return sprintf("%.{$decimals}f", $bytes / pow(1024, $factor)) . @$sz[$factor];
+function human_filesize($size, $precision = 2) {
+    $units = array('B','kB','MB','GB','TB','PB','EB','ZB','YB');
+    $step = 1024;
+    $i = 0;
+    while (($size / $step) > 0.9) {
+        $size = $size / $step;
+        $i++;
+    }
+    return round($size, $precision).$units[$i];
 }
 
 function csrf_startup() {

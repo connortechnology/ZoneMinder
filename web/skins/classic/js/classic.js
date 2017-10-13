@@ -24,7 +24,7 @@
 
 // Javascript window sizes
 var popupSizes = {
-    'bandwidth':    { 'width': 300, 'height': 120 },
+    'bandwidth':    { 'width': 300, 'height': 220 },
     'console':      { 'width': 750, 'height': 312 },
     'control':      { 'width': 380, 'height': 480 },
     'controlcaps':  { 'width': 780, 'height': 320 },
@@ -40,8 +40,8 @@ var popupSizes = {
     'filter':       { 'width': 820, 'height': 700 },
     'frame':        { 'addWidth': 32, 'minWidth': 384, 'addHeight': 200 },
     'frames':       { 'width': 600, 'height': 700 },
-    'function':     { 'width': 300, 'height': 92 },
-    'group':        { 'width': 360, 'height': 180 },
+    'function':     { 'width': 400, 'height': 200 },
+    'group':        { 'width': 360, 'height': 320 },
     'groups':       { 'width': 440, 'height': 220 },
     'image':        { 'addWidth': 48, 'addHeight': 80 },
     'log':          { 'width': 1080, 'height': 720 },
