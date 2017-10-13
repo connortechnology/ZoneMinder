@@ -81,7 +81,7 @@ void RemoteCamera::Initialise() {
     password = auth.substr( authIndex+1, auth.length() );
   }
 
-    mNeedAuth = false;
+  mNeedAuth = false;
 	mAuthenticator = new zm::Authenticator(username,password);
 
 	struct addrinfo hints;
@@ -93,4 +93,22 @@ void RemoteCamera::Initialise() {
   if ( ret != 0 ) {
     Fatal( "Can't getaddrinfo(%s port %s): %s", host.c_str(), port.c_str(), gai_strerror(ret) );
   }
+}
+
+int RemoteCamera::Read( int fd, char *buf, int size ) {
+  int ReceivedBytes = 0;
+  int bytes;
+  while ( ReceivedBytes < size ) {
+    // recv blocks until we get data, but it may be of ARBITRARY LENGTH and INCOMPLETE
+    int bytes_to_recv = size - ReceivedBytes;
+    if ( SOCKET_BUF_SIZE < bytes_to_recv ) 
+      bytes_to_recv = SOCKET_BUF_SIZE;
+    bytes = recv(fd, &buf[ReceivedBytes], bytes_to_recv, 0); //socket, buffer, len, flags
+    if ( bytes <= 0 ) {
+      Error("RemoteCamera::Read Recv error. Closing Socket\n");
+      return -1;
+    }
+    ReceivedBytes += bytes;
+  }
+  return ReceivedBytes;
 }

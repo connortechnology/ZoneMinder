@@ -34,12 +34,6 @@ if ( ! visibleMonitor( $mid ) ) {
 
 $monitor = new Monitor( $mid );
 
-#Whether to show the actual controls
-if ( isset($_REQUEST['showControls']) )
-  $showControls = validInt($_REQUEST['showControls']);
-else
-  $showControls = canView( 'Control' ) && ($monitor->DefaultView() == 'Control');
-
 #Whether to show the controls button
 $showPtzControls = ( ZM_OPT_CONTROL && $monitor->Controllable() && canView( 'Control' ) );
 
@@ -65,27 +59,13 @@ xhtmlHeaders( __FILE__, $monitor->Name()." - ".translate('Feed') );
     <div id="content">
       <div id="menuBar">
         <div id="monitorName"><?php echo $monitor->Name() ?></div>
-        <div id="closeControl"><a href="#" onclick="closeWindow(); return( false );"><?php echo translate('Close') ?></a></div>
+<script type="text/javascript">
+  if ( window.opener ) {
+    document.write('<div id="closeControl"><a href="#" onclick="closeWindow(); return( false );"><?php echo translate('Close') ?></a></div>');
+  }
+</script>
         <div id="menuControls">
 <?php
-if ( $showPtzControls )
-{
-    if ( canView( 'Control' ) )
-    {
-?>
-          <div id="controlControl"<?php echo $showControls?' class="hidden"':'' ?>><a id="controlLink" href="#" onclick="showPtzControls(); return( false );"><?php echo translate('Control') ?></a></div>
-<?php
-    }
-    if ( canView( 'Events' ) )
-    {
-?>
-          <div id="eventsControl"<?php echo $showControls?'':' class="hidden"' ?>><a id="eventsLink" href="#" onclick="showEvents(); return( false );"><?php echo translate('Events') ?></a></div>
-<?php
-    }
-}
-?>
-<?php
-
 if ( canView( 'Control' ) && $monitor->Type() == 'Local' ) {
 ?>
           <div id="settingsControl"><?php echo makePopupLink( '?view=settings&amp;mid='.$monitor->Id(), 'zmSettings'.$monitor->Id(), 'settings', translate('Settings'), true, 'id="settingsLink"' ) ?></div>
@@ -134,7 +114,7 @@ if ( $showPtzControls ) {
     foreach ( getSkinIncludes( 'includes/control_functions.php' ) as $includeFile )
         require_once $includeFile;
 ?>
-      <div id="ptzControls" class="ptzControls<?php echo $showControls?'':' hidden' ?>">
+      <div id="ptzControls" class="ptzControls">
 <?php echo ptzControls( $monitor ) ?>
       </div>
 <?php

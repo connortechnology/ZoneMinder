@@ -27,7 +27,6 @@ $eid = validInt( $_REQUEST['eid'] );
 $fid = !empty($_REQUEST['fid'])?validInt($_REQUEST['fid']):1;
 
 $Event = new Event( $eid );
-$Monitor = $Event->Monitor();
 if ( $user['MonitorIds'] ) {
   $monitor_ids = explode( ',', $user['MonitorIds'] );
   if ( count($monitor_ids) and ! in_array( $Event->MonitorId(), $monitor_ids ) ) {
@@ -35,6 +34,7 @@ if ( $user['MonitorIds'] ) {
     return;
   }
 }
+$Monitor = $Event->Monitor();
 
 if ( isset( $_REQUEST['rate'] ) )
   $rate = validInt($_REQUEST['rate']);
@@ -61,6 +61,7 @@ if ( isset( $_REQUEST['streamMode'] ) )
 else
   $streamMode = 'video';
 
+$replayMode = '';
 if ( isset( $_REQUEST['replayMode'] ) )
   $replayMode = validHtmlStr($_REQUEST['replayMode']);
 if ( isset( $_COOKIE['replayMode']) && preg_match('#^[a-z]+$#', $_COOKIE['replayMode']) )
@@ -103,7 +104,7 @@ if ( ! $Event->Id() ) {
 } else {
 ?>
       <div id="dataBar">
-        <table id="dataTable" class="major" cellspacing="0">
+        <table id="dataTable" class="major">
           <tr>
             <td><span id="dataId" title="<?php echo translate('Id') ?>"><?php echo $Event->Id() ?></span></td>
             <td><span id="dataCause" title="<?php echo $Event->Notes()?validHtmlStr($Event->Notes()):translate('AttrCause') ?>"><?php echo validHtmlStr($Event->Cause()) ?></span></td>
@@ -117,21 +118,24 @@ if ( ! $Event->Id() ) {
       <div id="menuBar1">
         <div id="scaleControl"><label for="scale"><?php echo translate('Scale') ?></label><?php echo buildSelect( "scale", $scales, "changeScale();" ); ?></div>
         <div id="replayControl"><label for="replayMode"><?php echo translate('Replay') ?></label><?php echo buildSelect( "replayMode", $replayModes, "changeReplayMode();" ); ?></div>
-        <div id="nameControl"><input type="text" id="eventName" name="eventName" value="<?php echo validHtmlStr($Event->Name()) ?>" size="16"/><input type="button" value="<?php echo translate('Rename') ?>" onclick="renameEvent()"<?php if ( !canEdit( 'Events' ) ) { ?> disabled="disabled"<?php } ?>/></div>
+        <div id="nameControl">
+          <input type="text" id="eventName" name="eventName" value="<?php echo validHtmlStr($Event->Name()) ?>" />
+          <input type="button" value="<?php echo translate('Rename') ?>" onclick="renameEvent()"<?php if ( !canEdit( 'Events' ) ) { ?> disabled="disabled"<?php } ?>/>
+        </div>
       </div>
       <div id="menuBar2">
         <div id="closeWindow"><a href="#" onclick="closeWindow();"><?php echo translate('Close') ?></a></div>
 <?php
-if ( canEdit( 'Events' ) ) {
+if ( canEdit('Events') ) {
 ?>
         <div id="deleteEvent"><a href="#" onclick="deleteEvent()"><?php echo translate('Delete') ?></a></div>
         <div id="editEvent"><a href="#" onclick="editEvent()"><?php echo translate('Edit') ?></a></div>
-        <div id="archiveEvent" class="hidden"><a href="#" onclick="archiveEvent()"><?php echo translate('Archive') ?></a></div>
-        <div id="unarchiveEvent" class="hidden"><a href="#" onclick="unarchiveEvent()"><?php echo translate('Unarchive') ?></a></div>
+        <div id="archiveEvent"<?php echo $Event->Archived == 1 ? ' class="hidden"' : ''  ?>><a href="#" onclick="archiveEvent()"><?php echo translate('Archive') ?></a></div>
+        <div id="unarchiveEvent"<?php echo $Event->Archived == 0 ? ' class="hidden"' : '' ?>><a href="#" onclick="unarchiveEvent()"><?php echo translate('Unarchive') ?></a></div>
 <?php 
 } // end if can edit Events
   if ( $Event->DefaultVideo() ) { ?>
-<div id="downloadEventFile"><a href="<?php echo $Event->getStreamSrc()?>">Download MP4</a></div>
+        <div id="downloadEventFile"><a href="<?php echo $Event->getStreamSrc(array('mode'=>'mp4'))?>">Download MP4</a></div>
 <?php
   } // end if Event->DefaultVideo
 ?>
@@ -157,17 +161,28 @@ if ( $Event->DefaultVideo() ) {
           </video>
         </div>
         <!--script>includeVideoJs();</script-->
-        <script>
+        <script type="text/javascript">
         var LabelFormat = "<?php echo validJsStr($Monitor->LabelFormat())?>";
         var monitorName = "<?php echo validJsStr($Monitor->Name())?>";
         var duration = <?php echo $Event->Length() ?>, startTime = '<?php echo $Event->StartTime() ?>';
 
         addVideoTimingTrack(document.getElementById('videoobj'), LabelFormat, monitorName, duration, startTime);
+
+        nearEventsQuery( eventData.Id );
+        vjsReplay(<?php echo (strtotime($Event->StartTime()) + $Event->Length())*1000 ?>);
         </script>
+
+      <p id="dvrControls" class="dvrControls">
+        <input type="button" value="&lt;+" id="prevBtn" title="<?php echo translate('Prev') ?>" class="inactive" onclick="streamPrev( true );"/>
+        <input type="button" value="+&gt;" id="nextBtn" title="<?php echo translate('Next') ?>" class="inactive" onclick="streamNext( true );"/>
+      </p>
+
 <?php
 }  // end if DefaultVideo
 ?>
-        <div id="imageFeed" <?php if ( $Event->DefaultVideo() ) { ?>class="hidden"<?php } ?> >
+      </div><!--eventVideo-->
+<?php if (!$Event->DefaultVideo()) { ?>
+      <div id="imageFeed">
 <?php
 if ( ZM_WEB_STREAM_METHOD == 'mpeg' && ZM_MPEG_LIVE_FORMAT ) {
   $streamSrc = $Event->getStreamSrc( array( 'mode'=>'mpeg', 'scale'=>$scale, 'rate'=>$rate, 'bitrate'=>ZM_WEB_VIDEO_BITRATE, 'maxfps'=>ZM_WEB_VIDEO_MAXFPS, 'format'=>ZM_MPEG_REPLAY_FORMAT, 'replay'=>$replayMode ) );
@@ -181,8 +196,7 @@ if ( ZM_WEB_STREAM_METHOD == 'mpeg' && ZM_MPEG_LIVE_FORMAT ) {
   }
 } // end if stream method
 ?>
-        </div>
-        <p id="dvrControls">
+        <p id="dvrControls" class="dvrControls">
           <input type="button" value="&lt;+" id="prevBtn" title="<?php echo translate('Prev') ?>" class="inactive" onclick="streamPrev( true );"/>
           <input type="button" value="&lt;&lt;" id="fastRevBtn" title="<?php echo translate('Rewind') ?>" class="inactive" disabled="disabled" onclick="streamFastRev( true );"/>
           <input type="button" value="&lt;" id="slowRevBtn" title="<?php echo translate('StepBack') ?>" class="unavail" disabled="disabled" onclick="streamSlowRev( true );"/>
@@ -203,11 +217,13 @@ if ( ZM_WEB_STREAM_METHOD == 'mpeg' && ZM_MPEG_LIVE_FORMAT ) {
 <?php for ( $i = 0; $i < $panelSections; $i++ ) { ?>
            <div class="progressBox" id="progressBox<?php echo $i ?>" title=""></div>
 <?php } ?>
-    </div>
-        </div>
+        </div><!--progressBar-->
+        <div id="alarmCueJpeg" class="alarmCue" style="width: <?php echo reScale($Event->Width(), $scale);?>px;"></div>
+      </div><!--imageFeed-->
       </div>
+<?php } /*end if !DefaultVideo*/ ?>
 <?php 
-  if ($Event->SaveJPEGs() & 3) { // frames or analysis
+  if ( $Event->SaveJPEGs() & 3 ) { // frames or analysis
 ?>
       <div id="eventStills" class="hidden">
         <div id="eventThumbsPanel">

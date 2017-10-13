@@ -1,3 +1,32 @@
+.vjsMessage {
+    font-size: 2em;
+    line-height: 1.5;
+    color: white;
+    background-color: black;
+    display: inline-block;
+}
+
+.alarmCue {
+    background-color: #222222;
+    height: 1.5em;
+    text-align: left;
+    margin: 0 auto 0 auto;
+}
+
+.alarmCue span {
+    background-color:red;
+    height: 1.5em;
+    display: inline-block;
+}
+
+span.noneCue {
+    background: none;
+}
+
+#eventVideo {
+    display: inline-block;
+}
+
 #dataBar {
     width: 100%;
     margin: 2px auto;
@@ -89,32 +118,32 @@
 #monitorStatus #monitorState {
 }
 
-#dvrControls {
+.dvrControls {
     margin-top: 3px;
     margin-bottom: 2px;
     text-align: center;
 }
 
-#dvrControls input {
+.dvrControls input {
     height: 20px;
     width: 28px;
     padding-bottom: 3px;
     margin: 0 3px;
 }
 
-#dvrControls input[disabled=disabled] {
+.dvrControls input[disabled=disabled] {
     color: #aaaaaa;
 }
 
-#dvrControls input.active {
+.dvrControls input.active {
     border: 1px solid blue;
 }
 
-#dvrControls input.inactive {
+.dvrControls input.inactive {
     border: 1px solid green;
 }
 
-#dvrControls input.unavail {
+.dvrControls input.unavail {
     border: 1px solid red;
 }
 
@@ -231,6 +260,10 @@
     width: 400px;
     height: 10px;
     background: #dddddd;
+}
+
+#eventVideo {
+display: inline-block;
 }
 
 #thumbsKnob {

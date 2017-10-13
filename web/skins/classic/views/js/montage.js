@@ -1,7 +1,6 @@
 var requestQueue = new Request.Queue( { concurrent: 2 } );
 
-function Monitor( index, monitorData ) {
-  this.index = index;
+function Monitor( monitorData ) {
   this.id = monitorData.id;
   this.connKey = monitorData.connKey;
   this.server_url = monitorData.server_url;
@@ -45,11 +44,11 @@ function Monitor( index, monitorData ) {
         stateClass = "idle";
 
       if ( !COMPACT_MONTAGE ) {
-        $('fpsValue'+this.index).set( 'text', this.status.fps );
-        $('stateValue'+this.index).set( 'text', stateStrings[this.alarmState] );
-        this.setStateClass( $('monitorState'+this.index), stateClass );
+        $('fpsValue'+this.id).set( 'text', this.status.fps );
+        $('stateValue'+this.id).set( 'text', stateStrings[this.alarmState] );
+        this.setStateClass( $('monitorState'+this.id), stateClass );
       }
-      this.setStateClass( $('monitor'+this.index), stateClass );
+      this.setStateClass( $('monitor'+this.id), stateClass );
 
       /*Stream could be an applet so can't use moo tools*/
       stream.className = stateClass;
@@ -75,6 +74,12 @@ function Monitor( index, monitorData ) {
           $('alarmSound').addClass( 'hidden' );
         }
       }
+      if ( this.status.auth ) {
+        // Try to reload the image stream.
+        if ( stream )
+          stream.src = stream.src.replace( /auth=\w+/i, 'auth='+this.status.auth );
+        console.log("Changed auth to " + this.status.auth );
+      } // end if haev a new auth hash
     } else {
       console.error( respObj.message );
       // Try to reload the image stream.
@@ -101,12 +106,72 @@ function Monitor( index, monitorData ) {
 }
 
 function selectLayout( element ) {
-  var cssFile = skinPath+'/css/'+Cookie.read('zmCSS')+'/views/'+$(element).get('value');
+  layout = $(element).get('value') 
+  var cssFile = skinPath+'/css/'+Cookie.read('zmCSS')+'/views/'+layout;
   if ( $('dynamicStyles') )
     $('dynamicStyles').destroy();
   new Asset.css( cssFile, { id: 'dynamicStyles' } );
-  Cookie.write( 'zmMontageLayout', $(element).get('value'), { duration: 10*365 } );
+  Cookie.write( 'zmMontageLayout', layout, { duration: 10*365 } );
+  if ( layout != 'montage_freeform.css' ) {
+    Cookie.write( 'zmMontageScale', '', { duration: 10*365 } );
+    $('scale').set('value', '' );
+    $('width').set('value', '');
+
+    for ( var x = 0; x < monitors.length; x++ ) {
+      var monitor = monitors[x];
+      var streamImg = $( 'liveStream'+monitor.id );
+      if ( streamImg ) {
+        if ( streamImg.nodeName == 'IMG' ) {
+          var src = streamImg.src;
+          streamImg.src='';
+          src = src.replace(/width=[\.\d]+/i,'width=0' );
+          src = src.replace(/rand=\d+/i,'rand='+Math.floor((Math.random() * 1000000) ));
+          streamImg.src = src;
+        } else if ( streamImg.nodeName == 'APPLET' || streamImg.nodeName == 'OBJECT' ) {
+          // APPLET's and OBJECTS need to be re-initialized
+        }
+        streamImg.style.width = '100%';
+      }
+      var zonesSVG = $('zones'+monitor.id);
+      if ( zonesSVG ) {
+        zonesSVG.style.width = '';
+      }
+    } // end foreach monitor
+  }
 }
+
+function changeSize() {
+  var width = $('width').get('value');
+  var height = $('height').get('value');
+
+  for ( var x = 0; x < monitors.length; x++ ) {
+    var monitor = monitors[x];
+    /*Stream could be an applet so can't use moo tools*/ 
+    var streamImg = $( 'liveStream'+monitor.id );
+    if ( streamImg ) {
+      if ( streamImg.nodeName == 'IMG' ) {
+        var src = streamImg.src;
+        streamImg.src='';
+        src = src.replace(/width=[\.\d]+/i,'width='+width );
+        src = src.replace(/height=[\.\d]+/i,'height='+height );
+        src = src.replace(/rand=\d+/i,'rand='+Math.floor((Math.random() * 1000000) ));
+        streamImg.src = src;
+      }
+      streamImg.style.width = width? width + "px" : null;
+      streamImg.style.height = height ? height + "px" : null;
+      //streamImg.style.height = '';
+    }
+    var zonesSVG = $('zones'+monitor.id);
+    if ( zonesSVG ) {
+      zonesSVG.style.width = width ? width + "px" : '100%';
+      zonesSVG.style.height = height + "px";
+    }
+  }
+  $('scale').set('value', '' );
+  Cookie.write( 'zmMontageScale', '', { duration: 10*365 } );
+  Cookie.write( 'zmMontageWidth', width, { duration: 10*365 } );
+  Cookie.write( 'zmMontageHeight', height, { duration: 10*365 } );
+} // end function changeSize()
 
 function changeScale() {
   var scale = $('scale').get('value');
@@ -117,20 +182,41 @@ function changeScale() {
     var newHeight = ( monitorData[x].height * scale ) / SCALE_BASE;
     /*Stream could be an applet so can't use moo tools*/
     var streamImg = document.getElementById( 'liveStream'+monitor.id );
-    streamImg.style.width = newWidth + "px";
-    streamImg.style.height = newHeight + "px";
+    if ( streamImg ) {
+      if ( streamImg.nodeName == 'IMG' ) {
+        var src = streamImg.src;
+        streamImg.src='';
+
+        //src = src.replace(/rand=\d+/i,'rand='+Math.floor((Math.random() * 1000000) ));
+        src = src.replace(/scale=[\.\d]+/i,'scale='+ scale );
+        src = src.replace(/width=[\.\d]+/i,'width='+newWidth );
+        src = src.replace(/height=[\.\d]+/i,'height='+newHeight );
+        streamImg.src = src;
+      }
+      streamImg.style.width = newWidth + "px";
+      streamImg.style.height = newHeight + "px";
+    }
+    var zonesSVG = $('zones'+monitor.id);
+    if ( zonesSVG ) {
+      zonesSVG.style.width = newWidth + "px";
+      zonesSVG.style.height = newHeight + "px";
+    }
   }
+  $('width').set('value', '');
+  $('height').set('value', '');
   Cookie.write( 'zmMontageScale', scale, { duration: 10*365 } );
+  Cookie.write( 'zmMontageWidth', '', { duration: 10*365 } );
+  Cookie.write( 'zmMontageHeight', '', { duration: 10*365 } );
 }
 
 var monitors = new Array();
 function initPage() {
   for ( var i = 0; i < monitorData.length; i++ ) {
-    monitors[i] = new Monitor( i, monitorData[i] );
+    monitors[i] = new Monitor( monitorData[i] );
     var delay = Math.round( (Math.random()+0.5)*statusRefreshTimeout );
     monitors[i].start( delay );
   }
-  selectLayout( $('layout') );
+  selectLayout($('layout'));
 }
 
 // Kick everything off

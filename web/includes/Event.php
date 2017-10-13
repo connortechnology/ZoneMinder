@@ -1,7 +1,7 @@
 <?php
 
 class Event {
-  public function __construct( $IdOrRow ) {
+  public function __construct( $IdOrRow = null ) {
     $row = NULL;
     if ( $IdOrRow ) {
       if ( is_integer( $IdOrRow ) or is_numeric( $IdOrRow ) ) {
@@ -19,19 +19,28 @@ class Event {
         Error("Unknown argument passed to Event Constructor ($IdOrRow)");
         return;
       }
-    } # end if isset($IdOrRow)
 
     if ( $row ) {
       foreach ($row as $k => $v) {
         $this->{$k} = $v;
       }
     } else {
-      Error('No row for Event ' . $IdOrRow );
+        $backTrace = debug_backtrace();
+        $file = $backTrace[1]['file'];
+        $line = $backTrace[1]['line'];
+      Error('No row for Event ' . $IdOrRow . " from $file:$line");
     }
+    } # end if isset($IdOrRow)
   } // end function __construct
 
-  public function Storage() {
-    return new Storage( isset($this->{'StorageId'}) ? $this->{'StorageId'} : NULL );
+  public function Storage( $new = null ) {
+    if ( $new ) {
+      $this->{'Storage'} = $new;
+    }
+    if ( ! ( array_key_exists( 'Storage', $this ) and $this->{'Storage'} ) ) {
+      $this->{'Storage'} = new Storage( isset($this->{'StorageId'}) ? $this->{'StorageId'} : NULL );
+    }
+    return $this->{'Storage'};
   }
 
   public function Monitor() {
@@ -131,7 +140,7 @@ class Event {
   } # end Event->delete
 
   public function getStreamSrc( $args=array(), $querySep='&amp;' ) {
-    if ( $this->{'DefaultVideo'} ) {
+    if ( $this->{'DefaultVideo'} and $args['mode'] != 'jpeg' ) {
       return ( ZM_BASE_PATH != '/' ? ZM_BASE_PATH : '' ).'/index.php?view=view_video&eid='.$this->{'Id'};
     }
 
@@ -163,7 +172,11 @@ class Event {
   } // end function getStreamSrc
 
   function DiskSpace() {
-    return folder_size( $this->Path() );
+    if ( null === $this->{'DiskSpace'} ) {
+      $this->{'DiskSpace'} = folder_size( $this->Path() );
+      dbQuery( 'UPDATE Events SET DiskSpace=? WHERE Id=?', array( $this->{'DiskSpace'}, $this->{'Id'} ) );
+    }
+    return $this->{'DiskSpace'};
   }
 
   function createListThumbnail( $overwrite=false ) {
@@ -202,7 +215,7 @@ class Event {
 
   // frame is an array representing the db row for a frame.
   function getImageSrc( $frame, $scale=SCALE_BASE, $captureOnly=false, $overwrite=false ) {
-    $Storage = new Storage(  isset($this->{'StorageId'}) ? $this->{'StorageId'} : NULL  );
+    $Storage = new Storage( isset($this->{'StorageId'}) ? $this->{'StorageId'} : NULL  );
     $Event = $this;
     $eventPath = $Event->Path();
 
@@ -217,28 +230,31 @@ class Event {
       $captImage = 'snapshot.jpg';
       Debug("Frame not specified, using snapshot");
     } else {
-      $captImage = sprintf( '%0'.ZM_EVENT_IMAGE_DIGITS.'d-capture.jpg', $frame['FrameId'] );
+      $captImage = sprintf( '%0'.ZM_EVENT_IMAGE_DIGITS.'d-analyze.jpg', $frame['FrameId'] );
       if ( ! file_exists( $eventPath.'/'.$captImage ) ) {
-        # Generate the frame JPG
-        if ( $Event->DefaultVideo() ) {
-          $videoPath = $eventPath.'/'.$Event->DefaultVideo();
+        $captImage = sprintf( '%0'.ZM_EVENT_IMAGE_DIGITS.'d-capture.jpg', $frame['FrameId'] );
+        if ( ! file_exists( $eventPath.'/'.$captImage ) ) {
+          # Generate the frame JPG
+          if ( $Event->DefaultVideo() ) {
+            $videoPath = $eventPath.'/'.$Event->DefaultVideo();
 
-          if ( ! file_exists( $videoPath ) ) {
-            Error("Event claims to have a video file, but it does not seem to exist at $videoPath" );
-            return '';
-          } 
-            
-          #$command ='ffmpeg -v 0 -i '.$videoPath.' -vf "select=gte(n\\,'.$frame['FrameId'].'),setpts=PTS-STARTPTS" '.$eventPath.'/'.$captImage;
-          $command ='ffmpeg -ss '. $frame['Delta'] .' -i '.$videoPath.' -frames:v 1 '.$eventPath.'/'.$captImage;
-          Logger::Debug( "Running $command" );
-          $output = array();
-          $retval = 0;
-          exec( $command, $output, $retval );
-          Logger::Debug("Retval: $retval, output: " . implode("\n", $output));
-        } else {
-          Error("Can't create frame images from video becuase there is no video file for this event (".$Event->DefaultVideo() );
-        }
-      }
+            if ( ! file_exists( $videoPath ) ) {
+              Error("Event claims to have a video file, but it does not seem to exist at $videoPath" );
+              return '';
+            } 
+              
+            #$command ='ffmpeg -v 0 -i '.$videoPath.' -vf "select=gte(n\\,'.$frame['FrameId'].'),setpts=PTS-STARTPTS" '.$eventPath.'/'.$captImage;
+            $command ='ffmpeg -ss '. $frame['Delta'] .' -i '.$videoPath.' -frames:v 1 '.$eventPath.'/'.$captImage;
+            Logger::Debug( "Running $command" );
+            $output = array();
+            $retval = 0;
+            exec( $command, $output, $retval );
+            Logger::Debug("Retval: $retval, output: " . implode("\n", $output));
+          } else {
+            Error("Can't create frame images from video becuase there is no video file for this event (".$Event->DefaultVideo() );
+          }
+        } // end if capture file exists
+      } // end if analyze file exists
     }
 
     $captPath = $eventPath.'/'.$captImage;
@@ -313,6 +329,41 @@ class Event {
 
     return( $imageData );
   }
+
+  public static function find_all( $parameters = null, $options = null ) {
+    $filters = array();
+    $sql = 'SELECT * FROM Events ';
+    $values = array();
+
+    if ( $parameters ) {
+      $fields = array();
+      $sql .= 'WHERE ';
+      foreach ( $parameters as $field => $value ) {
+        if ( $value == null ) {
+          $fields[] = $field.' IS NULL';
+        } else if ( is_array( $value ) ) {
+          $func = function(){return '?';};
+          $fields[] = $field.' IN ('.implode(',', array_map( $func, $value ) ). ')';
+          $values += $value;
+
+        } else {
+          $fields[] = $field.'=?';
+          $values[] = $value;
+        }
+      }
+      $sql .= implode(' AND ', $fields );
+    }
+    if ( $options and isset($options['order']) ) {
+    $sql .= ' ORDER BY ' . $options['order'];
+    }
+    $result = dbQuery($sql, $values);
+    $results = $result->fetchALL(PDO::FETCH_CLASS | PDO::FETCH_PROPS_LATE, 'Event');
+    foreach ( $results as $row => $obj ) {
+      $filters[] = $obj;
+    }
+    return $filters;
+  }
+
 
 } # end class
 

@@ -30,7 +30,9 @@ use warnings;
 
 require ZoneMinder::Base;
 require ZoneMinder::Object;
+require ZoneMinder::Storage;
 require Date::Manip;
+require File;
 
 #our @ISA = qw(ZoneMinder::Object);
 use parent qw(ZoneMinder::Object);
@@ -120,12 +122,12 @@ sub Path {
   }
 
   if ( ! $$event{Path} ) {
-    my $path = ($Config{ZM_DIR_EVENTS}=~/^\//) ? $Config{ZM_DIR_EVENTS} : $Config{ZM_PATH_WEB}.'/'.$Config{ZM_DIR_EVENTS};
+    my $Storage = $event->Storage();
 
     if ( $Config{ZM_USE_DEEP_STORAGE} ) {
       if ( $event->Time() ) {
         $$event{Path} = join('/',
-            $path,
+            $Storage->Path(),
             $event->{MonitorId},
             strftime( "%y/%m/%d/%H/%M/%S",
               localtime($event->Time())
@@ -137,7 +139,7 @@ sub Path {
       }
     } else {
       $$event{Path} = join('/',
-          $path,
+          $Storage->Path(),
           $event->{MonitorId},
           $event->{Id},
           );
@@ -222,9 +224,7 @@ sub GenerateVideo {
 
     my $status = $? >> 8;
     if ( $status ) {
-      Error( "Unable to generate video, check "
-          .$event_path."/ffmpeg.log for details"
-          );
+      Error( "Unable to generate video, check $event_path/ffmpeg.log for details");
       return;
     }
 
@@ -239,6 +239,11 @@ sub GenerateVideo {
 
 sub delete {
   my $event = $_[0];
+  if ( ! ( $event->{Id} and $event->{MonitorId} and $event->{StartTime} ) ) {
+    my ( $caller, undef, $line ) = caller;
+    Warning( "Can't Delete event $event->{Id} from Monitor $event->{MonitorId} $event->{StartTime} from $caller:$line\n" );
+    return;
+  }
   Info( "Deleting event $event->{Id} from Monitor $event->{MonitorId} $event->{StartTime}\n" );
   $ZoneMinder::Database::dbh->ping();
 # Do it individually to avoid locking up the table for new events
@@ -270,13 +275,13 @@ sub delete {
   }
 } # end sub delete
 
-
 sub delete_files {
 
-  my $storage_path = ($Config{ZM_DIR_EVENTS}=~/^\//) ? $Config{ZM_DIR_EVENTS} : $Config{ZM_PATH_WEB}.'/'.$Config{ZM_DIR_EVENTS};
+  my $Storage = new ZoneMinder::Storage( $_[0]{StorageId} );
+  my $storage_path = $Storage->Path();
 
   if ( ! $storage_path ) {
-    Fatal("Empty path when deleting files for event $_[0]{Id} ");
+    Fatal("Empty storage path when deleting files for event $_[0]{Id} with storage id $_[0]{StorageId} ");
     return;
   }
 
@@ -288,7 +293,7 @@ sub delete_files {
       return;
     }
     Debug("Deleting files for Event $_[0]{Id} from $storage_path.");
-    my $link_path = $_[0]{MonitorId}.'/*/*/*/.'.$_[0]{Id};
+    my $link_path = $_[0]{MonitorId}."/*/*/*/.".$_[0]{Id};
 #Debug( "LP1:$link_path" );
     my @links = glob($link_path);
 #Debug( "L:".$links[0].": $!" );
@@ -344,9 +349,25 @@ Debug("Checking for files for event $_[0]{Id} at $path using glob $path/* found 
 
 sub age {
   if ( ! $_[0]{age} ) {
-    $_[0]{age} = (time() - ($^T - ((-M $_[0]->Path() ) * 24*60*60)));
+    if ( -e $_[0]->Path() ) { 
+      # $^T is the time the program began running. -M is program start time - file modification time in days
+      $_[0]{age} = (time() - ($^T - ((-M $_[0]->Path() ) * 24*60*60)));
+    } else {
+      Warning($_[0]->Path() . ' does not appear to exist.');
+    }
   }
   return $_[0]{age};
+}
+
+sub DiskUsage {
+  if ( @_ > 1 ) {
+    $_[0]{DiskUsage} = $_[1];
+  }
+  if ( ! defined $_[0]{DiskUsage} ) {
+    my $size = 0;
+    File::find( sub { $size += -f $_ ? -s _ : 0 }, $_[0]->Path() );
+    $_[0]{DiskUsage}  = $size;
+  }
 }
 
 1;

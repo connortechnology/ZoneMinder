@@ -36,8 +36,8 @@ if ( $user['MonitorIds'] ) {
 	$countSql .= $user_monitor_ids;
 	$eventsSql .= $user_monitor_ids;
 } else {
-  $countSql .= " 1";
-  $eventsSql .= " 1";
+  $countSql .= ' 1';
+  $eventsSql .= ' 1';
 }
 
 parseSort();
@@ -193,7 +193,9 @@ foreach ( $events as $event ) {
             <tr>
               <td class="colId"><?php echo makePopupLink( '?view=event&amp;eid='.$event->Id().$filterQuery.$sortQuery.'&amp;page=1', 'zmEvent', array( 'event', reScale( $event->Width(), $scale ), reScale( $event->Height(), $scale ) ), $event->Id().($event->Archived()?'*':'') ) ?></td>
               <td class="colName"><?php echo makePopupLink( '?view=event&amp;eid='.$event->Id().$filterQuery.$sortQuery.'&amp;page=1', 'zmEvent', array( 'event', reScale( $event->Width(), $event->DefaultScale(), ZM_WEB_DEFAULT_SCALE ), reScale( $event->Height(), $event->DefaultScale(), ZM_WEB_DEFAULT_SCALE ) ), validHtmlStr($event->Name()).($event->Archived()?'*':'' ) ) ?></td>
-              <td class="colMonitorName"><?php echo $event->MonitorName() ?></td>
+              <td class="colMonitorName"><?php echo 
+makePopupLink( '?view=monitor&amp;mid='.$event->MonitorId(), 'zmMonitor'.$event->Monitorid(), 'monitor', $event->MonitorName(), canEdit( 'Monitors' ) )
+ ?></td>
               <td class="colCause"><?php echo makePopupLink( '?view=eventdetail&amp;eid='.$event->Id(), 'zmEventDetail', 'eventdetail', validHtmlStr($event->Cause()), canEdit( 'Events' ), 'title="'.htmlspecialchars($event->Notes()).'"' ) ?></td>
               <td class="colTime"><?php echo strftime( STRF_FMT_DATETIME_SHORTER, strtotime($event->StartTime()) ) ?></td>
               <td class="colDuration"><?php echo gmdate("H:i:s", $event->Length() ) ?></td>
@@ -213,7 +215,11 @@ foreach ( $events as $event ) {
 ?>
               <td class="colThumbnail">
 <?php 
+	if ( file_exists( $event->Path().'/snapshot.jpg' ) ) {
+      $imgSrc = '?view=image&amp;eid='.$event->Id().'&amp;fid=snapshot&amp;width='.$thumbData['Width'].'&amp;height='.$thumbData['Height'];
+} else {
       $imgSrc = '?view=image&amp;eid='.$event->Id().'&amp;fid='.$thumbData['FrameId'].'&amp;width='.$thumbData['Width'].'&amp;height='.$thumbData['Height'];
+}
       $streamSrc = $event->getStreamSrc( array( 'mode'=>'jpeg', 'scale'=>$scale, 'maxfps'=>ZM_WEB_VIDEO_MAXFPS, 'replay'=>'single') );
 
       $imgHtml = '<img id="thumbnail'.$event->id().'" src="'.$imgSrc.'" alt="'. validHtmlStr('Event '.$event->Id()) .'" style="width:'. validInt($thumbData['Width']) .'px;height:'. validInt( $thumbData['Height'] ).'px;" onmouseover="this.src=\''.$streamSrc.'\';" onmouseout="this.src=\''.$imgSrc.'\';"/>';

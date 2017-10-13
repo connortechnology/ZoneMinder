@@ -39,24 +39,24 @@ void zmLoadConfig() {
   // update the Config hash with those values
   DIR* configSubFolder = opendir(ZM_CONFIG_SUBDIR);
   if ( configSubFolder ) { // subfolder exists and is readable
-      char glob_pattern[PATH_MAX] = "";
-      snprintf( glob_pattern, sizeof(glob_pattern), "%s/*.conf", ZM_CONFIG_SUBDIR );
+    char glob_pattern[PATH_MAX] = "";
+    snprintf( glob_pattern, sizeof(glob_pattern), "%s/*.conf", ZM_CONFIG_SUBDIR );
 
-      glob_t pglob;
-      int glob_status = glob( glob_pattern, 0, 0, &pglob );
-      if ( glob_status != 0 ) {
-          if ( glob_status < 0 ) {
-              Error( "Can't glob '%s': %s", glob_pattern, strerror(errno) );
-          } else {
-              Debug( 1, "Can't glob '%s': %d", glob_pattern, glob_status );
-          }
+    glob_t pglob;
+    int glob_status = glob( glob_pattern, 0, 0, &pglob );
+    if ( glob_status != 0 ) {
+      if ( glob_status < 0 ) {
+        Error( "Can't glob '%s': %s", glob_pattern, strerror(errno) );
       } else {
-          for ( unsigned int i = 0; i < pglob.gl_pathc; i++ ) {
-              process_configfile(pglob.gl_pathv[i]);
-          }
-          closedir(configSubFolder);
+        Debug( 1, "Can't glob '%s': %d", glob_pattern, glob_status );
       }
-      globfree( &pglob );
+    } else {
+      for ( unsigned int i = 0; i < pglob.gl_pathc; i++ ) {
+        process_configfile(pglob.gl_pathv[i]);
+      }
+      closedir(configSubFolder);
+    }
+    globfree( &pglob );
   }
 
   zmDbConnect();
@@ -69,7 +69,8 @@ void zmLoadConfig() {
 
       Debug( 1, "Fetching ZM_SERVER_ID For Name = %s", staticConfig.SERVER_NAME.c_str() );
       std::string sql = stringtf("SELECT Id FROM Servers WHERE Name='%s'", staticConfig.SERVER_NAME.c_str() );
-      if ( MYSQL_ROW dbrow = zmDbFetchOne( sql.c_str() ) ) {
+			zmDbRow dbrow;
+      if ( dbrow.fetch( sql.c_str() ) ) {
         staticConfig.SERVER_ID = atoi(dbrow[0]);
       } else {
         Fatal("Can't get ServerId for Server %s", staticConfig.SERVER_NAME.c_str() );
@@ -80,11 +81,13 @@ void zmLoadConfig() {
     Debug( 1, "Fetching ZM_SERVER_NAME For Id = %d", staticConfig.SERVER_ID );
     std::string sql = stringtf("SELECT Name FROM Servers WHERE Id='%d'", staticConfig.SERVER_ID );
     
-    if ( MYSQL_ROW dbrow = zmDbFetchOne( sql.c_str() ) ) {
-      staticConfig.SERVER_NAME = std::string(dbrow[0]);
-    } else {
-      Fatal("Can't get ServerName for Server ID %d", staticConfig.SERVER_ID );
-    }
+		zmDbRow dbrow;
+		if ( dbrow.fetch( sql.c_str() ) ) {
+			staticConfig.SERVER_NAME = std::string(dbrow[0]);
+		} else {
+			Fatal("Can't get ServerName for Server ID %d", staticConfig.SERVER_ID );
+		}
+
     if ( staticConfig.SERVER_ID ) {
         Debug( 3, "Multi-server configuration detected. Server is %d.", staticConfig.SERVER_ID );
     } else {
@@ -291,8 +294,10 @@ Config::~Config() {
   if ( items ) {
     for ( int i = 0; i < n_items; i++ ) {
       delete items[i];
+      items[i] = NULL;
     }
     delete[] items;
+    items = NULL;
   }
 }
 

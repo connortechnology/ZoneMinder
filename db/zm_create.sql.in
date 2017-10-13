@@ -184,6 +184,7 @@ DROP TABLE IF EXISTS `Events`;
 CREATE TABLE `Events` (
   `Id` int(10) unsigned NOT NULL auto_increment,
   `MonitorId` int(10) unsigned NOT NULL default '0',
+  `StorageId`	smallint(5) unsigned default 0,
   `Name` varchar(64) NOT NULL default '',
   `Cause` varchar(32) NOT NULL default '',
   `StartTime` datetime default NULL,
@@ -193,7 +194,7 @@ CREATE TABLE `Events` (
   `Length` decimal(10,2) NOT NULL default '0.00',
   `Frames` int(10) unsigned default NULL,
   `AlarmFrames` int(10) unsigned default NULL,
-  `DefaultVideo` VARCHAR( 64 ) NOT NULL,
+  `DefaultVideo` VARCHAR( 64 ) DEFAULT '' NOT NULL,
   `TotScore` int(10) unsigned NOT NULL default '0',
   `AvgScore` smallint(5) unsigned default '0',
   `MaxScore` smallint(5) unsigned default '0',
@@ -205,6 +206,8 @@ CREATE TABLE `Events` (
   `Executed` tinyint(3) unsigned NOT NULL default '0',
   `Notes` text,
   `StateId` int(10) unsigned NOT NULL,
+  `Orientation` enum('0','90','180','270','hori','vert') NOT NULL default '0',
+  `DiskSpace`   bigint unsigned default NULL,
   PRIMARY KEY (`Id`,`MonitorId`),
   KEY `MonitorId` (`MonitorId`),
   KEY `StartTime` (`StartTime`),
@@ -218,6 +221,7 @@ CREATE TABLE `Events` (
 
 DROP TABLE IF EXISTS `Filters`;
 CREATE TABLE `Filters` (
+  `Id` int(10) unsigned NOT NULL auto_increment,
   `Name` varchar(64) NOT NULL default '',
   `Query` text NOT NULL,
   `AutoArchive` tinyint(3) unsigned NOT NULL default '0',
@@ -229,7 +233,9 @@ CREATE TABLE `Filters` (
   `AutoExecuteCmd` tinytext,
   `AutoDelete` tinyint(3) unsigned NOT NULL default '0',
   `Background` tinyint(1) unsigned NOT NULL default '0',
-  PRIMARY KEY (`Name`)
+  `Concurrent` tinyint(1) unsigned NOT NULL default '0',
+  PRIMARY KEY (`Id`),
+  KEY `Name` (`Name`)
 ) ENGINE=@ZM_MYSQL_ENGINE@;
 
 --
@@ -259,7 +265,8 @@ DROP TABLE IF EXISTS `Groups`;
 CREATE TABLE `Groups` (
   `Id` int(10) unsigned NOT NULL auto_increment,
   `Name` varchar(64) NOT NULL default '',
-  `MonitorIds` tinytext NOT NULL,
+  `ParentId` int(10) unsigned,
+  `MonitorIds` text NOT NULL,
   PRIMARY KEY (`Id`)
 ) ENGINE=@ZM_MYSQL_ENGINE@;
 
@@ -282,6 +289,31 @@ CREATE TABLE `Logs` (
 ) ENGINE=@ZM_MYSQL_ENGINE@;
 
 --
+-- Table structure for table `Manufacturers`
+--
+
+DROP TABLE IF EXISTS `Manufacturers`;
+CREATE TABLE `Manufacturers` (
+  `Id` int(10) unsigned NOT NULL auto_increment,
+  `Name`  varchar(64) NOT NULL,
+  PRIMARY KEY (`Id`),
+  UNIQUE KEY (`Name`)
+) ENGINE=@ZM_MYSQL_ENGINE@;
+
+--
+-- Table structure for table `Models`
+--
+
+DROP TABLE IF EXISTS `Models`;
+CREATE TABLE `Models` (
+  `Id` int(10) unsigned NOT NULL auto_increment,
+  `Name`  varchar(64) NOT NULL,
+  `ManufacturerId` int(10),
+  PRIMARY KEY (`Id`),
+  UNIQUE KEY (`ManufacturerId`,`Name`)
+) ENGINE=@ZM_MYSQL_ENGINE@;
+
+--
 -- Table structure for table `MonitorPresets`
 --
 
@@ -289,7 +321,7 @@ DROP TABLE IF EXISTS `MonitorPresets`;
 CREATE TABLE `MonitorPresets` (
   `Id` int(10) unsigned NOT NULL auto_increment,
   `Name` varchar(64) NOT NULL default '',
-  `Type` enum('Local','Remote','File','Ffmpeg','Libvlc','cURL') NOT NULL default 'Local',
+  `Type` enum('Local','Remote','File','Ffmpeg','Libvlc','cURL','NVSocket') NOT NULL default 'Local',
   `Device` tinytext,
   `Channel` tinytext,
   `Format` int(10) unsigned default NULL,
@@ -321,6 +353,7 @@ CREATE TABLE `Monitors` (
   `Id` int(10) unsigned NOT NULL auto_increment,
   `Name` varchar(64) NOT NULL default '',
   `ServerId` int(10) unsigned,
+  `StorageId`	smallint(5) unsigned default 0,
   `Type` enum('Local','Remote','File','Ffmpeg','Libvlc','cURL') NOT NULL default 'Local',
   `Function` enum('None','Monitor','Modect','Record','Mocord','Nodect') NOT NULL default 'Monitor',
   `Enabled` tinyint(3) unsigned NOT NULL default '1',
@@ -331,13 +364,13 @@ CREATE TABLE `Monitors` (
   `Format` int(10) unsigned NOT NULL default '0',
   `V4LMultiBuffer`	tinyint(1) unsigned,
   `V4LCapturesPerFrame`	tinyint(3) unsigned,
-  `Protocol` varchar(16) default '',
+  `Protocol` varchar(16),
   `Method` varchar(16) NOT NULL default '',
   `Host` varchar(64),
   `Port` varchar(8) NOT NULL default '',
   `SubPath` varchar(64) NOT NULL default '',
   `Path` varchar(255),
-  `Options` varchar(255) default '',
+  `Options` varchar(255),
   `User` varchar(64),
   `Pass` varchar(64),
   `Width` smallint(5) unsigned NOT NULL default '0',
@@ -356,7 +389,7 @@ CREATE TABLE `Monitors` (
   `Hue` mediumint(7) NOT NULL default '-1',
   `Colour` mediumint(7) NOT NULL default '-1',
   `EventPrefix` varchar(32) NOT NULL default 'Event-',
-  `LabelFormat` varchar(64),
+  `LabelFormat` varchar(64) default '%N - %y/%m/%d %H:%M:%S',
   `LabelX` smallint(5) unsigned NOT NULL default '0',
   `LabelY` smallint(5) unsigned NOT NULL default '0',
   `LabelSize` smallint(5) unsigned NOT NULL DEFAULT '1',
@@ -395,6 +428,8 @@ CREATE TABLE `Monitors` (
   PRIMARY KEY (`Id`)
 ) ENGINE=@ZM_MYSQL_ENGINE@;
 
+CREATE INDEX `Monitors_ServerId_idx` ON `Monitors` (`ServerId`);
+
 --
 -- Table structure for table `States`
 -- PP - Added IsActive to track custom run states
@@ -424,6 +459,9 @@ CREATE TABLE `Servers` (
   `State_Id`	int(10) unsigned,
   PRIMARY KEY (`Id`)
 ) ENGINE=@ZM_MYSQL_ENGINE@;
+
+CREATE INDEX `Servers_Name_idx` ON `Servers` (`Name`);
+
 --
 -- Table structure for table `Stats`
 --
@@ -550,6 +588,20 @@ CREATE TABLE `Zones` (
   KEY `MonitorId` (`MonitorId`)
 ) ENGINE=@ZM_MYSQL_ENGINE@;
 
+DROP TABLE IF EXISTS `Storage`;
+CREATE TABLE `Storage` (
+	`Id`	smallint(5) unsigned NOT NULL auto_increment,
+	`Path`	varchar(64)	NOT NULL default '',
+	`Name`	varchar(64) NOT NULL default '',
+	`Type`	enum('local','s3fs') NOT NULL default 'local',
+	PRIMARY KEY (`Id`)
+) ENGINE=@ZM_MYSQL_ENGINE@;
+
+--
+-- Create a default storage location
+--
+insert into Storage VALUES (NULL, '/var/cache/zoneminder/events', 'Default' );
+
 /*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
 /*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;
 /*!40014 SET UNIQUE_CHECKS=@OLD_UNIQUE_CHECKS */;
@@ -570,7 +622,7 @@ insert into Users VALUES (NULL,'admin',password('admin'),'',1,'View','Edit','Edi
 --
 -- Add a sample filter to purge the oldest 100 events when the disk is 95% full
 --
-insert into Filters values ('PurgeWhenFull','{"sort_field":"Id","terms":[{"val":0,"attr":"Archived","op":"="},{"cnj":"and","val":95,"attr":"DiskPercent","op":">="}],"limit":100,"sort_asc":1}',0,0,0,0,0,0,'',1,1);
+insert into Filters values (NULL,'PurgeWhenFull','{"sort_field":"Id","terms":[{"val":0,"attr":"Archived","op":"="},{"cnj":"and","val":95,"attr":"DiskPercent","op":">="}],"limit":100,"sort_asc":1}',0,0,0,0,0,0,'',1,1,0);
 
 --
 -- Add in some sample control protocol definitions
@@ -695,3 +747,4 @@ INSERT INTO ZonePresets VALUES (7,'Best, high sensitivity','Active','Percent','B
 -- This section is autogenerated by zmconfgen.pl
 -- Do not edit this file as any changes will be overwritten
 --
+

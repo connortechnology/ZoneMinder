@@ -31,7 +31,7 @@ function changeScale() {
   Cookie.write( 'zmWatchScale'+monitorId, scale, { duration: 10*365 } );
 
   /*Stream could be an applet so can't use moo tools*/
-  var streamImg = document.getElementById('liveStream'+monitorId);
+  var streamImg = $('liveStream'+monitorId);
   if ( streamImg ) {
     streamImg.style.width = newWidth + "px";
     streamImg.style.height = newHeight + "px";
@@ -94,6 +94,9 @@ function setAlarmState( currentAlarmState ) {
 }
 
 var streamCmdParms = "view=request&request=stream&connkey="+connKey;
+if ( auth_hash )
+  streamCmdParms += '&auth='+auth_hash;
+
 var streamCmdReq = new Request.JSON( { url: monitorUrl+thisUrl, method: 'post', timeout: AJAX_TIMEOUT, link: 'cancel', onSuccess: getStreamCmdResponse } );
 var streamCmdTimer = null;
 
@@ -154,6 +157,7 @@ function getStreamCmdResponse( respObj, respText ) {
       $('level').addClass( 'hidden' );
       streamCmdPlay( false );
     } // end if paused or delayed
+
     $('zoomValue').set( 'text', streamStatus.zoom );
     if ( streamStatus.zoom == "1.0" )
       setButtonState( $('zoomOutBtn'), 'unavail' );
@@ -178,13 +182,25 @@ function getStreamCmdResponse( respObj, respText ) {
         $('forceCancelAlarm').addClass( 'hidden' );
       }
       $('enableDisableAlarms').removeClass( 'hidden' );
-    }
+    } // end if canEditMonitors
+
+    if ( streamStatus.auth ) {
+      console.log("Haev a new auth hash" + streamStatus.auth);
+      // Try to reload the image stream.
+      var streamImg = $('liveStream');
+      if ( streamImg )
+        streamImg.src = streamImg.src.replace( /auth=\w+/i, 'auth='+streamStatus.auth );
+    } // end if haev a new auth hash
   } else {
-    checkStreamForErrors("getStreamCmdResponse", respObj);//log them
+    checkStreamForErrors("getStreamCmdResponse",respObj);//log them
     // Try to reload the image stream.
-    var streamImg = document.getElementById('liveStream');
-    if ( streamImg )
-      streamImg.src = streamImg.src.replace(/rand=\d+/i, 'rand='+Math.floor((Math.random() * 1000000) ));
+    var streamImg = $('liveStream'+monitorId);
+    if ( streamImg ) {
+      streamImg.src = streamImg.src.replace(/rand=\d+/i,'rand='+Math.floor((Math.random() * 1000000) ));
+      console.log("Changing livestream src to " + streamImg.src);
+    } else {
+      console.log("Unable to find streamImg liveStream");
+    }
   }
 
   var streamCmdTimeout = statusRefreshTimeout;
@@ -312,7 +328,9 @@ function streamCmdQuery() {
 }
 
 var statusCmdParms = "view=request&request=status&entity=monitor&id="+monitorId+"&element[]=Status&element[]=FrameRate";
-var statusCmdReq = new Request.JSON( { url: monitorUrl+thisUrl, method: 'post', data: statusCmdParms, timeout: AJAX_TIMEOUT, link: 'cancel', onSuccess: getStatusCmdResponse } );
+if ( auth_hash )
+  statusCmdParms += '&auth='+auth_hash;
+var statusCmdReq = new Request.JSON( { url: monitorUrl+thisUrl, method: 'get', data: statusCmdParms, timeout: AJAX_TIMEOUT, link: 'cancel', onSuccess: getStatusCmdResponse } );
 var statusCmdTimer = null;
 
 function getStatusCmdResponse( respObj, respText ) {
@@ -337,7 +355,16 @@ function statusCmdQuery() {
 }
 
 var alarmCmdParms = "view=request&request=alarm&id="+monitorId;
-var alarmCmdReq = new Request.JSON( { url: monitorUrl+thisUrl, method: 'post', timeout: AJAX_TIMEOUT, link: 'cancel', onSuccess: getAlarmCmdResponse, onTimeout: streamCmdQuery } );
+if ( auth_hash )
+  alarmCmdParms += '&auth='+auth_hash;
+var alarmCmdReq = new Request.JSON( {
+  url: monitorUrl+thisUrl,
+  method: 'post',
+  timeout: AJAX_TIMEOUT,
+  link: 'cancel',
+  onSuccess: getAlarmCmdResponse,
+  onTimeout: streamCmdQuery
+} );
 var alarmCmdFirst = true;
 
 function getAlarmCmdResponse( respObj, respText ) {
@@ -358,11 +385,13 @@ function cmdForceAlarm() {
 
 function cmdCancelForcedAlarm() {
   alarmCmdReq.send( alarmCmdParms+"&command=cancelForcedAlarm" );
+  return false;
 }
 
 function getActResponse( respObj, respText ) {
   if ( respObj.result == 'Ok' ) {
     if ( respObj.refreshParent ) {
+      console.log('refreshing');
       window.opener.location.reload();
     }
   }
@@ -377,6 +406,8 @@ function deleteEvent( event, eventId ) {
 }
 
 var eventCmdParms = "view=request&request=status&entity=events&id="+monitorId+"&count="+maxDisplayEvents+"&sort=Id%20desc";
+if ( auth_hash )
+  eventCmdParms += '&auth='+auth_hash;
 var eventCmdReq = new Request.JSON( { url: thisUrl, method: 'post', timeout: AJAX_TIMEOUT, data: eventCmdParms, link: 'cancel', onSuccess: getEventCmdResponse, onTimeout: eventCmdQuery } );
 var eventCmdTimer = null;
 var eventCmdFirst = true;
@@ -414,32 +445,32 @@ function getEventCmdResponse( respObj, respText ) {
 
         var cells = row.getElements( 'td' );
 
-        var link = new Element( 'a', { 'href': '#', 'events': { 'click': createEventPopup.pass( [event.Id, '&trms=1&attr1=MonitorId&op1=%3d&val1='+monitorId+'&page=1', event.Width, event.Height] ) } });
+        var link = new Element( 'a', { 'href': '#', 'events': { 'click': createEventPopup.pass( [ event.Id, '&trms=1&attr1=MonitorId&op1=%3d&val1='+monitorId+'&page=1', event.Width, event.Height ] ) } });
         link.set( 'text', event.Id );
         link.inject( row.getElement( 'td.colId' ) );
 
-        link = new Element( 'a', { 'href': '#', 'events': { 'click': createEventPopup.pass( [event.Id, '&trms=1&attr1=MonitorId&op1=%3d&val1='+monitorId+'&page=1', event.Width, event.Height] ) } });
+        link = new Element( 'a', { 'href': '#', 'events': { 'click': createEventPopup.pass( [ event.Id, '&trms=1&attr1=MonitorId&op1=%3d&val1='+monitorId+'&page=1', event.Width, event.Height ] ) } });
         link.set( 'text', event.Name );
         link.inject( row.getElement( 'td.colName' ) );
 
         row.getElement( 'td.colTime' ).set( 'text', event.StartTime );
         row.getElement( 'td.colSecs' ).set( 'text', event.Length );
 
-        link = new Element( 'a', { 'href': '#', 'events': { 'click': createFramesPopup.pass( [event.Id, event.Width, event.Height] ) } });
+        link = new Element( 'a', { 'href': '#', 'events': { 'click': createFramesPopup.pass( [ event.Id, event.Width, event.Height ] ) } });
         link.set( 'text', event.Frames+'/'+event.AlarmFrames );
         link.inject( row.getElement( 'td.colFrames' ) );
 
-        link = new Element( 'a', { 'href': '#', 'events': { 'click': createFramePopup.pass( [event.Id, '0', event.Width, event.Height] ) } });
+        link = new Element( 'a', { 'href': '#', 'events': { 'click': createFramePopup.pass( [ event.Id, '0', event.Width, event.Height ] ) } });
         link.set( 'text', event.AvgScore+'/'+event.MaxScore );
         link.inject( row.getElement( 'td.colScore' ) );
 
-        link = new Element( 'a', { 'href': '#', 'title': deleteString, 'events': { 'click': function( e ) { deleteEvent( e, event.Id ); }, 'mouseover': highlightRow.pass( row ), 'mouseout': highlightRow.pass( row ) } });
+        link = new Element( 'a', { 'href': '#', 'title': deleteString, 'events': { 'click': function( e ) { deleteEvent( e, event.Id ); }.bind( link ), 'mouseover': highlightRow.pass( row ), 'mouseout': highlightRow.pass( row ) } });
         link.set( 'text', 'X' );
         link.inject( row.getElement( 'td.colDelete' ) );
 
-        if ( i == 0 ) {
+        if ( i == 0 )
           row.inject( $(eventListBody) );
-        } else {
+        else {
           row.inject( $(eventListBody), 'top' );
           if ( !eventCmdFirst )
             row.addClass( 'recent' );
@@ -483,6 +514,8 @@ function eventCmdQuery() {
 }
 
 var controlParms = "view=request&request=control&id="+monitorId;
+if ( auth_hash )
+  controlParms += '&auth='+auth_hash;
 var controlReq = new Request.JSON( { url: thisUrl, method: 'post', timeout: AJAX_TIMEOUT, link: 'cancel', onSuccess: getControlResponse } );
 
 function getControlResponse( respObj, respText ) {
@@ -536,7 +569,7 @@ function controlCmdImage( x, y ) {
   controlReq.send( imageControlParms+"&x="+x+"&y="+y );
   if ( streamMode == "single" )
     fetchImage.pass( $('imageFeed').getElement('img') ).delay( 1000 );
-}
+}       
 
 function fetchImage( streamImage ) {
   streamImage.src = streamImage.src.replace(/rand=\d+/i,'rand='+Math.floor((Math.random() * 1000000) ));

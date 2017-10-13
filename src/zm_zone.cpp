@@ -68,7 +68,7 @@ void Zone::Setup(
   overload_frames = p_overload_frames;
   extend_alarm_frames = p_extend_alarm_frames;
 
-  Debug( 1, "Initialised zone %d/%s - %d - %dx%d - Rgb:%06x, CM:%d, MnAT:%d, MxAT:%d, MnAP:%d, MxAP:%d, FB:%dx%d, MnFP:%d, MxFP:%d, MnBS:%d, MxBS:%d, MnB:%d, MxB:%d, OF: %d, AF: %d", id, label, type, polygon.Width(), polygon.Height(), alarm_rgb, check_method, min_pixel_threshold, max_pixel_threshold, min_alarm_pixels, max_alarm_pixels, filter_box.X(), filter_box.Y(), min_filter_pixels, max_filter_pixels, min_blob_pixels, max_blob_pixels, min_blobs, max_blobs, overload_frames, extend_alarm_frames );
+  //Debug( 1, "Initialised zone %d/%s - %d - %dx%d - Rgb:%06x, CM:%d, MnAT:%d, MxAT:%d, MnAP:%d, MxAP:%d, FB:%dx%d, MnFP:%d, MxFP:%d, MnBS:%d, MxBS:%d, MnB:%d, MxB:%d, OF: %d, AF: %d", id, label, type, polygon.Width(), polygon.Height(), alarm_rgb, check_method, min_pixel_threshold, max_pixel_threshold, min_alarm_pixels, max_alarm_pixels, filter_box.X(), filter_box.Y(), min_filter_pixels, max_filter_pixels, min_blob_pixels, max_blob_pixels, min_blobs, max_blobs, overload_frames, extend_alarm_frames );
 
   alarmed = false;
 	was_alarmed = false;
@@ -112,7 +112,7 @@ void Zone::Setup(
   if ( config.record_diag_images ) {
     static char diag_path[PATH_MAX] = "";
     if ( ! diag_path[0] ) {
-      snprintf( diag_path, sizeof(diag_path), "%s/%s/diag-%d-poly.jpg", staticConfig.DIR_EVENTS.c_str(), monitor->Name(), id);
+      snprintf( diag_path, sizeof(diag_path), "%s/diag-%d-poly.jpg", monitor->getStorage()->Path(), id);
     }
     pg_image->WriteJpeg( diag_path );
   }
@@ -127,11 +127,11 @@ Zone::~Zone() {
 
 void Zone::RecordStats( const Event *event ) {
   static char sql[ZM_SQL_MED_BUFSIZ];
-  snprintf( sql, sizeof(sql), "insert into Stats set MonitorId=%d, ZoneId=%d, EventId=%d, FrameId=%d, PixelDiff=%d, AlarmPixels=%d, FilterPixels=%d, BlobPixels=%d, Blobs=%d, MinBlobSize=%d, MaxBlobSize=%d, MinX=%d, MinY=%d, MaxX=%d, MaxY=%d, Score=%d", monitor->Id(), id, event->Id(), event->Frames()+1, pixel_diff, alarm_pixels, alarm_filter_pixels, alarm_blob_pixels, alarm_blobs, min_blob_size, max_blob_size, alarm_box.LoX(), alarm_box.LoY(), alarm_box.HiX(), alarm_box.HiY(), score );
-  if ( mysql_query( &dbconn, sql ) ) {
-    Error( "Can't insert event stats: %s", mysql_error( &dbconn ) );
-    exit( mysql_errno( &dbconn ) );
-  }
+	snprintf( sql, sizeof(sql), "insert into Stats set MonitorId=%d, ZoneId=%d, EventId=%d, FrameId=%d, PixelDiff=%d, AlarmPixels=%d, FilterPixels=%d, BlobPixels=%d, Blobs=%d, MinBlobSize=%d, MaxBlobSize=%d, MinX=%d, MinY=%d, MaxX=%d, MaxY=%d, Score=%d", monitor->Id(), id, event->Id(), event->Frames()+1, pixel_diff, alarm_pixels, alarm_filter_pixels, alarm_blob_pixels, alarm_blobs, min_blob_size, max_blob_size, alarm_box.LoX(), alarm_box.LoY(), alarm_box.HiX(), alarm_box.HiY(), score );
+	if ( mysql_query( &dbconn, sql ) ) {
+		Error( "Can't insert event stats: %s", mysql_error( &dbconn ) );
+		exit( mysql_errno( &dbconn ) );
+	}
 } // end void Zone::RecordStats( const Event *event )
 
 bool Zone::CheckOverloadCount() {
@@ -233,7 +233,7 @@ bool Zone::CheckAlarms( const Image *delta_image ) {
   if ( config.record_diag_images ) {
     static char diag_path[PATH_MAX] = "";
     if ( ! diag_path[0] ) {
-      snprintf( diag_path, sizeof(diag_path), "%s/%s/diag-%d-%d.jpg", staticConfig.DIR_EVENTS.c_str(), monitor->Name(), id, 1 );
+      snprintf( diag_path, sizeof(diag_path), "%s/diag-%d-%d.jpg", monitor->getStorage()->Path(), id, 1 );
     }
     diff_image->WriteJpeg( diag_path );
   }
@@ -315,7 +315,7 @@ bool Zone::CheckAlarms( const Image *delta_image ) {
     if ( config.record_diag_images ) {
       static char diag_path[PATH_MAX] = "";
       if ( !diag_path[0] ) {
-        snprintf( diag_path, sizeof(diag_path), "%s/%d/diag-%d-%d.jpg", staticConfig.DIR_EVENTS.c_str(), monitor->Id(), id, 2 );
+        snprintf( diag_path, sizeof(diag_path), "%s/diag-%d-%d.jpg", monitor->getStorage()->Path(), id, 2 );
       }
       diff_image->WriteJpeg( diag_path );
     }
@@ -525,7 +525,7 @@ bool Zone::CheckAlarms( const Image *delta_image ) {
       if ( config.record_diag_images ) {
         static char diag_path[PATH_MAX] = "";
         if ( !diag_path[0] ) {
-          snprintf( diag_path, sizeof(diag_path), "%s/%d/diag-%d-%d.jpg", staticConfig.DIR_EVENTS.c_str(), monitor->Id(), id, 3 );
+          snprintf( diag_path, sizeof(diag_path), "%s/diag-%d-%d.jpg", monitor->getStorage()->Path(), id, 3 );
         }
         diff_image->WriteJpeg( diag_path );
       }
@@ -572,7 +572,7 @@ bool Zone::CheckAlarms( const Image *delta_image ) {
       if ( config.record_diag_images ) {
         static char diag_path[PATH_MAX] = "";
         if ( !diag_path[0] ) {
-          snprintf( diag_path, sizeof(diag_path), "%s/%d/diag-%d-%d.jpg", staticConfig.DIR_EVENTS.c_str(), monitor->Id(), id, 4 );
+          snprintf( diag_path, sizeof(diag_path), "%s/diag-%d-%d.jpg", monitor->getStorage()->Path(), id, 4 );
         }
         diff_image->WriteJpeg( diag_path );
       }
@@ -750,32 +750,32 @@ bool Zone::ParsePolygonString( const char *poly_string, Polygon &polygon ) {
 
       Debug( 3, "Got coordinate %d,%d from polygon string", x, y );
 #if 0
-      if ( x < 0 )
-        x = 0;
-      else if ( x >= width )
-        x = width-1;
-      if ( y < 0 )
-        y = 0;
-      else if ( y >= height )
-        y = height-1;
+			if ( x < 0 )
+				x = 0;
+			else if ( x >= width )
+				x = width-1;
+			if ( y < 0 )
+				y = 0;
+			else if ( y >= height )
+				y = height-1;
 #endif
-      coords[n_coords++] = Coord( x, y );
-    }
-    if ( ws )
-      str = ws+1;
-    else
-      break;
-  }
-  polygon = Polygon( n_coords, coords );
+			coords[n_coords++] = Coord( x, y );
+		}
+		if ( ws )
+			str = ws+1;
+		else
+			break;
+	}
+	polygon = Polygon( n_coords, coords );
 
-  Debug( 3, "Successfully parsed polygon string" );
-  //printf( "Area: %d\n", pg.Area() );
-  //printf( "Centre: %d,%d\n", pg.Centre().X(), pg.Centre().Y() );
+	Debug( 3, "Successfully parsed polygon string" );
+	//printf( "Area: %d\n", pg.Area() );
+	//printf( "Centre: %d,%d\n", pg.Centre().X(), pg.Centre().Y() );
 
-  delete[] coords;
-  delete[] str_ptr;
+	delete[] coords;
+	delete[] str_ptr;
 
-  return( true );
+	return( true );
 }
 
 bool Zone::ParseZoneString( const char *zone_string, int &zone_id, int &colour, Polygon &polygon ) {
@@ -981,5 +981,5 @@ void Zone::std_alarmedpixels(Image* pdiff_image, const Image* ppoly_image, unsig
   /* Store the results */
   *pixel_count = pixelsalarmed;
   *pixel_sum = pixelsdifference;
-  Debug( 7, "STORED");
+  Debug(7, "STORED pixelsalarmed(%d), pixelsdifference(%d)", pixelsalarmed, pixelsdifference);
 }
