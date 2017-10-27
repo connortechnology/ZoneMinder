@@ -1,6 +1,10 @@
-.vjsMessage {
-    font-size: 2em;
-    line-height: 1.5;
+#content .vjsMessage {
+    width: 100%;
+    position: absolute;
+    left: 0;
+    z-index: 10;
+    margin: 0;
+    font-size: 200%;
     color: white;
     background-color: black;
     display: inline-block;
@@ -100,6 +104,8 @@ span.noneCue {
     visibility: hidden;
 }
 #imageFeed {
+    display: inline-block;
+    position: relative;
     text-align: center;
 }
 
@@ -170,22 +176,14 @@ span.noneCue {
 
 #progressBar {
     position: relative;
-    border: 1px solid #666666;
-    height: 15px;
-    margin: 0 auto;
+    top: -1.5em;
+    height: 1.5em;
+    margin: 0 auto -1.5em auto;
 }
 
 #progressBar .progressBox {
-    position: absolute;
-    top: 0px;
-    left: 0px;
-    height: 15px;
-    background: #eeeeee;
-    border-left: 1px solid #999999;
-}
-
-#progressBar .complete {
-    background: #aaaaaa;
+    height: 1.5em;
+    background: rgba(170, 170, 170, .7);
 }
 
 #eventStills {
@@ -280,6 +278,7 @@ span.noneCue {
 }
 #eventVideo {
     display: inline-block;
+    position: relative;
 }
 
 #video-controls {

@@ -1,6 +1,15 @@
 <?php
 
 class Event {
+
+  private $fields = array(
+'Id',
+'Name',
+'MonitorId',
+'StorageId',
+'Name',
+'DiskSpace',
+);
   public function __construct( $IdOrRow = null ) {
     $row = NULL;
     if ( $IdOrRow ) {
@@ -48,10 +57,16 @@ class Event {
   }
 
   public function __call( $fn, array $args){
+  if ( count( $args )  ) {
+      $this->{$fn} = $args[0];
+    }
     if ( array_key_exists( $fn, $this ) ) {
       return $this->{$fn};
-#array_unshift($args, $this);
-#call_user_func_array( $this->{$fn}, $args);
+        
+        $backTrace = debug_backtrace();
+        $file = $backTrace[1]['file'];
+        $line = $backTrace[1]['line'];
+        Warning( "Unknown function call Event->$fn from $file:$line" );
     }
   }
 
@@ -171,7 +186,10 @@ class Event {
     return( $streamSrc );
   } // end function getStreamSrc
 
-  function DiskSpace() {
+  function DiskSpace( $new='' ) {
+    if ( $new != '' ) {
+      $this->{'DiskSpace'} = $new;
+    }
     if ( null === $this->{'DiskSpace'} ) {
       $this->{'DiskSpace'} = folder_size( $this->Path() );
       dbQuery( 'UPDATE Events SET DiskSpace=? WHERE Id=?', array( $this->{'DiskSpace'}, $this->{'Id'} ) );
@@ -364,6 +382,13 @@ class Event {
     return $filters;
   }
 
+  public function save( ) {
+    
+    $sql = 'UPDATE Events SET '.implode(', ', array_map( function($field) {return $field.'=?';}, $this->fields ) ) . ' WHERE Id=?';
+    $values = array_map( function($field){return $this->{$field};}, $this->fields );
+    $values[] = $this->{'Id'};
+    dbQuery( $sql, $values );
+  }
 
 } # end class
 

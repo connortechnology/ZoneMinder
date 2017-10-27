@@ -19,6 +19,8 @@ function updateButtons( element ) {
       canExecute = true;
     else if ( form.elements['filter[AutoDelete]'].checked )
       canExecute = true;
+    else if ( form.elements['filter[UpdateDiskSpace]'].checked )
+      canExecute = true;
     form.elements['executeButton'].disabled = !canExecute;
   }
 }
@@ -60,6 +62,7 @@ function saveFilter( element ) {
   var form = element.form;
 
   //form.target = 'zmFilter';
+  form.target = window.name;
   form.elements['action'].value = 'save';
   form.action = thisUrl + '?view=filter';
   form.submit();
