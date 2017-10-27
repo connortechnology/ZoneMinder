@@ -1,5 +1,5 @@
 --
--- Add StorageId column to Monitors
+-- Add UpdateDiskSpace column to Filters
 --
 
 SET @s = (SELECT IF(
