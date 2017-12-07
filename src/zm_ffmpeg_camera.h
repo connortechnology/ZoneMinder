@@ -23,11 +23,15 @@
 #include "zm_camera.h"
 
 #include "zm_buffer.h"
-//#include "zm_utils.h"
 #include "zm_ffmpeg.h"
 #include "zm_videostore.h"
 #include "zm_packetqueue.h"
 
+#if HAVE_AVUTIL_HWCONTEXT_H
+typedef struct DecodeContext {
+      AVBufferRef *hw_device_ref;
+} DecodeContext;
+#endif
 //
 // Class representing 'ffmpeg' cameras, i.e. those which are
 // accessed using ffmpeg multimedia framework
@@ -52,6 +56,12 @@ class FfmpegCamera : public Camera {
     AVFrame             *mFrame;
     _AVPIXELFORMAT      imagePixFormat;
 
+    bool hwaccel;
+#if HAVE_AVUTIL_HWCONTEXT_H
+    AVFrame             *hwFrame;
+    DecodeContext decode;
+#endif
+
     // Need to keep track of these because apparently the stream can start with values for pts/dts and then subsequent packets start at zero.
     int64_t audio_last_pts;
     int64_t audio_last_dts;
@@ -75,9 +85,8 @@ class FfmpegCamera : public Camera {
 #endif // HAVE_LIBAVFORMAT
 
     VideoStore          *videoStore;
-    char                oldDirectory[4096];
-    unsigned int        old_event_id;
     zm_packetqueue      packetqueue;
+    bool                have_video_keyframe;
 
 #if HAVE_LIBSWSCALE
     struct SwsContext   *mConvertContext;

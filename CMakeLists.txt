@@ -172,7 +172,7 @@ set(ZM_PATH_ARP "" CACHE PATH
     "Full path to compatible arp binary. Leave empty for automatic detection.")
 set(ZM_CONFIG_DIR "/${CMAKE_INSTALL_SYSCONFDIR}" CACHE PATH 
     "Location of ZoneMinder configuration, default system config directory")
-set(ZM_CONFIG_SUBDIR "${ZM_CONFIG_DIR}/zm/conf.d" CACHE PATH 
+set(ZM_CONFIG_SUBDIR "${ZM_CONFIG_DIR}/conf.d" CACHE PATH 
     "Location of ZoneMinder configuration subfolder, default: ZM_CONFIG_DIR/conf.d")
 set(ZM_EXTRA_LIBS "" CACHE STRING 
     "A list of optional libraries, separated by semicolons, e.g. ssl;theora")
@@ -575,6 +575,7 @@ if(NOT ZM_NO_FFMPEG)
 		mark_as_advanced(FORCE AVUTIL_LIBRARIES AVUTIL_INCLUDE_DIR)
 		check_include_file("libavutil/avutil.h" HAVE_LIBAVUTIL_AVUTIL_H)
 		check_include_file("libavutil/mathematics.h" HAVE_LIBAVUTIL_MATHEMATICS_H)
+		check_include_file("libavutil/hwcontext.h" HAVE_LIBAVUTIL_HWCONTEXT_H)
 		set(optlibsfound "${optlibsfound} AVUtil")
 	else(AVUTIL_LIBRARIES)
 		set(optlibsnotfound "${optlibsnotfound} AVUtil")
@@ -867,7 +868,7 @@ else(zmconfgen_result EQUAL 0)
             "ZoneMinder configuration generator failed. Exit code: ${zmconfgen_result}")
 endif(zmconfgen_result EQUAL 0)
 
-# Install zm.conf and conf.d subfolder
+# Install zm.conf
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/zm.conf" DESTINATION "${ZM_CONFIG_DIR}")
 install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/conf.d/" DESTINATION "${ZM_CONFIG_SUBDIR}" PATTERN "*.in" EXCLUDE)
 
@@ -886,3 +887,4 @@ if(CCACHE_FOUND)
         set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK ccache)
 endif(CCACHE_FOUND)
 
+install(DIRECTORY icons DESTINATION "${CMAKE_INSTALL_DATADIR}/zoneminder/")

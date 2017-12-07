@@ -194,6 +194,16 @@ our @options = (
     category    => 'system',
   },
   {
+    name        => 'ZM_BANDWIDTH_DEFAULT',
+    default     => 'high',
+    description => 'Default setting for bandwidth profile used by web interface',
+    help        => q`The classic skin for ZoneMinder has different 
+      profiles to use for low medium or high bandwidth connections.
+      `,
+    type        => $types{string},
+    category    => 'system',
+  },
+  {
     name        => 'ZM_LANG_DEFAULT',
     default     => 'en_gb',
     description => 'Default language used by web interface',
@@ -314,6 +324,21 @@ our @options = (
     category    => 'system',
   },
   {
+    name        => 'ZM_AUTH_HASH_TTL',
+    default     => '2',
+    description => 'The number of hours that an authentication hash is valid for.',
+    help        => q`
+      The default has traditionally been 2 hours. A new hash will
+      automatically be regenerated at half this value.
+      `,
+    requires    => [
+      { name=>'ZM_OPT_USE_AUTH', value=>'yes' },
+      { name=>'ZM_AUTH_RELAY', value=>'hashed' }
+    ],
+    type        => $types{integer},
+    category    => 'system',
+  },
+  {
     name        => 'ZM_AUTH_HASH_LOGINS',
     default     => 'no',
     description => 'Allow login by authentication hash',
@@ -375,7 +400,7 @@ our @options = (
     type        => $types{boolean},
     category    => 'system',
   },
-  # PP - Google reCaptcha settings
+# PP - Google reCaptcha settings
   {
     name        => 'ZM_OPT_USE_GOOG_RECAPTCHA',
     default     => 'no',
@@ -518,7 +543,7 @@ our @options = (
     type        => $types{integer},
     category    => 'images',
   },
-  # Deprecated, now stream quality
+# Deprecated, now stream quality
   {
     name        => 'ZM_JPEG_IMAGE_QUALITY',
     default     => '70',
@@ -804,7 +829,7 @@ our @options = (
     type        => $types{integer},
     category    => 'config',
   },
-  # Deprecated, really no longer necessary
+# Deprecated, really no longer necessary
   {
     name        => 'ZM_OPT_REMOTE_CAMERAS',
     default     => 'no',
@@ -817,7 +842,7 @@ our @options = (
     type        => $types{boolean},
     category    => 'hidden',
   },
-  # Deprecated, now set on a per monitor basis using the Method field
+# Deprecated, now set on a per monitor basis using the Method field
   {
     name        => 'ZM_NETCAM_REGEXPS',
     default     => 'yes',
@@ -883,6 +908,21 @@ our @options = (
       `,
     type        => $types{integer},
     category    => 'network',
+  },
+  {
+    name        =>  'ZM_MIN_STREAMING_PORT',
+    default     =>  '',
+    description =>  'Alternate port range to contact for streaming video.',
+    help        =>  q`
+    Due to browsers only wanting to open 6 connections, if you have more
+    than 6 monitors, you can have trouble viewing more than 6.  This setting
+    specified the beginning of a port range that will be used to contact ZM 
+    on.  Each monitor will use this value plus the Monitor Id to stream
+    content.  So a value of 2000 here will cause a stream for Monitor 1 to 
+    hit port 2001.  Please ensure that you configure apache appropriately 
+    to respond on these ports.`,
+    type  =>  $types{integer},
+    category  => 'network',
   },
   {
     name        => 'ZM_MIN_RTP_PORT',
@@ -2347,7 +2387,7 @@ our @options = (
     help        => q`
       The zmwatch daemon checks the image capture performance of the
       capture daemons to ensure that they have not locked up (rarely
-        a sync error may occur which blocks indefinitely). This option
+      a sync error may occur which blocks indefinitely). This option
       determines the maximum delay to allow since the last captured
       frame. The daemon will be restarted if it has not captured any
       images after this period though the actual restart may take
@@ -2485,7 +2525,7 @@ our @options = (
     },
     category    => 'config',
   },
-  # Deprecated, superseded by event close mode
+# Deprecated, superseded by event close mode
   {
     name        => 'ZM_FORCE_CLOSE_EVENTS',
     default     => 'no',
@@ -2671,6 +2711,22 @@ our @options = (
     category    => 'dynamic',
   },
   {
+    name        => 'ZM_TELEMETRY_INTERVAL',
+    default     => '14*24*60*60',
+    description => 'Interval in seconds between telemetry updates.',
+    help        => 'This value can be expressed as a mathematical expression for ease.',
+    type        => $types{string},
+    category    => 'system',
+  },
+  {
+    name        => 'ZM_TELEMETRY_SERVER_ENDPOINT',
+    default     => 'https://zmanon:2b2d0b4skps@telemetry.zoneminder.com/zmtelemetry/testing5',
+    description => 'URL that ZoneMinder will send usage data to',
+    help        => '',
+    type        => $types{url},
+    category    => 'hidden',
+  },
+  {
     name        => 'ZM_UPDATE_CHECK_PROXY',
     default     => '',
     description => 'Proxy url if required to access zoneminder.com',
@@ -2700,7 +2756,7 @@ our @options = (
     type        => $types{hexadecimal},
     category    => 'system',
   },
-  # Deprecated, really no longer necessary
+# Deprecated, really no longer necessary
   {
     name        => 'ZM_WEB_REFRESH_METHOD',
     default     => 'javascript',
@@ -2873,6 +2929,16 @@ our @options = (
       totals for all monitors. This is not a trivial task and should
       not be repeated too frequently or it may affect the performance
       of the rest of the system.
+      `,
+    type        => $types{integer},
+    category    => 'highband',
+  },
+  {
+    name        => 'ZM_WEB_H_REFRESH_NAVBAR',
+    default     => '5',
+    description => 'How often (in seconds) the navigation header should refresh itself',
+    help        => q`
+      The navigation header contains the general status information about server load and storage space.
       `,
     type        => $types{integer},
     category    => 'highband',
@@ -3141,6 +3207,16 @@ our @options = (
     category    => 'medband',
   },
   {
+    name        => 'ZM_WEB_M_REFRESH_NAVBAR',
+    default     => '15',
+    description => 'How often (in seconds) the navigation header should refresh itself',
+    help        => q`
+      The navigation header contains the general status information about server load and storage space.
+      `,
+    type        => $types{integer},
+    category    => 'medband',
+  },
+  {
     name        => 'ZM_WEB_M_REFRESH_CYCLE',
     default     => '20',
     description => 'How often (in seconds) the cycle watch window swaps to the next monitor',
@@ -3399,6 +3475,16 @@ our @options = (
       totals for all monitors. This is not a trivial task and should
       not be repeated too frequently or it may affect the performance
       of the rest of the system.
+      `,
+    type        => $types{integer},
+    category    => 'lowband',
+  },
+  {
+    name        => 'ZM_WEB_L_REFRESH_NAVBAR',
+    default     => '35',
+    description => 'How often (in seconds) the navigation header should refresh itself',
+    help        => q`
+      The navigation header contains the general status information about server load and storage space.
       `,
     type        => $types{integer},
     category    => 'lowband',
@@ -3729,7 +3815,7 @@ our @options = (
       NEW_MAIL_MODULES must also be enabled.
       Please visit: http://www.zoneminder.com/wiki/index.php/How_to_get_ssmtp_working_with_Zoneminder
       for setup and configuration help.
-        `,
+      `,
     type        => $types{boolean},
     category    => 'mail',
   },
@@ -3746,7 +3832,7 @@ our @options = (
     type        => $types{string},
     category    => 'mail',
   },
-  );
+);
 
 our %options_hash = map { ( $_->{name}, $_ ) } @options;
 

@@ -184,6 +184,7 @@ DROP TABLE IF EXISTS `Events`;
 CREATE TABLE `Events` (
   `Id` int(10) unsigned NOT NULL auto_increment,
   `MonitorId` int(10) unsigned NOT NULL default '0',
+  `StorageId`	smallint(5) unsigned default 0,
   `Name` varchar(64) NOT NULL default '',
   `Cause` varchar(32) NOT NULL default '',
   `StartTime` datetime default NULL,
@@ -193,7 +194,8 @@ CREATE TABLE `Events` (
   `Length` decimal(10,2) NOT NULL default '0.00',
   `Frames` int(10) unsigned default NULL,
   `AlarmFrames` int(10) unsigned default NULL,
-  `DefaultVideo` VARCHAR( 64 ) NOT NULL,
+  `DefaultVideo` VARCHAR( 64 ) DEFAULT '' NOT NULL,
+  `SaveJPEGs` TINYINT,
   `TotScore` int(10) unsigned NOT NULL default '0',
   `AvgScore` smallint(5) unsigned default '0',
   `MaxScore` smallint(5) unsigned default '0',
@@ -205,6 +207,8 @@ CREATE TABLE `Events` (
   `Executed` tinyint(3) unsigned NOT NULL default '0',
   `Notes` text,
   `StateId` int(10) unsigned NOT NULL,
+  `Orientation` enum('0','90','180','270','hori','vert') NOT NULL default '0',
+  `DiskSpace`   bigint unsigned default NULL,
   PRIMARY KEY (`Id`,`MonitorId`),
   KEY `MonitorId` (`MonitorId`),
   KEY `StartTime` (`StartTime`),
@@ -218,6 +222,7 @@ CREATE TABLE `Events` (
 
 DROP TABLE IF EXISTS `Filters`;
 CREATE TABLE `Filters` (
+  `Id` int(10) unsigned NOT NULL auto_increment,
   `Name` varchar(64) NOT NULL default '',
   `Query` text NOT NULL,
   `AutoArchive` tinyint(3) unsigned NOT NULL default '0',
@@ -228,8 +233,13 @@ CREATE TABLE `Filters` (
   `AutoExecute` tinyint(3) unsigned NOT NULL default '0',
   `AutoExecuteCmd` tinytext,
   `AutoDelete` tinyint(3) unsigned NOT NULL default '0',
+  `AutoMove` tinyint(3) unsigned NOT NULL default '0',
+  `AutoMoveTo`	smallint(5) unsigned NOT NULL default 0,
+  `UpdateDiskSpace` tinyint(3) unsigned NOT NULL default '0',
   `Background` tinyint(1) unsigned NOT NULL default '0',
-  PRIMARY KEY (`Name`)
+  `Concurrent` tinyint(1) unsigned NOT NULL default '0',
+  PRIMARY KEY (`Id`),
+  KEY `Name` (`Name`)
 ) ENGINE=@ZM_MYSQL_ENGINE@;
 
 --
@@ -259,9 +269,24 @@ DROP TABLE IF EXISTS `Groups`;
 CREATE TABLE `Groups` (
   `Id` int(10) unsigned NOT NULL auto_increment,
   `Name` varchar(64) NOT NULL default '',
-  `MonitorIds` tinytext NOT NULL,
+  `ParentId` int(10) unsigned,
   PRIMARY KEY (`Id`)
 ) ENGINE=@ZM_MYSQL_ENGINE@;
+
+--
+--Table structure for table `Groups_Monitors`
+--
+
+DROP TABLE IF EXISTS `Groups_Monitors`
+CREATE TABLE `Groups_Monitors` (
+    `Id` INT(10) unsigned NOT NULL auto_increment,
+    `GroupId` int(10) unsigned NOT NULL,
+    `MonitorId` int(10) unsigned NOT NULL,
+    PRIMARY KEY (`Id`)
+) ENGINE=@ZM_MYSQL_ENGINE@;
+
+CREATE INDEX `Groups_Monitors_GroupId_idx` ON `Groups` (`GroupId`);
+CREATE INDEX `Groups_Monitors_MonitorId_idx` ON `Groups` (`MonitorId`);
 
 --
 -- Table structure for table `Logs`
@@ -281,6 +306,33 @@ CREATE TABLE `Logs` (
   KEY `TimeKey` (`TimeKey`)
 ) ENGINE=@ZM_MYSQL_ENGINE@;
 
+CREATE INDEX `Logs_TimeKey_idx` ON `Logs` (`TimeKey`);
+CREATE INDEX `Logs_Level_idx` ON `Logs` (`Level`);
+--
+-- Table structure for table `Manufacturers`
+--
+
+DROP TABLE IF EXISTS `Manufacturers`;
+CREATE TABLE `Manufacturers` (
+  `Id` int(10) unsigned NOT NULL auto_increment,
+  `Name`  varchar(64) NOT NULL,
+  PRIMARY KEY (`Id`),
+  UNIQUE KEY (`Name`)
+) ENGINE=@ZM_MYSQL_ENGINE@;
+
+--
+-- Table structure for table `Models`
+--
+
+DROP TABLE IF EXISTS `Models`;
+CREATE TABLE `Models` (
+  `Id` int(10) unsigned NOT NULL auto_increment,
+  `Name`  varchar(64) NOT NULL,
+  `ManufacturerId` int(10),
+  PRIMARY KEY (`Id`),
+  UNIQUE KEY (`ManufacturerId`,`Name`)
+) ENGINE=@ZM_MYSQL_ENGINE@;
+
 --
 -- Table structure for table `MonitorPresets`
 --
@@ -289,7 +341,7 @@ DROP TABLE IF EXISTS `MonitorPresets`;
 CREATE TABLE `MonitorPresets` (
   `Id` int(10) unsigned NOT NULL auto_increment,
   `Name` varchar(64) NOT NULL default '',
-  `Type` enum('Local','Remote','File','Ffmpeg','Libvlc','cURL') NOT NULL default 'Local',
+  `Type` enum('Local','Remote','File','Ffmpeg','Libvlc','cURL','NVSocket') NOT NULL default 'Local',
   `Device` tinytext,
   `Channel` tinytext,
   `Format` int(10) unsigned default NULL,
@@ -321,6 +373,7 @@ CREATE TABLE `Monitors` (
   `Id` int(10) unsigned NOT NULL auto_increment,
   `Name` varchar(64) NOT NULL default '',
   `ServerId` int(10) unsigned,
+  `StorageId`	smallint(5) unsigned default 0,
   `Type` enum('Local','Remote','File','Ffmpeg','Libvlc','cURL') NOT NULL default 'Local',
   `Function` enum('None','Monitor','Modect','Record','Mocord','Nodect') NOT NULL default 'Monitor',
   `Enabled` tinyint(3) unsigned NOT NULL default '1',
@@ -331,13 +384,13 @@ CREATE TABLE `Monitors` (
   `Format` int(10) unsigned NOT NULL default '0',
   `V4LMultiBuffer`	tinyint(1) unsigned,
   `V4LCapturesPerFrame`	tinyint(3) unsigned,
-  `Protocol` varchar(16) default '',
+  `Protocol` varchar(16),
   `Method` varchar(16) NOT NULL default '',
   `Host` varchar(64),
   `Port` varchar(8) NOT NULL default '',
   `SubPath` varchar(64) NOT NULL default '',
   `Path` varchar(255),
-  `Options` varchar(255) default '',
+  `Options` varchar(255),
   `User` varchar(64),
   `Pass` varchar(64),
   `Width` smallint(5) unsigned NOT NULL default '0',
@@ -348,6 +401,8 @@ CREATE TABLE `Monitors` (
   `Deinterlacing` int(10) unsigned NOT NULL default '0',
   `SaveJPEGs` TINYINT NOT NULL DEFAULT '3' ,
   `VideoWriter` TINYINT NOT NULL DEFAULT '0',
+  `OutputCodec`     enum('h264','mjpeg','mpeg1','mpeg2'),
+  `OutputContainer` enum('auto','mp4','mkv'),
   `EncoderParameters` TEXT,
   `RecordAudio` TINYINT NOT NULL DEFAULT '0',
   `RTSPDescribe` tinyint(1) unsigned,
@@ -356,7 +411,7 @@ CREATE TABLE `Monitors` (
   `Hue` mediumint(7) NOT NULL default '-1',
   `Colour` mediumint(7) NOT NULL default '-1',
   `EventPrefix` varchar(32) NOT NULL default 'Event-',
-  `LabelFormat` varchar(64),
+  `LabelFormat` varchar(64) default '%N - %y/%m/%d %H:%M:%S',
   `LabelX` smallint(5) unsigned NOT NULL default '0',
   `LabelY` smallint(5) unsigned NOT NULL default '0',
   `LabelSize` smallint(5) unsigned NOT NULL DEFAULT '1',
@@ -369,7 +424,7 @@ CREATE TABLE `Monitors` (
   `SectionLength` int(10) unsigned NOT NULL default '600',
   `FrameSkip` smallint(5) unsigned NOT NULL default '0',
   `MotionFrameSkip` smallint(5) unsigned NOT NULL default '0',
-  `AnalysisFPS` decimal(5,2) default NULL,
+  `AnalysisFPSLimit` decimal(5,2) default NULL,
   `AnalysisUpdateDelay` smallint(5) unsigned NOT NULL default '0',
   `MaxFPS` decimal(5,2) default NULL,
   `AlarmMaxFPS` decimal(5,2) default NULL,
@@ -392,8 +447,26 @@ CREATE TABLE `Monitors` (
   `WebColour` varchar(32) NOT NULL default 'red',
   `Exif` tinyint(1) unsigned NOT NULL default '0',
   `Sequence` smallint(5) unsigned default NULL,
+  `Status`  enum('Unknown','NotRunning','Running','NoSignal','Signal') NOT NULL default 'Unknown',
+  `CaptureFPS`  DECIMAL(10,2) NOT NULL default 0,
+  `AnalysisFPS`  DECIMAL(5,2) NOT NULL default 0,
+  `TotalEvents` int(10) unsigned,
+  `TotalEventDiskSpace` bigint unsigned,
+  `HourEvents` int(10) unsigned,
+  `HourEventDiskSpace` bigint unsigned,
+  `DayEvents` int(10) unsigned,
+  `DayEventDiskSpace` bigint unsigned,
+  `WeekEvents` int(10) unsigned,
+  `WeekEventDiskSpace` bigint unsigned,
+  `MonthEvents` int(10) unsigned,
+  `MonthEventDiskSpace` bigint unsigned,
+  `ArchivedEvents` int(10) unsigned,
+  `ArchivedEventDiskSpace` bigint unsigned,
+  `ZoneCount` TINYINT NOT NULL DEFAULT 0,
   PRIMARY KEY (`Id`)
 ) ENGINE=@ZM_MYSQL_ENGINE@;
+
+CREATE INDEX `Monitors_ServerId_idx` ON `Monitors` (`ServerId`);
 
 --
 -- Table structure for table `States`
@@ -422,8 +495,17 @@ CREATE TABLE `Servers` (
   `Hostname` TEXT,
   `Name` varchar(64) NOT NULL default '',
   `State_Id`	int(10) unsigned,
+  `Status` enum('Unknown','NotRunning','Running') NOT NULL default 'Unknown',
+  `Load` DECIMAL(5,1),
+  `TotalMem` bigint unsigned default null,
+  `FreeMem` bigint unsigned default null,
+  `TotalSwap` bigint  unsigned default null,
+  `FreeSwap` bigint unsigned default null, 
   PRIMARY KEY (`Id`)
 ) ENGINE=@ZM_MYSQL_ENGINE@;
+
+CREATE INDEX `Servers_Name_idx` ON `Servers` (`Name`);
+
 --
 -- Table structure for table `Stats`
 --
@@ -550,6 +632,21 @@ CREATE TABLE `Zones` (
   KEY `MonitorId` (`MonitorId`)
 ) ENGINE=@ZM_MYSQL_ENGINE@;
 
+DROP TABLE IF EXISTS `Storage`;
+CREATE TABLE `Storage` (
+	`Id`	smallint(5) unsigned NOT NULL auto_increment,
+	`Path`	varchar(64)	NOT NULL default '',
+	`Name`	varchar(64) NOT NULL default '',
+	`Type`	enum('local','s3fs') NOT NULL default 'local',
+  `DiskSpace`   bigint unsigned default NULL,
+	PRIMARY KEY (`Id`)
+) ENGINE=@ZM_MYSQL_ENGINE@;
+
+--
+-- Create a default storage location
+--
+insert into Storage VALUES (NULL, '/var/cache/zoneminder/events', 'Default', 'local', NULL );
+
 /*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
 /*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;
 /*!40014 SET UNIQUE_CHECKS=@OLD_UNIQUE_CHECKS */;
@@ -570,7 +667,7 @@ insert into Users VALUES (NULL,'admin',password('admin'),'',1,'View','Edit','Edi
 --
 -- Add a sample filter to purge the oldest 100 events when the disk is 95% full
 --
-insert into Filters values ('PurgeWhenFull','{"sort_field":"Id","terms":[{"val":0,"attr":"Archived","op":"="},{"cnj":"and","val":95,"attr":"DiskPercent","op":">="}],"limit":100,"sort_asc":1}',0,0,0,0,0,0,'',1,1);
+insert into Filters values (NULL,'PurgeWhenFull','{"sort_field":"Id","terms":[{"val":0,"attr":"Archived","op":"="},{"cnj":"and","val":95,"attr":"DiskPercent","op":">="}],"limit":100,"sort_asc":1}',0,0,0,0,0,0,'',1,0,1,0);
 
 --
 -- Add in some sample control protocol definitions
@@ -689,9 +786,34 @@ INSERT INTO ZonePresets VALUES (5,'Best, low sensitivity','Active','Percent','Bl
 INSERT INTO ZonePresets VALUES (6,'Best, medium sensitivity','Active','Percent','Blobs',40,NULL,16,NULL,5,5,12,NULL,10,NULL,1,NULL,0,0);
 INSERT INTO ZonePresets VALUES (7,'Best, high sensitivity','Active','Percent','Blobs',20,NULL,8,NULL,3,3,6,NULL,5,NULL,1,NULL,0,0);
 
+CREATE TABLE Maps (
+  `Id` int(10) unsigned NOT NULL auto_increment,
+  `Name`      TEXT NOT NULL,
+  `Filename`  TEXT NOT NULL default '',
+  `NumCoords` tinyint(3) unsigned NOT NULL default '0',
+  `Coords` tinytext NOT NULL,
+  `ParentId`   int(1) unsigned,
+  PRIMARY KEY (`Id`)
+);
+
+CREATE TABLE MontageLayouts (
+  `Id` int(10) unsigned NOT NULL auto_increment,
+  `Name`    TEXT  NOT NULL,
+  `Positions` LONGTEXT,
+  /*`Positions` JSON,*/
+  PRIMARY KEY (`Id`)
+);
+
+INSERT INTO MontageLayouts (`Name`,`Positions`) VALUES ('Freeform', '{ "default":{"float":"left","left":"0px","right":"0px","top":"0px","bottom":"0px"} }' );
+INSERT INTO MontageLayouts (`Name`,`Positions`) VALUES ('2 Wide', '{ "default":{"float":"left", "width":"49%","left":"0px","right":"0px","top":"0px","bottom":"0px"} }' );
+INSERT INTO MontageLayouts (`Name`,`Positions`) VALUES ('3 Wide', '{ "default":{"float":"left", "width":"33%","left":"0px","right":"0px","top":"0px","bottom":"0px"} }' );
+INSERT INTO MontageLayouts (`Name`,`Positions`) VALUES ('4 Wide', '{ "default":{"float":"left", "width":"24.5%","left":"0px","right":"0px","top":"0px","bottom":"0px"} }' );
+INSERT INTO MontageLayouts (`Name`,`Positions`) VALUES ('5 Wide', '{ "default":{"float":"left", "width":"19%","left":"0px","right":"0px","top":"0px","bottom":"0px"} }' );
+
 --
 -- Apply the initial configuration
 --
 -- This section is autogenerated by zmconfgen.pl
 -- Do not edit this file as any changes will be overwritten
 --
+
