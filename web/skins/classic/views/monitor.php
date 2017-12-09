@@ -19,6 +19,7 @@
 //
 
 require_once( 'includes/Server.php');
+require_once( 'includes/Storage.php');
 
 if ( !canView( 'Monitors' ) ) {
   $view = 'error';
@@ -50,14 +51,16 @@ if ( ! $Server ) {
   $Server = array( 'Id' => '' );
 }
 
+$monitor = null;
 if ( ! empty($_REQUEST['mid']) ) {
   $monitor = new Monitor( $_REQUEST['mid'] );
-  if ( ZM_OPT_X10 )
+  if ( $monitor and ZM_OPT_X10 )
     $x10Monitor = dbFetchOne( 'SELECT * FROM TriggersX10 WHERE MonitorId = ?', NULL, array($_REQUEST['mid']) );
-} else {
+} 
+if ( ! $monitor ) {
 
   $nextId = getTableAutoInc( 'Monitors' );
-  if ( ! empty( $_REQUEST['dupId'] ) ) {
+  if ( isset( $_REQUEST['dupId'] ) ) {
     $monitor = new Monitor( $_REQUEST['dupId'] );
     if ( ZM_OPT_X10 )
       $x10Monitor = dbFetchOne( 'SELECT * FROM TriggersX10 WHERE MonitorId = ?', NULL, array($_REQUEST['dupId']) );
@@ -119,7 +122,7 @@ if ( ! empty($_REQUEST['mid']) ) {
           'FrameSkip' => 0,
           'MotionFrameSkip' => 0,
           'EventPrefix' => 'Event-',
-          'AnalysisFPS' => '',
+          'AnalysisFPSLimit' => '',
           'AnalysisUpdateDelay' => 0,
           'MaxFPS' => '',
           'AlarmMaxFPS' => '',
@@ -136,6 +139,7 @@ if ( ! empty($_REQUEST['mid']) ) {
           'V4LMultiBuffer'  =>  '',
           'V4LCapturesPerFrame'  =>  1,
           'ServerId'  =>  $Server['Id'],
+          'StorageId'  => '0',
           ) );
     } # end if $_REQUEST['dupID']
 } # end if $_REQUEST['mid']
@@ -166,8 +170,8 @@ if ( isset( $_REQUEST['newMonitor'] ) ) {
 }
 
 # What if it has less zeros?  This is not robust code.
-if ( $monitor->AnalysisFPS() == '0.00' )
-  $monitor->AnalysisFPS( '' );
+if ( $monitor->AnalysisFPSLimit() == '0.00' )
+  $monitor->AnalysisFPSLimit( '' );
 if ( $monitor->MaxFPS() == '0.00' )
   $monitor->MaxFPS( '' );
 if ( $monitor->AlarmMaxFPS() == '0.00' )
@@ -205,7 +209,8 @@ $sourceTypes = array(
     'File'   => translate('File'),
     'Ffmpeg' => translate('Ffmpeg'),
     'Libvlc' => translate('Libvlc'),
-    'cURL'   => 'cURL (HTTP(S) only)'
+    'cURL'   => 'cURL (HTTP(S) only)',
+    'NVSocket'	=>	translate('NVSocket')
     );
 if ( !ZM_HAS_V4L )
   unset($sourceTypes['Local']);
@@ -387,18 +392,18 @@ if ( ZM_HAS_V4L2 ) {
 }
 
 $Colours = array(
-    translate('8BitGrey')    => 1,
-    translate('24BitColour') => 3,
-    translate('32BitColour') => 4
+    '1' => translate('8BitGrey'),
+    '3' => translate('24BitColour'),
+    '4' => translate('32BitColour')
     );
 
 $orientations = array(
-    translate('Normal')      => '0',
-    translate('RotateRight') => '90',
-    translate('Inverted')    => '180',
-    translate('RotateLeft')  => '270',
-    translate('FlippedHori') => 'hori',
-    translate('FlippedVert') => 'vert'
+    '0' => translate('Normal'),
+    '90' => translate('RotateRight'),
+    '180' => translate('Inverted'),
+    '270' => translate('RotateLeft'),
+    'horz' => translate('FlippedHori'),
+    'vert' => translate('FlippedVert')
     );
 
 $deinterlaceopts = array(
@@ -527,12 +532,13 @@ if ( $tab != 'general' ) {
 ?>
       <input type="hidden" name="newMonitor[Name]" value="<?php echo validHtmlStr($monitor->Name()) ?>"/>
       <input type="hidden" name="newMonitor[ServerId]" value="<?php echo validHtmlStr($monitor->ServerId() ) ?>"/>
+      <input type="hidden" name="newMonitor[StorageId]" value="<?= validHtmlStr($monitor->StorageId() ) ?>"/>
       <input type="hidden" name="newMonitor[Type]" value="<?php echo validHtmlStr($monitor->Type()) ?>"/>
       <input type="hidden" name="newMonitor[Function]" value="<?php echo validHtmlStr($monitor->Function()) ?>"/>
       <input type="hidden" name="newMonitor[Enabled]" value="<?php echo validHtmlStr($monitor->Enabled()) ?>"/>
       <input type="hidden" name="newMonitor[RefBlendPerc]" value="<?php echo validHtmlStr($monitor->RefBlendPerc()) ?>"/>
       <input type="hidden" name="newMonitor[AlarmRefBlendPerc]" value="<?php echo validHtmlStr($monitor->AlarmRefBlendPerc()) ?>"/>
-      <input type="hidden" name="newMonitor[AnalysisFPS]" value="<?php echo validHtmlStr($monitor->AnalysisFPS()) ?>"/>
+      <input type="hidden" name="newMonitor[AnalysisFPSLimit]" value="<?php echo validHtmlStr($monitor->AnalysisFPSLimit()) ?>"/>
       <input type="hidden" name="newMonitor[MaxFPS]" value="<?php echo validHtmlStr($monitor->MaxFPS()) ?>"/>
       <input type="hidden" name="newMonitor[AlarmMaxFPS]" value="<?php echo validHtmlStr($monitor->AlarmMaxFPS()) ?>"/>
 <?php
@@ -563,7 +569,7 @@ if ( $tab != 'source' || $monitor->Type()!= 'Remote' ) {
 }
 if ( $tab != 'source' || ($monitor->Type()!= 'Local' && $monitor->Type()!= 'Remote' && $monitor->Type()!= 'Ffmpeg' && $monitor->Type()!= 'Libvlc') ) {
 ?>
-      <input type="hidden" name="newMonitor[Method]" value="<?php echo validHtmlStr($monitor->Method()) ?>"/>
+      <input type="hidden" name="newMonitor[Method]" value="<?php echo validHtmlStr(null !== $monitor->Method() ? $monitor->Method() : 'rtpRtsp' ) ?>"/>
 <?php
 }
 if ( $tab != 'source' || ($monitor->Type()!= 'Ffmpeg' && $monitor->Type()!= 'Libvlc' )) {
@@ -595,7 +601,7 @@ if ( $tab != 'storage' ) {
       <input type="hidden" name="newMonitor[RecordAudio]" value="<?php echo validHtmlStr($monitor->RecordAudio()) ?>"/>
 <?php
 }
-if ( $tab != 'source' || ($monitor->Type()!= 'Remote' && $monitor->Protocol()!= 'rtsp') ) {
+if ( $tab != 'source' || ($monitor->Type() != 'Remote' && $monitor->Protocol()!= 'rtsp') ) {
 ?>
       <input type="hidden" name="newMonitor[RTSPDescribe]" value="<?php echo validHtmlStr($monitor->RTSPDescribe()) ?>"/>
 <?php
@@ -659,14 +665,14 @@ if ( ZM_HAS_V4L && ($tab != 'misc' || $monitor->Type()!= 'Local') ) {
 <?php
 }
 ?>
-      <table id="contentTable" class="major" cellspacing="0">
+      <table id="contentTable" class="major">
         <tbody>
 <?php
 switch ( $tab ) {
   case 'general' :
     {
 ?>
-          <tr><td><?php echo translate('Name') ?></td><td><input type="text" name="newMonitor[Name]" value="<?php echo validHtmlStr($monitor->Name()) ?>" size="16"/></td></tr>
+          <tr class="Name"><td><?php echo translate('Name') ?></td><td><input type="text" name="newMonitor[Name]" value="<?php echo validHtmlStr($monitor->Name()) ?>" /></td></tr>
           <tr><td><?php echo translate('Server') ?></td><td>
 <?php 
       $servers = array(''=>'None');
@@ -676,6 +682,17 @@ switch ( $tab ) {
         $servers[$server_obj->Id()] = $server_obj->Name();
       }
       echo htmlSelect( 'newMonitor[ServerId]', $servers, $monitor->ServerId() );
+?>
+          </td></tr>
+          <tr><td><?php echo translate('StorageArea') ?></td><td>
+<?php
+      $storage_areas = array(0=>'Default');
+      $result = dbQuery( 'SELECT * FROM Storage ORDER BY Name');
+      $results = $result->fetchALL(PDO::FETCH_CLASS | PDO::FETCH_PROPS_LATE, 'Storage' );
+      foreach ( $results as $row => $storage_obj ) {
+        $storage_areas[$storage_obj->Id] = $storage_obj->Name();
+      }
+      echo htmlSelect( 'newMonitor[StorageId]', $storage_areas, $monitor->StorageId() );
 ?>
           </td></tr>
           <tr><td><?php echo translate('SourceType') ?></td><td><?php echo htmlSelect( "newMonitor[Type]", $sourceTypes, $monitor->Type() ); ?></td></tr>
@@ -710,9 +727,9 @@ switch ( $tab ) {
             </select>
           </td>
         </tr>
-        <tr><td><?php echo translate('AnalysisFPS') ?></td><td><input type="text" name="newMonitor[AnalysisFPS]" value="<?php echo validHtmlStr($monitor->AnalysisFPS()) ?>" size="6"/></td></tr>
+        <tr><td><?php echo translate('AnalysisFPS') ?></td><td><input type="text" name="newMonitor[AnalysisFPSLimit]" value="<?php echo validHtmlStr($monitor->AnalysisFPSLimit()) ?>" size="6"/></td></tr>
 <?php
-      if ( $monitor->Type() != 'Local' && $monitor->Type() != 'File' ) {
+      if ( $monitor->Type() != 'Local' && $monitor->Type() != 'File' && $monitor->Type() != 'NVSocket' ) {
 ?>
             <tr>
               <td><?php echo translate('MaximumFPS') ?>&nbsp;(<?php echo makePopupLink('?view=optionhelp&amp;option=OPTIONS_MAXFPS', 'zmOptionHelp', 'optionhelp', '?' ) ?>)</td>
@@ -786,7 +803,10 @@ switch ( $tab ) {
 <?php
         if ( ZM_HAS_V4L1 && $monitor->Method() == 'v4l1' ) {
 ?>
-          <tr><td><?php echo translate('DeviceChannel') ?></td><td><select name="newMonitor[Channel]"><?php foreach ( $v4l1DeviceChannels as $name => $value ) { ?><option value="<?php echo $value ?>"<?php if ( $value == $monitor->Channel()) { ?> selected="selected"<?php } ?>><?php echo $name ?></option><?php } ?></select></td></tr>
+          <tr>
+            <td><?php echo translate('DeviceChannel') ?></td>
+            <td><select name="newMonitor[Channel]"><?php foreach ( $v4l1DeviceChannels as $name => $value ) { ?><option value="<?php echo $value ?>"<?php if ( $value == $monitor->Channel()) { ?> selected="selected"<?php } ?>><?php echo $name ?></option><?php } ?></select></td>
+          </tr>
           <tr><td><?php echo translate('DeviceFormat') ?></td><td><select name="newMonitor[Format]"><?php foreach ( $v4l1DeviceFormats as $name => $value ) { ?><option value="<?php echo $value ?>"<?php if ( $value == $monitor->Format()) { ?> selected="selected"<?php } ?>><?php echo $name ?></option><?php } ?></select></td></tr>
           <tr><td><?php echo translate('CapturePalette') ?></td><td><select name="newMonitor[Palette]"><?php foreach ( $v4l1LocalPalettes as $name => $value ) { ?><option value="<?php echo $value ?>"<?php if ( $value == $monitor->Palette()) { ?> selected="selected"<?php } ?>><?php echo $name ?></option><?php } ?></select></td></tr>
 <?php
@@ -808,7 +828,10 @@ switch ( $tab ) {
           </td></tr>
           <tr><td><?php echo translate('V4LCapturesPerFrame') ?></td><td><input type="number" name="newMonitor[V4LCapturesPerFrame]" value="<?php echo $monitor->V4LCapturesPerFrame()?>"/></td></tr>
 <?php
-      } elseif ( $monitor->Type() == 'Remote' ) {
+      
+      } else if ( $monitor->Type() == 'NVSocket' ) {
+include('_monitor_source_nvsocket.php');
+      } else if ( $monitor->Type() == 'Remote' ) {
 ?>
           <tr><td><?php echo translate('RemoteProtocol') ?></td><td><?php echo htmlSelect( "newMonitor[Protocol]", $remoteProtocols, $monitor->Protocol(), "updateMethods( this );if(this.value=='rtsp'){\$('RTSPDescribe').setStyle('display','table-row');}else{\$('RTSPDescribe').hide();}" ); ?></td></tr>
 <?php
@@ -823,7 +846,7 @@ switch ( $tab ) {
         }
 ?>
           <tr><td><?php echo translate('RemoteHostName') ?></td><td><input type="text" name="newMonitor[Host]" value="<?php echo validHtmlStr($monitor->Host()) ?>" size="36"/></td></tr>
-          <tr><td><?php echo translate('RemoteHostPort') ?></td><td><input type="text" name="newMonitor[Port]" value="<?php echo validHtmlStr($monitor->Port()) ?>" size="6"/></td></tr>
+          <tr><td><?php echo translate('RemoteHostPort') ?></td><td><input type="number" name="newMonitor[Port]" value="<?php echo validHtmlStr($monitor->Port()) ?>" size="6"/></td></tr>
           <tr><td><?php echo translate('RemoteHostPath') ?></td><td><input type="text" name="newMonitor[Path]" value="<?php echo validHtmlStr($monitor->Path()) ?>" size="36"/></td></tr>
 <?php
       } else if ( $monitor->Type() == 'File' ) {
@@ -843,14 +866,17 @@ switch ( $tab ) {
           <tr><td><?php echo translate('Options') ?>&nbsp;(<?php echo makePopupLink( '?view=optionhelp&amp;option=OPTIONS_'.strtoupper($monitor->Type()), 'zmOptionHelp', 'optionhelp', '?' ) ?>)</td><td><input type="text" name="newMonitor[Options]" value="<?php echo validHtmlStr($monitor->Options()) ?>" size="36"/></td></tr>
 <?php
       }
+if ( $monitor->Type() != 'NVSocket' ) {
 ?>
-        <tr><td><?php echo translate('TargetColorspace') ?></td><td><select name="newMonitor[Colours]"><?php foreach ( $Colours as $name => $value ) { ?><option value="<?php echo $value ?>"<?php if ( $value == $monitor->Colours()) { ?> selected="selected"<?php } ?>><?php echo $name ?></option><?php } ?></select></td></tr>
+        <tr><td><?php echo translate('TargetColorspace') ?></td><td><?php echo htmlSelect('newMonitor[Colours]', $Colours, $monitor->Colours() ); ?>
+</td></tr>
         <tr><td><?php echo translate('CaptureWidth') ?> (<?php echo translate('Pixels') ?>)</td><td><input type="text" name="newMonitor[Width]" value="<?php echo validHtmlStr($monitor->Width()) ?>" size="4" onkeyup="updateMonitorDimensions(this);"/></td></tr>
         <tr><td><?php echo translate('CaptureHeight') ?> (<?php echo translate('Pixels') ?>)</td><td><input type="text" name="newMonitor[Height]" value="<?php echo validHtmlStr($monitor->Height()) ?>" size="4" onkeyup="updateMonitorDimensions(this);"/></td></tr>
         <tr><td><?php echo translate('PreserveAspect') ?></td><td><input type="checkbox" name="preserveAspectRatio" value="1"/></td></tr> 
-        <tr><td><?php echo translate('Orientation') ?></td><td><select name="newMonitor[Orientation]"><?php foreach ( $orientations as $name => $value ) { ?><option value="<?php echo $value ?>"<?php if ( $value == $monitor->Orientation()) { ?> selected="selected"<?php } ?>><?php echo $name ?></option><?php } ?></select></td></tr>
+	<tr><td><?php echo translate('Orientation') ?></td><td><?php echo htmlselect( 'newMonitor[Orientation]', $orientations, $monitor->Orientation() );?></td></tr>
 <?php
-      if ( $monitor->Type() == 'Local' ) {
+      } 
+if ( $monitor->Type() == 'Local' ) {
 ?>
             <tr><td><?php echo translate('Deinterlacing') ?></td><td><select name="newMonitor[Deinterlacing]"><?php foreach ( $deinterlaceopts_v4l2 as $name => $value ) { ?><option value="<?php echo $value ?>"<?php if ( $value == $monitor->Deinterlacing()) { ?> selected="selected"<?php } ?>><?php echo $name ?></option><?php } ?></select></td></tr>
             <?php

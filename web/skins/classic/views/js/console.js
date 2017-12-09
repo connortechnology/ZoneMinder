@@ -12,14 +12,14 @@ function setButtonStates( element ) {
       }
     }
   }
-  $(element).getParent( 'tr' ).toggleClass( 'highlight' );
-  form.editBtn.disabled = (checked!=1);
+  $(element).closest("tr").toggleClass("danger");
+  form.editBtn.disabled = checked ? false : true;
   form.addBtn.value = (checked==1) ? jsTranslatedCloneText:jsTranslatedAddText;
 
   form.deleteBtn.disabled = (checked==0);
 }
 
-function addMonitor( element) {
+function addMonitor(element) {
   var form = element.form;
   var dupParam;
   var monitorId=-1;
@@ -40,18 +40,23 @@ function addMonitor( element) {
 
 function editMonitor( element ) {
   var form = element.form;
+  var monitorIds = Array();
+
   for ( var i = 0; i < form.elements.length; i++ ) {
     if ( form.elements[i].type == "checkbox" ) {
       if ( form.elements[i].checked ) {
-        var monitorId = form.elements[i].value;
-        createPopup( '?view=monitor&mid='+monitorId, 'zmMonitor'+monitorId, 'monitor' );
-        form.elements[i].checked = false;
-        setButtonStates( form.elements[i] );
+        monitorIds.push( form.elements[i].value );
+        //form.elements[i].checked = false;
+        //setButtonStates( form.elements[i] );
         //$(form.elements[i]).getParent( 'tr' ).removeClass( 'highlight' );
-        break;
+        //break;
       }
     }
-  }
+  } // end foreach checkboxes
+  if ( monitorIds.length == 1 )
+        createPopup( '?view=monitor&mid='+monitorIds[0], 'zmMonitor'+monitorIds[0], 'monitor' );
+  else if ( monitorIds.length > 1 ) 
+        createPopup( '?view=monitors&'+(monitorIds.map(function(mid){return 'mids[]='+mid;}).join('&')), 'zmMonitors', 'monitors' );
 }
 
 function deleteMonitor( element ) {
@@ -95,6 +100,5 @@ function applySort(event, ui) {
       } );
   ajax.send();
 } // end function applySort(event,ui)
-
 
 window.addEvent( 'domready', initPage );

@@ -60,10 +60,12 @@ p {
 }
 
 th {
+/*
     padding: 3px;
     text-transform: uppercase;
     font-size: 0.8em;
     font-weight: 600;
+*/
 }
 
 a:link {
@@ -85,19 +87,20 @@ label {
     margin-right: 4px;
 }
 
-input,textarea,select,button {
+input,textarea,select,button,.btn-primary {
     border: 1px #ccc solid;
-    padding: 10px;
+    padding: 5px;
     border-radius: 2px;
     font-family: inherit;
     font-weight: 400;
     font-size: 100%;
     color: #333333;
 }
-
-input[type=text], input[type=password], textarea, select {
+/*
+input[type=text], input[type=password], input[type="url"], textarea, select {
     padding: 1px;
 }
+*/
 
 input.noborder {
     border: 0;
@@ -107,6 +110,9 @@ input[disabled] {
     color: #888888;
 }
 
+img {
+  display: inline-block;
+}
 img.normal {
     border: white solid 1px;
 }
@@ -244,6 +250,11 @@ ul.tabList li.active a {
     font-size: 120%;
 }
 
+#content table > tbody > tr:hover
+{
+    background-color: #EEE;
+}
+
 .overlay {
     font-size: 11px;
 }
@@ -356,11 +367,12 @@ th.table-th-sort-rev span.table-th-sort-span {
 }
 
 #header {
-    line-height: 24px;
+    width: 100%;
+    line-height: 1;
     text-align: left;
     background-color: #383836;
-    margin-bottom: 10px;
-    padding: 10px 20px;
+    padding: 5px 20px;
+    margin: 0 auto 4px auto;
     color: #f2f2f2;
     font-weight: 300;
 }
@@ -398,7 +410,7 @@ th.table-th-sort-rev span.table-th-sort-span {
 
 #content {
     width: 96%;
-    margin: 8px auto;
+    margin: 0 auto 8px auto;
     line-height: 130%;
     text-align: center;
 }
@@ -424,11 +436,11 @@ th.table-th-sort-rev span.table-th-sort-span {
 }
 */
 
-#content > input[type=submit], #content > input[type=button], #content > button {
+#content > input[type=submit], #content > input[type=button], #content > button, #content > .btn-primary {
     margin-top: 8px;
 }
 
-#content table input[type=submit], #content table input[type=button], #content table button {
+#content table input[type=submit], #content table input[type=button], #content table button, #content table .btn-primary {
     margin-top: 1px;
 }
 
@@ -447,8 +459,11 @@ th.table-th-sort-rev span.table-th-sort-span {
     margin: 8px auto;
 }
 
+button,
 input[type=button],
-input[type=submit] {
+input[type=submit],
+.btn-primary,
+.btn-primary:link {
     background-color: #3498db;
     color: #fff;
     border-color: #3498db;
@@ -456,40 +471,76 @@ input[type=submit] {
     font-weight: 200;
     padding: 5px 10px;
     cursor: pointer;
+    text-decoration: none;
+    display: inline-block;
 }
 
+button:hover,
 input[type=button]:hover,
-input[type=submit]:hover {
+input[type=submit]:hover,
+.btn-primary:hover {
     background-color: #34a2ee;    
-
 }
 
 
 /* PP - make it easy to identify disabled buttons */
 
+button:disabled,
 input[type=button]:disabled,
-input[type=submit]:disabled {
+input[type=submit]:disabled,
+.btn-primary:disabled {
     background-color: #aaaaaa;    
     border-color: #bbbbbb;
 
 }
 
-/*
- * Console table for the main event table
- */
-
-#consoleTable td, #consoleTable th {
-    padding: 5px;    
-    border-bottom: 2px solid #f2f2f2;
+#options {
+  font-size:90%;
 }
 
-#consoleTable input[type=button] {
-    margin-right: 3px !important;
+#options .help-block {
+  margin-top: 0;
 }
 
-#consoleTable tfoot {
-    background-color: #f2f2f2;  
+#options .form-group {
+  margin-bottom: 20px;
+  border-bottom: 1px solid #e7e7e7;
 }
 
+.navbar{
+	margin-bottom: 0 !important;
+	border-radius: 0;
+	color: #03A9F4 !important;
+}
 
+.navbar-brand {
+	font-weight: bold;
+	font-size: 20px;
+}
 
+.container-fluid {
+  position: relative;
+}
+
+.sidebar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 1000;
+    display: block;
+    padding: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    background-color: #f5f5f5;
+    border-right: 1px solid #eeeeee;
+}
+
+.sidebar ul {
+margin-right: 0;
+margin-bottom: 20px;
+margin-left: 0;
+}
+
+.nav-pills > li > a {
+  border-radius: 0;
+}

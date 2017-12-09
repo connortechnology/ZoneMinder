@@ -37,13 +37,10 @@
 
 //#define USE_PREPARED_SQL 1
 
-bool Event::initialised = false;
-char Event::capture_file_format[PATH_MAX];
-char Event::analyse_file_format[PATH_MAX];
-char Event::general_file_format[PATH_MAX];
-char Event::video_file_format[PATH_MAX];
+const char * Event::frame_type_names[3] = { "Normal", "Bulk", "Alarm" };
 
 int Event::pre_alarm_count = 0;
+
 Event::PreAlarmData Event::pre_alarm_data[MAX_PRE_ALARM_FRAMES] = { { 0 } };
 
 Event::Event( Monitor *p_monitor, struct timeval p_start_time, const std::string &p_cause, const StringSetMap &p_noteSetMap, bool p_videoEvent ) :
@@ -54,8 +51,6 @@ Event::Event( Monitor *p_monitor, struct timeval p_start_time, const std::string
   videoEvent( p_videoEvent ),
   videowriter( NULL )
 {
-  if ( !initialised )
-    Initialise();
 
   std::string notes;
   createNotes( notes );
@@ -66,14 +61,29 @@ Event::Event( Monitor *p_monitor, struct timeval p_start_time, const std::string
     gettimeofday( &start_time, 0 );
   }
 
+  Storage * storage = monitor->getStorage();
+
   unsigned int state_id = 0;
-  if ( MYSQL_ROW dbrow = zmDbFetchOne( "SELECT Id FROM States WHERE IsActive=1" ) ) {
+  zmDbRow dbrow;
+  if ( dbrow.fetch("SELECT Id FROM States WHERE IsActive=1") ) {
     state_id = atoi(dbrow[0]);
   }
 
   static char sql[ZM_SQL_MED_BUFSIZ];
   struct tm *stime = localtime( &start_time.tv_sec );
-  snprintf( sql, sizeof(sql), "insert into Events ( MonitorId, Name, StartTime, Width, Height, Cause, Notes, StateId, Videoed ) values ( %d, 'New Event', from_unixtime( %ld ), %d, %d, '%s', '%s', '%d', '%d' )", monitor->Id(), start_time.tv_sec, monitor->Width(), monitor->Height(), cause.c_str(), notes.c_str(), state_id, videoEvent );
+  snprintf( sql, sizeof(sql), "INSERT INTO Events ( MonitorId, StorageId, Name, StartTime, Width, Height, Cause, Notes, StateId, Orientation, Videoed, DefaultVideo, SaveJPEGs ) values ( %d, %d, 'New Event', from_unixtime( %ld ), %d, %d, '%s', '%s', %d, %d, %d, '', %d )",
+      monitor->Id(), 
+      storage->Id(),
+      start_time.tv_sec,
+      monitor->Width(),
+      monitor->Height(),
+      cause.c_str(),
+      notes.c_str(), 
+      state_id,
+      monitor->getOrientation(),
+      videoEvent,
+      monitor->GetOptSaveJPEGs()
+      );
   if ( mysql_query( &dbconn, sql ) ) {
     Error( "Can't insert event: %s. sql was (%s)", mysql_error( &dbconn ), sql );
     exit( mysql_errno( &dbconn ) );
@@ -93,7 +103,7 @@ Event::Event( Monitor *p_monitor, struct timeval p_start_time, const std::string
 
   if ( config.use_deep_storage ) {
     char *path_ptr = path;
-    path_ptr += snprintf( path_ptr, sizeof(path), "%s/%d", staticConfig.DIR_EVENTS.c_str(), monitor->Id() );
+    path_ptr += snprintf( path_ptr, sizeof(path), "%s/%d", storage->Path(), monitor->Id() );
 
     int dt_parts[6];
     dt_parts[0] = stime->tm_year-100;
@@ -110,9 +120,11 @@ Event::Event( Monitor *p_monitor, struct timeval p_start_time, const std::string
       path_ptr += snprintf( path_ptr, sizeof(path)-(path_ptr-path), "/%02d", dt_parts[i] );
 
       errno = 0;
+      // Do we really need to stat it?  Perhaps we could do that on error, instead
       if ( stat( path, &statbuf ) ) {
         if ( errno == ENOENT || errno == ENOTDIR ) {
           if ( mkdir( path, 0755 ) ) {
+            // FIXME This should not be fatal.  Should probably move to a different storage area.
             Fatal( "Can't mkdir %s: %s", path, strerror(errno));
           }
         } else {
@@ -127,9 +139,9 @@ Event::Event( Monitor *p_monitor, struct timeval p_start_time, const std::string
     // Create event id symlink
     snprintf( id_file, sizeof(id_file), "%s/.%d", date_path, id );
     if ( symlink( time_path, id_file ) < 0 )
-      Fatal( "Can't symlink %s -> %s: %s", id_file, path, strerror(errno));
+      Error( "Can't symlink %s -> %s: %s", id_file, path, strerror(errno));
   } else {
-    snprintf( path, sizeof(path), "%s/%d/%d", staticConfig.DIR_EVENTS.c_str(), monitor->Id(), id );
+    snprintf( path, sizeof(path), "%s/%d/%d", storage->Path(), monitor->Id(), id );
 
     errno = 0;
     stat( path, &statbuf );
@@ -138,14 +150,14 @@ Event::Event( Monitor *p_monitor, struct timeval p_start_time, const std::string
         Error( "Can't mkdir %s: %s", path, strerror(errno));
       }
     }
-  } // deep storage or not
 
-  // Create empty id tag file
-  snprintf( id_file, sizeof(id_file), "%s/.%d", path, id );
-  if ( FILE *id_fp = fopen( id_file, "w" ) )
-    fclose( id_fp );
-  else
-    Fatal( "Can't fopen %s: %s", id_file, strerror(errno));
+    // Create empty id tag file
+    snprintf( id_file, sizeof(id_file), "%s/.%d", path, id );
+    if ( FILE *id_fp = fopen( id_file, "w" ) )
+      fclose( id_fp );
+    else
+      Error( "Can't fopen %s: %s", id_file, strerror(errno));
+  } // deep storage or not
 
   last_db_frame = 0;
 
@@ -155,7 +167,8 @@ Event::Event( Monitor *p_monitor, struct timeval p_start_time, const std::string
 
   if ( monitor->GetOptVideoWriter() != 0 ) {
     snprintf( video_name, sizeof(video_name), "%d-%s", id, "video.mp4" );
-    snprintf( video_file, sizeof(video_file), video_file_format, path, video_name );
+    snprintf( video_file, sizeof(video_file), staticConfig.video_file_format, path, video_name );
+    Debug(1,"Writing video file to %s", video_file );
 
     /* X264 MP4 video writer */
     if ( monitor->GetOptVideoWriter() == Monitor::X264ENCODE ) {
@@ -169,14 +182,14 @@ Event::Event( Monitor *p_monitor, struct timeval p_start_time, const std::string
     if ( videowriter != NULL ) {
       /* Open the video stream */
       int nRet = videowriter->Open();
-      if(nRet != 0) {
+      if ( nRet != 0 ) {
         Error("Failed opening video stream");
         delete videowriter;
         videowriter = NULL;
       }
 
       snprintf( timecodes_name, sizeof(timecodes_name), "%d-%s", id, "video.timecodes" );
-      snprintf( timecodes_file, sizeof(timecodes_file), video_file_format, path, timecodes_name );
+      snprintf( timecodes_file, sizeof(timecodes_file), staticConfig.video_file_format, path, timecodes_name );
 
       /* Create timecodes file */
       timecodes_fd = fopen(timecodes_file, "wb");
@@ -199,7 +212,9 @@ Event::~Event() {
   if ( frames > last_db_frame ) {
 
     Debug( 1, "Adding closing frame %d to DB", frames );
-    snprintf( sql, sizeof(sql), "insert into Frames ( EventId, FrameId, TimeStamp, Delta ) values ( %d, %d, from_unixtime( %ld ), %s%ld.%02ld )", id, frames, end_time.tv_sec, delta_time.positive?"":"-", delta_time.sec, delta_time.fsec );
+    snprintf( sql, sizeof(sql), 
+        "insert into Frames ( EventId, FrameId, TimeStamp, Delta ) values ( %d, %d, from_unixtime( %ld ), %s%ld.%02ld )",
+        id, frames, end_time.tv_sec, delta_time.positive?"":"-", delta_time.sec, delta_time.fsec );
     if ( mysql_query( &dbconn, sql ) ) {
       Error( "Can't insert frame: %s", mysql_error( &dbconn ) );
       exit( mysql_errno( &dbconn ) );
@@ -209,15 +224,17 @@ Event::~Event() {
   /* Close the video file */
   if ( videowriter != NULL ) {
     int nRet = videowriter->Close();
-    if(nRet != 0) {
+    if ( nRet != 0 ) {
       Error("Failed closing video stream");
     }
     delete videowriter;
     videowriter = NULL;
 
     /* Close the timecodes file */
-    fclose(timecodes_fd);
-    timecodes_fd = NULL;
+    if ( timecodes_fd ) {
+      fclose(timecodes_fd);
+      timecodes_fd = NULL;
+    }
   }
 
   snprintf( sql, sizeof(sql), "update Events set Name='%s%d', EndTime = from_unixtime( %ld ), Length = %s%ld.%02ld, Frames = %d, AlarmFrames = %d, TotScore = %d, AvgScore = %d, MaxScore = %d, DefaultVideo = '%s' where Id = %d", monitor->EventPrefix(), id, end_time.tv_sec, delta_time.positive?"":"-", delta_time.sec, delta_time.fsec, frames, alarm_frames, tot_score, (int)(alarm_frames?(tot_score/alarm_frames):0), max_score, video_name, id );
@@ -229,11 +246,11 @@ Event::~Event() {
 
 void Event::createNotes( std::string &notes ) {
   notes.clear();
-  for ( StringSetMap::const_iterator mapIter = noteSetMap.begin(); mapIter != noteSetMap.end(); mapIter++ ) {
+  for ( StringSetMap::const_iterator mapIter = noteSetMap.begin(); mapIter != noteSetMap.end(); ++mapIter ) {
     notes += mapIter->first;
     notes += ": ";
     const StringSet &stringSet = mapIter->second;
-    for ( StringSet::const_iterator setIter = stringSet.begin(); setIter != stringSet.end(); setIter++ ) {
+    for ( StringSet::const_iterator setIter = stringSet.begin(); setIter != stringSet.end(); ++setIter ) {
       if ( setIter != stringSet.begin() )
         notes += ", ";
       notes += *setIter;
@@ -244,22 +261,22 @@ void Event::createNotes( std::string &notes ) {
 int Event::sd = -1;
 
 bool Event::WriteFrameImage( Image *image, struct timeval timestamp, const char *event_file, bool alarm_frame ) {
-  Image* ImgToWrite;
-  Image* ts_image = NULL;
-
-  if ( !config.timestamp_on_capture )  // stash the image we plan to use in another pointer regardless if timestamped.
-  {
-    ts_image = new Image(*image);
-    monitor->TimestampImage( ts_image, &timestamp );
-    ImgToWrite=ts_image;
-  } else
-    ImgToWrite=image;
 
   int thisquality = ( alarm_frame && (config.jpeg_alarm_file_quality > config.jpeg_file_quality) ) ? config.jpeg_alarm_file_quality : 0 ;   // quality to use, zero is default
-  ImgToWrite->WriteJpeg( event_file, thisquality, (monitor->Exif() ? timestamp : (timeval){0,0}) ); // exif is only timestamp at present this switches on or off for write
+  bool rc;
+Debug(3, "Writing image to %s", event_file );
 
-  if(ts_image) delete(ts_image); // clean up if used.
-  return( true );
+  if ( !config.timestamp_on_capture ) {
+    // stash the image we plan to use in another pointer regardless if timestamped.
+    Image *ts_image = new Image(*image);
+    monitor->TimestampImage( ts_image, &timestamp );
+    rc = ts_image->WriteJpeg( event_file, thisquality, (monitor->Exif() ? timestamp : (timeval){0,0}) ); // exif is only timestamp at present this switches on or off for write
+    delete(ts_image);
+  } else {
+    rc = image->WriteJpeg( event_file, thisquality, (monitor->Exif() ? timestamp : (timeval){0,0}) ); // exif is only timestamp at present this switches on or off for write
+  }
+
+  return rc;
 }
 
 bool Event::WriteFrameVideo( const Image *image, const struct timeval timestamp, VideoWriter* videow ) {
@@ -273,7 +290,7 @@ bool Event::WriteFrameVideo( const Image *image, const struct timeval timestamp,
   }
 
   /* If the image does not contain a timestamp, add the timestamp */
-  if (!config.timestamp_on_capture) {
+  if ( !config.timestamp_on_capture ) {
     ts_image = *image;
     monitor->TimestampImage( &ts_image, &timestamp );
     frameimg = &ts_image;
@@ -285,12 +302,13 @@ bool Event::WriteFrameVideo( const Image *image, const struct timeval timestamp,
   unsigned int timeMS = (delta_time3.sec * delta_time3.prec) + delta_time3.fsec;
 
   /* Encode and write the frame */
-  if(videowriter->Encode(frameimg, timeMS) != 0) {
+  if ( videowriter->Encode(frameimg, timeMS) != 0 ) {
     Error("Failed encoding video frame");
   }
 
   /* Add the frame to the timecodes file */
-  fprintf(timecodes_fd, "%u\n", timeMS);
+  if ( timecodes_fd )
+    fprintf(timecodes_fd, "%u\n", timeMS);
 
   return( true );
 }
@@ -304,7 +322,7 @@ void Event::updateNotes( const StringSetMap &newNoteSetMap ) {
       noteSetMap = newNoteSetMap;
       update = true;
     } else {
-      for ( StringSetMap::const_iterator newNoteSetMapIter = newNoteSetMap.begin(); newNoteSetMapIter != newNoteSetMap.end(); newNoteSetMapIter++ ) {
+      for ( StringSetMap::const_iterator newNoteSetMapIter = newNoteSetMap.begin(); newNoteSetMapIter != newNoteSetMap.end(); ++newNoteSetMapIter ) {
         const std::string &newNoteGroup = newNoteSetMapIter->first;
         const StringSet &newNoteSet = newNoteSetMapIter->second;
         //Info( "Got %d new strings", newNoteSet.size() );
@@ -317,7 +335,7 @@ void Event::updateNotes( const StringSetMap &newNoteSetMap ) {
           } else {
             StringSet &noteSet = noteSetMapIter->second;
             //Info( "Found note group %s, got %d strings", newNoteGroup.c_str(), newNoteSet.size() );
-            for ( StringSet::const_iterator newNoteSetIter = newNoteSet.begin(); newNoteSetIter != newNoteSet.end(); newNoteSetIter++ ) {
+            for ( StringSet::const_iterator newNoteSetIter = newNoteSet.begin(); newNoteSetIter != newNoteSet.end(); ++newNoteSetIter ) {
               const std::string &newNote = *newNoteSetIter;
               StringSet::iterator noteSetIter = noteSet.find( newNote );
               if ( noteSetIter == noteSet.end() ) {
@@ -378,7 +396,6 @@ void Event::updateNotes( const StringSetMap &newNoteSetMap ) {
     }
 
     strncpy( notesStr, notes.c_str(), sizeof(notesStr) );
-    notesLen = notes.length();
 
     if ( mysql_stmt_execute( stmt ) ) {
       Fatal( "Unable to execute sql '%s': %s", sql, mysql_stmt_error(stmt) );
@@ -407,24 +424,27 @@ void Event::AddFramesInternal( int n_frames, int start_frame, Image **images, st
   strncpy( sql, "insert into Frames ( EventId, FrameId, TimeStamp, Delta ) values ", sizeof(sql) );
   int frameCount = 0;
   for ( int i = start_frame; i < n_frames && i - start_frame < ZM_SQL_BATCH_SIZE; i++ ) {
-    if ( !timestamps[i]->tv_sec ) {
-      Debug( 1, "Not adding pre-capture frame %d, zero timestamp", i );
+    if ( timestamps[i]->tv_sec <= 0 ) {
+      Debug( 1, "Not adding pre-capture frame %d, zero or less than 0 timestamp", i );
       continue;
     }
 
     frames++;
 
     static char event_file[PATH_MAX];
-    snprintf( event_file, sizeof(event_file), capture_file_format, path, frames );
-    if ( monitor->GetOptSaveJPEGs() & 4) {
+    snprintf( event_file, sizeof(event_file), staticConfig.capture_file_format, path, frames );
+    if ( monitor->GetOptSaveJPEGs() & 4 ) {
       //If this is the first frame, we should add a thumbnail to the event directory
-      if(frames == 10){
+      // ICON: We are working through the pre-event frames so this snapshot won't 
+      // neccessarily be of the motion.  But some events are less than 10 frames, 
+      // so I am changing this to 1, but we should overwrite it later with a better snapshot.
+      if ( frames == 1 ) {
         char snapshot_file[PATH_MAX];
         snprintf( snapshot_file, sizeof(snapshot_file), "%s/snapshot.jpg", path );
         WriteFrameImage( images[i], *(timestamps[i]), snapshot_file );
       }
     }
-    if ( monitor->GetOptSaveJPEGs() & 1) {
+    if ( monitor->GetOptSaveJPEGs() & 1 ) {
       Debug( 1, "Writing pre-capture frame %d", frames );
       WriteFrameImage( images[i], *(timestamps[i]), event_file );
     }
@@ -445,7 +465,7 @@ void Event::AddFramesInternal( int n_frames, int start_frame, Image **images, st
     Debug( 1, "Adding %d/%d frames to DB", frameCount, n_frames );
     *(sql+strlen(sql)-2) = '\0';
     if ( mysql_query( &dbconn, sql ) ) {
-      Error( "Can't insert frames: %s", mysql_error( &dbconn ) );
+      Error( "Can't insert frames: %s, sql was (%s)", mysql_error( &dbconn ), sql );
       exit( mysql_errno( &dbconn ) );
     }
     last_db_frame = frames;
@@ -463,37 +483,42 @@ void Event::AddFrame( Image *image, struct timeval timestamp, int score, Image *
   frames++;
 
   static char event_file[PATH_MAX];
-  snprintf( event_file, sizeof(event_file), capture_file_format, path, frames );
+  snprintf( event_file, sizeof(event_file), staticConfig.capture_file_format, path, frames );
 
-  if ( monitor->GetOptSaveJPEGs() & 4) {
+  if ( monitor->GetOptSaveJPEGs() & 4 ) {
+    // Only snapshots
     //If this is the first frame, we should add a thumbnail to the event directory
-    if(frames == 10){
+    if ( frames == 10 ) {
       char snapshot_file[PATH_MAX];
       snprintf( snapshot_file, sizeof(snapshot_file), "%s/snapshot.jpg", path );
       WriteFrameImage( image, timestamp, snapshot_file );
     }
   }
-  if( monitor->GetOptSaveJPEGs() & 1) {
-    Debug( 1, "Writing capture frame %d", frames );
-    WriteFrameImage( image, timestamp, event_file );
+  if ( monitor->GetOptSaveJPEGs() & 1 ) {
+    Debug( 1, "Writing capture frame %d to %s", frames, event_file );
+    if ( ! WriteFrameImage( image, timestamp, event_file ) ) {
+      Error("Failed to write frame image");
+    }
   }
   if ( videowriter != NULL ) {
-    WriteFrameVideo( image, timestamp, videowriter );
+Debug(3, "Writing video");
+    WriteFrameVideo(image, timestamp, videowriter);
   }
 
   struct DeltaTimeval delta_time;
   DELTA_TIMEVAL( delta_time, timestamp, start_time, DT_PREC_2 );
 
-  const char *frame_type = score>0?"Alarm":(score<0?"Bulk":"Normal");
+  FrameType frame_type = score>0?ALARM:(score<0?BULK:NORMAL);
+  // < 0 means no motion detection is being done.
   if ( score < 0 )
     score = 0;
 
-  bool db_frame = (strcmp(frame_type,"Bulk") != 0) || ((frames%config.bulk_frame_interval)==0) || !frames;
+  bool db_frame = ( frame_type != BULK ) || ((frames%config.bulk_frame_interval)==0) || !frames;
   if ( db_frame ) {
 
-    Debug( 1, "Adding frame %d of type \"%s\" to DB", frames, frame_type );
+    Debug( 1, "Adding frame %d of type \"%s\" to DB", frames, Event::frame_type_names[frame_type] );
     static char sql[ZM_SQL_MED_BUFSIZ];
-    snprintf( sql, sizeof(sql), "insert into Frames ( EventId, FrameId, Type, TimeStamp, Delta, Score ) values ( %d, %d, '%s', from_unixtime( %ld ), %s%ld.%02ld, %d )", id, frames, frame_type, timestamp.tv_sec, delta_time.positive?"":"-", delta_time.sec, delta_time.fsec, score );
+    snprintf( sql, sizeof(sql), "insert into Frames ( EventId, FrameId, Type, TimeStamp, Delta, Score ) values ( %d, %d, '%s', from_unixtime( %ld ), %s%ld.%02ld, %d )", id, frames, frame_type_names[frame_type], timestamp.tv_sec, delta_time.positive?"":"-", delta_time.sec, delta_time.fsec, score );
     if ( mysql_query( &dbconn, sql ) ) {
       Error( "Can't insert frame: %s", mysql_error( &dbconn ) );
       exit( mysql_errno( &dbconn ) );
@@ -501,7 +526,7 @@ void Event::AddFrame( Image *image, struct timeval timestamp, int score, Image *
     last_db_frame = frames;
 
     // We are writing a Bulk frame
-    if ( !strcmp( frame_type,"Bulk") ) {
+    if ( frame_type == BULK ) {
       snprintf( sql, sizeof(sql), "update Events set Length = %s%ld.%02ld, Frames = %d, AlarmFrames = %d, TotScore = %d, AvgScore = %d, MaxScore = %d where Id = %d", 
           ( delta_time.positive?"":"-" ),
           delta_time.sec, delta_time.fsec,
@@ -517,12 +542,12 @@ void Event::AddFrame( Image *image, struct timeval timestamp, int score, Image *
         exit( mysql_errno( &dbconn ) );
       }
     }
-  }
+  } // end if db_frame
 
   end_time = timestamp;
 
   // We are writing an Alarm frame
-  if ( !strcmp( frame_type,"Alarm") ) {
+  if ( frame_type == ALARM ) {
     alarm_frames++;
 
     tot_score += score;
@@ -530,11 +555,11 @@ void Event::AddFrame( Image *image, struct timeval timestamp, int score, Image *
       max_score = score;
 
     if ( alarm_image ) {
-      snprintf( event_file, sizeof(event_file), analyse_file_format, path, frames );
+      snprintf( event_file, sizeof(event_file), staticConfig.analyse_file_format, path, frames );
 
       Debug( 1, "Writing analysis frame %d", frames );
-      if ( monitor->GetOptSaveJPEGs() & 2) {
-        WriteFrameImage( alarm_image, timestamp, event_file, true );
+      if ( monitor->GetOptSaveJPEGs() & 2 ) {
+        WriteFrameImage(alarm_image, timestamp, event_file, true);
       }
     }
   }

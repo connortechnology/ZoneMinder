@@ -25,9 +25,6 @@ if ( !canView( 'Events' ) || (!empty($_REQUEST['execute']) && !canEdit('Events')
 
 require_once( 'includes/Event.php' );
 
-if ( !empty($_REQUEST['execute']) ) {
-  executeFilter( $tempFilterName );
-}
 
 $countSql = 'SELECT count(E.Id) AS EventCount FROM Monitors AS M INNER JOIN Events AS E ON (M.Id = E.MonitorId) WHERE';
 $eventsSql = 'SELECT E.*,M.Name AS MonitorName,M.DefaultScale FROM Monitors AS M INNER JOIN Events AS E on (M.Id = E.MonitorId) WHERE';
@@ -36,8 +33,8 @@ if ( $user['MonitorIds'] ) {
 	$countSql .= $user_monitor_ids;
 	$eventsSql .= $user_monitor_ids;
 } else {
-  $countSql .= " 1";
-  $eventsSql .= " 1";
+  $countSql .= ' 1';
+  $eventsSql .= ' 1';
 }
 
 parseSort();
@@ -60,8 +57,10 @@ else
   $limit = 0;
 
 $nEvents = dbFetchOne( $countSql, 'EventCount' );
+Warning("Number of events: $nEvents");
 if ( !empty($limit) && $nEvents > $limit ) {
   $nEvents = $limit;
+Logger::Debug("Number of events: $nEvents");
 }
 $pages = (int)ceil($nEvents/ZM_WEB_EVENTS_PER_PAGE);
 if ( !empty($page) ) {
@@ -84,26 +83,6 @@ if ( !empty($page) ) {
   $eventsSql .= ' limit 0, '.$limit;
 }
 
-$maxWidth = 0;
-$maxHeight = 0;
-$archived = false;
-$unarchived = false;
-$events = array();
-foreach ( dbFetchAll( $eventsSql ) as $event_row ) {
-  $events[] = $event = new Event( $event_row );
-
-# Doesn this code do anything? 
-  $scale = max( reScale( SCALE_BASE, $event->DefaultScale(), ZM_WEB_DEFAULT_SCALE ), SCALE_BASE );
-  $eventWidth = reScale( $event_row['Width'], $scale );
-  $eventHeight = reScale( $event_row['Height'], $scale );
-  if ( $maxWidth < $eventWidth ) $maxWidth = $eventWidth;
-  if ( $maxHeight < $eventHeight ) $maxHeight = $eventHeight;
-  if ( $event_row['Archived'] )
-    $archived = true;
-  else
-    $unarchived = true;
-}
-
 $maxShortcuts = 5;
 $pagination = getPagination( $pages, $page, $maxShortcuts, $filterQuery.$sortQuery.'&amp;limit='.$limit );
 
@@ -114,8 +93,20 @@ xhtmlHeaders(__FILE__, translate('Events') );
 ?>
 <body>
   <div id="page">
+  <?php echo getNavBarHTML() ?>
     <div id="header">
-      <div id="headerButtons">
+      <div id="info">
+        <h2><?php echo sprintf( $CLANG['EventCount'], $nEvents, zmVlang( $VLANG['Event'], $nEvents ) ) ?></h2>
+        <a id="refreshLink" href="#" onclick="location.reload(true);"><?php echo translate('Refresh') ?></a>
+      </div>
+      <div id="pagination">
+<?php
+if ( $pagination ) {
+?>
+        <h2 class="pagination"><?php echo $pagination ?></h2>
+<?php
+}
+?>
 <?php
 if ( $pages > 1 ) {
   if ( !empty($page) ) {
@@ -129,9 +120,11 @@ if ( $pages > 1 ) {
   }
 }
 ?>
-        <a href="#" onclick="closeWindows();"><?php echo translate('Close') ?></a>
       </div>
-      <h2><?php echo sprintf( $CLANG['EventCount'], $nEvents, zmVlang( $VLANG['Event'], $nEvents ) ) ?></h2>
+      <div id="controls">
+        <a href="#" onclick="window.history.back();"><?php echo translate('Back') ?></a>
+        <a id="timelineLink" href="?view=timeline<?php echo $filterQuery ?>"><?php echo translate('ShowTimeline') ?></a>
+      </div>
     </div>
     <div id="content">
       <form name="contentForm" id="contentForm" method="post" action="">
@@ -142,23 +135,20 @@ if ( $pages > 1 ) {
         <input type="hidden" name="sort_field" value="<?php echo validHtmlStr($_REQUEST['sort_field']) ?>"/>
         <input type="hidden" name="sort_asc" value="<?php echo validHtmlStr($_REQUEST['sort_asc']) ?>"/>
         <input type="hidden" name="limit" value="<?php echo $limit ?>"/>
-<?php
-if ( $pagination ) {
-?>
-        <h3 class="pagination"><?php echo $pagination ?></h3>
-<?php
-}
-?>
-        <p id="controls">
-          <a id="refreshLink" href="#" onclick="location.reload(true);"><?php echo translate('Refresh') ?></a>
-          <a id="filterLink" href="#" onclick="createPopup( '?view=filter&amp;page=<?php echo $page ?><?php echo $filterQuery ?>', 'zmFilter', 'filter' );"><?php echo translate('ShowFilterWindow') ?></a>
-          <a id="timelineLink" href="#" onclick="createPopup( '?view=timeline<?php echo $filterQuery ?>', 'zmTimeline', 'timeline' );"><?php echo translate('ShowTimeline') ?></a>
-        </p>
-        <table id="contentTable" class="major" cellspacing="0">
+        <table id="contentTable" class="major">
           <tbody>
 <?php
 $count = 0;
-foreach ( $events as $event ) {
+$disk_space_total = 0;
+
+$results = dbQuery( $eventsSql );
+while ( $event_row = dbFetchNext( $results ) ) {
+  $event = new Event( $event_row );
+  if ( $event_row['Archived'] )
+    $archived = true;
+  else
+    $unarchived = true;
+
   if ( ($count++%ZM_WEB_EVENTS_PER_PAGE) == 0 ) {
 ?>
             <tr>
@@ -174,7 +164,8 @@ foreach ( $events as $event ) {
               <th class="colAvgScore"><a href="<?php echo sortHeader( 'AvgScore' ) ?>"><?php echo translate('AvgBrScore') ?><?php echo sortTag( 'AvgScore' ) ?></a></th>
               <th class="colMaxScore"><a href="<?php echo sortHeader( 'MaxScore' ) ?>"><?php echo translate('MaxBrScore') ?><?php echo sortTag( 'MaxScore' ) ?></a></th>
 <?php
-    if ( ZM_WEB_EVENT_DISK_SPACE ) { ?>
+    if ( ZM_WEB_EVENT_DISK_SPACE ) {
+?>
               <th class="colDiskSpace"><a href="<?php echo sortHeader( 'DiskSpace' ) ?>"><?php echo translate('DiskSpace') ?><?php echo sortTag( 'DiskSpace' ) ?></a></th>
 <?php
     }
@@ -190,10 +181,10 @@ foreach ( $events as $event ) {
   }
   $scale = max( reScale( SCALE_BASE, $event->DefaultScale(), ZM_WEB_DEFAULT_SCALE ), SCALE_BASE );
 ?>
-            <tr>
-              <td class="colId"><?php echo makePopupLink( '?view=event&amp;eid='.$event->Id().$filterQuery.$sortQuery.'&amp;page=1', 'zmEvent', array( 'event', reScale( $event->Width(), $scale ), reScale( $event->Height(), $scale ) ), $event->Id().($event->Archived()?'*':'') ) ?></td>
-              <td class="colName"><?php echo makePopupLink( '?view=event&amp;eid='.$event->Id().$filterQuery.$sortQuery.'&amp;page=1', 'zmEvent', array( 'event', reScale( $event->Width(), $event->DefaultScale(), ZM_WEB_DEFAULT_SCALE ), reScale( $event->Height(), $event->DefaultScale(), ZM_WEB_DEFAULT_SCALE ) ), validHtmlStr($event->Name()).($event->Archived()?'*':'' ) ) ?></td>
-              <td class="colMonitorName"><?php echo $event->MonitorName() ?></td>
+            <tr<?php if ($event->Archived()) echo ' class="archived"' ?>>
+              <td class="colId"><a href="?view=event&amp;eid=<?php echo $event->Id().$filterQuery.$sortQuery.'&amp;page=1"> '.$event->Id().($event->Archived()?'*':'') ?></a></td>
+              <td class="colName"><a href="?view=event&amp;eid=<?php echo $event->Id().$filterQuery.$sortQuery.'&amp;page=1"> '.validHtmlStr($event->Name()).($event->Archived()?'*':'') ?></a></td>
+              <td class="colMonitorName"><?php echo makePopupLink( '?view=monitor&amp;mid='.$event->MonitorId(), 'zmMonitor'.$event->Monitorid(), 'monitor', $event->MonitorName(), canEdit( 'Monitors' ) ) ?></td>
               <td class="colCause"><?php echo makePopupLink( '?view=eventdetail&amp;eid='.$event->Id(), 'zmEventDetail', 'eventdetail', validHtmlStr($event->Cause()), canEdit( 'Events' ), 'title="'.htmlspecialchars($event->Notes()).'"' ) ?></td>
               <td class="colTime"><?php echo strftime( STRF_FMT_DATETIME_SHORTER, strtotime($event->StartTime()) ) ?></td>
               <td class="colDuration"><?php echo gmdate("H:i:s", $event->Length() ) ?></td>
@@ -204,6 +195,7 @@ foreach ( $events as $event ) {
               <td class="colMaxScore"><?php echo makePopupLink( '?view=frame&amp;eid='.$event->Id().'&amp;fid=0', 'zmImage', array( 'image', reScale( $event->Width(), $scale ), reScale( $event->Height(), $scale ) ), $event->MaxScore() ) ?></td>
 <?php
   if ( ZM_WEB_EVENT_DISK_SPACE ) {
+    $disk_space_total += $event->DiskSpace();
 ?>
               <td class="colDiskSpace"><?php echo human_filesize( $event->DiskSpace() ) ?></td>
 <?php
@@ -213,7 +205,13 @@ foreach ( $events as $event ) {
 ?>
               <td class="colThumbnail">
 <?php 
+	if ( file_exists( $event->Path().'/snapshot.jpg' ) ) {
+Warning("Using snapshot");
+      $imgSrc = '?view=image&amp;eid='.$event->Id().'&amp;fid=snapshot&amp;width='.$thumbData['Width'].'&amp;height='.$thumbData['Height'];
+} else {
+Warning("Not Using snapshot" . $event->Path().'/snapshot.jpg' );
       $imgSrc = '?view=image&amp;eid='.$event->Id().'&amp;fid='.$thumbData['FrameId'].'&amp;width='.$thumbData['Width'].'&amp;height='.$thumbData['Height'];
+}
       $streamSrc = $event->getStreamSrc( array( 'mode'=>'jpeg', 'scale'=>$scale, 'maxfps'=>ZM_WEB_VIDEO_MAXFPS, 'replay'=>'single') );
 
       $imgHtml = '<img id="thumbnail'.$event->id().'" src="'.$imgSrc.'" alt="'. validHtmlStr('Event '.$event->Id()) .'" style="width:'. validInt($thumbData['Width']) .'px;height:'. validInt( $thumbData['Height'] ).'px;" onmouseover="this.src=\''.$streamSrc.'\';" onmouseout="this.src=\''.$imgSrc.'\';"/>';
@@ -240,6 +238,24 @@ foreach ( $events as $event ) {
 }
 ?>
           </tbody>
+<?php
+  if ( ZM_WEB_EVENT_DISK_SPACE ) {
+?>
+           <tfoot>
+              <tr>
+              <td colspan="11">Totals:</td>
+              <td class="colDiskSpace"><?php echo human_filesize( $disk_space_total ) ?></td>
+<?php
+  if ( ZM_WEB_LIST_THUMBS ) {
+?><td></td>
+<?php
+}
+?>
+            </tr>
+          </tfoot>
+<?php
+  }
+?>
         </table>
 <?php
 if ( $pagination ) {
@@ -255,6 +271,7 @@ if ( true || canEdit( 'Events' ) ) {
           <input type="button" name="unarchiveBtn" value="<?php echo translate('Unarchive') ?>" onclick="unarchiveEvents( this, 'markEids' );" disabled="disabled"/>
           <input type="button" name="editBtn" value="<?php echo translate('Edit') ?>" onclick="editEvents( this, 'markEids' )" disabled="disabled"/>
           <input type="button" name="exportBtn" value="<?php echo translate('Export') ?>" onclick="exportEvents( this, 'markEids' )" disabled="disabled"/>
+          <input type="button" name="downloadBtn" value="<?php echo translate('DownloadVideo') ?>" onclick="downloadVideo( this, 'markEids' )" disabled="disabled"/>
           <input type="button" name="deleteBtn" value="<?php echo translate('Delete') ?>" onclick="deleteEvents( this, 'markEids' );" disabled="disabled"/>
         </div>
 <?php
@@ -263,5 +280,10 @@ if ( true || canEdit( 'Events' ) ) {
       </form>
     </div>
   </div>
+<script type="text/javascript">
+  // These are defined in the .js.php but need to be updated down here.
+  archivedEvents = <?php echo !empty($archived)?'true':'false' ?>;
+  unarchivedEvents = <?php echo !empty($unarchived)?'true':'false' ?>;
+</script>
 </body>
 </html>

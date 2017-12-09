@@ -30,7 +30,11 @@ use warnings;
 
 require ZoneMinder::Base;
 require ZoneMinder::Object;
+require ZoneMinder::Storage;
 require Date::Manip;
+require File::Find;
+require File::Path;
+require File::Copy;
 
 #our @ISA = qw(ZoneMinder::Object);
 use parent qw(ZoneMinder::Object);
@@ -46,9 +50,38 @@ use ZoneMinder::Logger qw(:all);
 use ZoneMinder::Database qw(:all);
 require Date::Parse;
 
-use vars qw/ $table $primary_key /;
+use vars qw/ $table $primary_key %fields $serial @identified_by/;
 $table = 'Events';
-$primary_key = 'Id';
+@identified_by = ('Id');
+$serial = $primary_key = 'Id';
+%fields = map { $_, $_ } qw(
+  Id
+  MonitorId
+  StorageId
+  Name
+  Cause
+  StartTime
+  EndTime
+  Width
+  Height
+  Length
+  Frames
+  AlarmFrames
+  DefaultVideo
+  TotScore
+  AvgScore
+  MaxScore
+  Archived
+  Videoed
+  Uploaded
+  Emailed
+  Messaged
+  Executed
+  Notes
+  StateId
+  Orientation
+  DiskSpace
+);
 
 use POSIX;
 
@@ -68,7 +101,7 @@ sub Name {
     $_[0]{Name} = $_[1];
   }
   return $_[0]{Name};
-} # end sub Path
+} # end sub Name
 
 sub find {
   shift if $_[0] eq 'ZoneMinder::Event';
@@ -112,20 +145,20 @@ sub getPath {
 sub Path {
   my $event = shift;
 
-  if ( @_ > 1 ) {
-    $$event{Path} = $_[1];
-    if ( ! -e $$event{Path} ) {
-      Error("Setting path for event $$event{Id} to $_[1] but does not exist!");
+  if ( @_ ) {
+    $$event{Path} = $_[0];
+    if ( $$event{Path} and ! -e $$event{Path} ) {
+      Error("Setting path for event $$event{Id} to $_[0] but does not exist!");
     }
   }
 
   if ( ! $$event{Path} ) {
-    my $path = ($Config{ZM_DIR_EVENTS}=~/^\//) ? $Config{ZM_DIR_EVENTS} : $Config{ZM_PATH_WEB}.'/'.$Config{ZM_DIR_EVENTS};
+    my $Storage = $event->Storage();
 
     if ( $Config{ZM_USE_DEEP_STORAGE} ) {
       if ( $event->Time() ) {
         $$event{Path} = join('/',
-            $path,
+            $Storage->Path(),
             $event->{MonitorId},
             strftime( "%y/%m/%d/%H/%M/%S",
               localtime($event->Time())
@@ -137,7 +170,7 @@ sub Path {
       }
     } else {
       $$event{Path} = join('/',
-          $path,
+          $Storage->Path(),
           $event->{MonitorId},
           $event->{Id},
           );
@@ -222,9 +255,7 @@ sub GenerateVideo {
 
     my $status = $? >> 8;
     if ( $status ) {
-      Error( "Unable to generate video, check "
-          .$event_path."/ffmpeg.log for details"
-          );
+      Error( "Unable to generate video, check $event_path/ffmpeg.log for details");
       return;
     }
 
@@ -239,6 +270,11 @@ sub GenerateVideo {
 
 sub delete {
   my $event = $_[0];
+  if ( ! ( $event->{Id} and $event->{MonitorId} and $event->{StartTime} ) ) {
+    my ( $caller, undef, $line ) = caller;
+    Warning( "Can't Delete event $event->{Id} from Monitor $event->{MonitorId} $event->{StartTime} from $caller:$line\n" );
+    return;
+  }
   Info( "Deleting event $event->{Id} from Monitor $event->{MonitorId} $event->{StartTime}\n" );
   $ZoneMinder::Database::dbh->ping();
 # Do it individually to avoid locking up the table for new events
@@ -270,17 +306,17 @@ sub delete {
   }
 } # end sub delete
 
-
 sub delete_files {
 
-  my $storage_path = ($Config{ZM_DIR_EVENTS}=~/^\//) ? $Config{ZM_DIR_EVENTS} : $Config{ZM_PATH_WEB}.'/'.$Config{ZM_DIR_EVENTS};
+  my $Storage = @_ > 1 ? $_[1] : new ZoneMinder::Storage( $_[0]{StorageId} );
+  my $storage_path = $Storage->Path();
 
   if ( ! $storage_path ) {
-    Fatal("Empty path when deleting files for event $_[0]{Id} ");
+    Fatal("Empty storage path when deleting files for event $_[0]{Id} with storage id $_[0]{StorageId} ");
     return;
   }
 
-  chdir ( $storage_path );
+  chdir( $storage_path );
 
   if ( $Config{ZM_USE_DEEP_STORAGE} ) {
     if ( ! $_[0]{MonitorId} ) {
@@ -288,7 +324,7 @@ sub delete_files {
       return;
     }
     Debug("Deleting files for Event $_[0]{Id} from $storage_path.");
-    my $link_path = $_[0]{MonitorId}.'/*/*/*/.'.$_[0]{Id};
+    my $link_path = $_[0]{MonitorId}."/*/*/*/.".$_[0]{Id};
 #Debug( "LP1:$link_path" );
     my @links = glob($link_path);
 #Debug( "L:".$links[0].": $!" );
@@ -328,7 +364,10 @@ sub delete_files {
 } # end sub delete_files
 
 sub Storage {
-  return new ZoneMinder::Storage( $_[0]{StorageId} );
+  if ( ! $_[0]{Storage} ) {
+    $_[0]{Storage} = new ZoneMinder::Storage( $_[0]{StorageId} );
+  } 
+  return $_[0]{Storage};
 }
 
 sub check_for_in_filesystem {
@@ -344,10 +383,86 @@ Debug("Checking for files for event $_[0]{Id} at $path using glob $path/* found 
 
 sub age {
   if ( ! $_[0]{age} ) {
-    $_[0]{age} = (time() - ($^T - ((-M $_[0]->Path() ) * 24*60*60)));
+    if ( -e $_[0]->Path() ) { 
+      # $^T is the time the program began running. -M is program start time - file modification time in days
+      $_[0]{age} = (time() - ($^T - ((-M $_[0]->Path() ) * 24*60*60)));
+    } else {
+      Warning($_[0]->Path() . ' does not appear to exist.');
+    }
   }
   return $_[0]{age};
 }
+
+sub DiskSpace {
+  if ( @_ > 1 ) {
+    Debug("Cleared DiskSpace, was $_[0]{DiskSpace}") if $_[0]{DiskSpace};
+    $_[0]{DiskSpace} = $_[1];
+  }
+  if ( ! defined $_[0]{DiskSpace} ) {
+    my $size = 0;
+    File::Find::find( { wanted=>sub { $size += -f $_ ? -s _ : 0 }, untaint=>1 }, $_[0]->Path() );
+    $_[0]{DiskSpace} = $size;
+    Debug("DiskSpace for event $_[0]{Id} at $_[0]{Path} Updated to $size bytes");
+  }
+}
+
+sub MoveTo {
+  my ( $self, $NewStorage ) = @_;
+
+  my $OldStorage = $self->Storage();
+  my ( $OldPath ) = ( $self->Path() =~ /^(.*)$/ ); # De-taint
+
+  $$self{Storage} = $NewStorage;
+
+  my ( $NewPath ) = ( $NewStorage->Path() =~ /^(.*)$/ ); # De-taint
+  if ( ! $$NewStorage{Id} ) {
+    return "New storage does not have an id.  Moving will not happen.";
+  } elsif ( !$NewPath ) {
+    return "New path ($NewPath) is empty.";
+  } elsif ( ! -e $NewPath ) {
+    return "New path $NewPath does not exist.";
+  } elsif ( ! -e $OldPath ) {
+    return "Old path $OldPath does not exist.";
+  }
+  ( $NewPath ) = ( $self->Path(undef) =~ /^(.*)$/ ); # De-taint
+  if ( $NewPath eq $OldPath ) {
+    return "New path and old path are the same! $NewPath";
+  }
+  Debug("Moving event $$self{Id} from $OldPath to $NewPath");
+
+  my $error = '';
+  File::Path::make_path( $NewPath, {error => \my $err} );
+  if ( @$err ) {
+    for my $diag (@$err) {
+      my ($file, $message) = %$diag;
+      if ($file eq '') {
+        $error .= "general error: $message\n";
+      } else {
+        $error .= "problem unlinking $file: $message\n";
+      }
+    }
+  }
+  return $error if $error;
+  my @files = glob("$OldPath/*");
+
+  for my $file (@files) {
+    next if $file =~ /^\./;
+    ( $file ) = ( $file =~ /^(.*)$/ ); # De-taint
+    if ( ! File::Copy::copy( $file, $NewPath ) ) {
+      $error .= "Copy failed: for $file to $NewPath: $!";
+      last;
+    }
+  } # end foreach file.
+
+  if ( ! $error ) {
+    # Succeeded in copying all files, so we may now update the Event.
+    $$self{StorageId} = $$NewStorage{Id};    
+    $$self{Storage} = $NewStorage;
+    $error .= $self->save();
+  }
+  $self->delete_files( $OldStorage );
+  return $error;
+} # end sub MoveTo
 
 1;
 __END__

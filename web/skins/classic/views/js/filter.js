@@ -5,45 +5,51 @@ function updateButtons( element ) {
     form.elements['executeButton'].disabled = false;
   } else {
     var canExecute = false;
-    if ( form.elements['AutoArchive'].checked )
+    if ( form.elements['filter[AutoArchive]'] && form.elements['filter[AutoArchive]'].checked )
       canExecute = true;
-    else if ( form.elements['AutoVideo'] && form.elements['AutoVideo'].checked )
+    else if ( form.elements['filter[AutoVideo]'] && form.elements['filter[AutoVideo]'].checked )
       canExecute = true;
-    else if ( form.elements['AutoUpload'] && form.elements['AutoUpload'].checked )
+    else if ( form.elements['filter[AutoUpload]'] && form.elements['filter[AutoUpload]'].checked )
       canExecute = true;
-    else if ( form.elements['AutoEmail'] && form.elements['AutoEmail'].checked )
+    else if ( form.elements['filter[AutoEmail]'] && form.elements['filter[AutoEmail]'].checked )
       canExecute = true;
-    else if ( form.elements['AutoMessage'] && form.elements['AutoMessage'].checked )
+    else if ( form.elements['filter[AutoMessage]'] && form.elements['filter[AutoMessage]'].checked )
       canExecute = true;
-    else if ( form.elements['AutoExecute'].checked && form.elements['AutoExecuteCmd'].value != '' )
+    else if ( form.elements['filter[AutoExecute]'].checked && form.elements['filter[AutoExecuteCmd]'].value != '' )
       canExecute = true;
-    else if ( form.elements['AutoDelete'].checked )
+    else if ( form.elements['filter[AutoDelete]'].checked )
+      canExecute = true;
+    else if ( form.elements['filter[UpdateDiskSpace]'].checked )
       canExecute = true;
     form.elements['executeButton'].disabled = !canExecute;
+  }
+  if ( form.elements['filter[Name]'].value ) {
+    form.elements['Save'].disabled = false;
+    form.elements['SaveAs'].disabled = false;
+  } else {
+    form.elements['Save'].disabled = true;
+    form.elements['SaveAs'].disabled = true;
   }
 }
 
 function clearValue( element, line ) {
   var form = element.form;
-  var val = form.elements['filter[terms]['+line+'][val]'];
+  var val = form.elements['filter[Query][terms]['+line+'][val]'];
   val.value = '';
 }
 
-function submitToFilter( element, reload ) {
+function submitToFilter( element ) {
   var form = element.form;
   form.target = window.name;
-  form.view.value = 'filter';
-  form.reload.value = reload;
+  form.action = thisUrl + '?view=filter';
+  form.elements['action'].value = 'submit';
   form.submit();
 }
 
 function submitToEvents( element ) {
   var form = element.form;
   if ( validateForm( form ) ) {
-    form.target = 'zmEvents';
-    form.view.value = 'events';
-    form.action.value = '';
-    form.execute.value = 0;
+    form.action = thisUrl + '?view=events';
     form.submit();
   }
 }
@@ -51,51 +57,45 @@ function submitToEvents( element ) {
 function executeFilter( element ) {
   var form = element.form;
   if ( validateForm( form ) ) {
-    form.target = 'zmEvents';
-    form.view.value = 'events';
-    form.action.value = 'filter';
-    form.execute.value = 1;
+    form.action = thisUrl + '?view=events';
+    form.elements['action'].value = 'execute';
     form.submit();
   }
 }
 
 function saveFilter( element ) {
   var form = element.form;
-
-  var popupName = 'zmEventsFilterSave';
-  createPopup( thisUrl, popupName, 'filtersave' );
-
-  form.target = popupName;
-  form.view.value = 'filtersave';
+  form.target = window.name;
+  form.elements['action'].value = element.value;
+  form.action = thisUrl + '?view=filter';
   form.submit();
 }
 
 function deleteFilter( element, name ) {
-  if ( confirm( deleteSavedFilterString+" '"+name+"'" ) ) {
+  if ( confirm( deleteSavedFilterString+" '"+name+"'?" ) ) {
     var form = element.form;
-    form.action.value = 'delete';
-    form.fid.value = name;
-    submitToFilter( element, 1 );
+    form.elements['action'].value = 'delete';
+    form.submit();
   }
 }
 
 function addTerm( element, line ) {
   var form = element.form;
   form.target = window.name;
-  form.view.value = currentView;
-  form.action.value = 'filter';
-  form.subaction.value = 'addterm';
-  form.line.value = line;
+  form.action = thisUrl + '?view='+currentView;
+  form.elements['object'].value = 'filter';
+  form.elements['action'].value = 'addterm';
+  form.elements['line'].value = line;
   form.submit();
 }
 
 function delTerm( element, line ) {
   var form = element.form;
   form.target = window.name;
-  form.view.value = currentView;
-  form.action.value = 'filter';
-  form.subaction.value = 'delterm';
-  form.line.value = line;
+  form.action = thisUrl + '?view='+currentView;
+  form.elements['object'].value = 'filter';
+  form.elements['action'].value = 'delterm';
+  form.elements['line'].value = line;
   form.submit();
 }
 
