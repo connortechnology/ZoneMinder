@@ -32,8 +32,9 @@ if ( $_REQUEST['id'] ) {
 	$newServer = array();
 	$newServer['Name'] = translate('NewServer');
 	$newServer['Hostname'] = '';
-	$newServer['zmstats'] = '';
 	$newServer['zmaudit'] = '';
+	$newServer['zmfilter'] = '';
+	$newServer['zmstats'] = '';
 	$newServer['zmtrigger'] = '';
 }
 
@@ -62,17 +63,24 @@ xhtmlHeaders(__FILE__, translate('Server').' - '.$newServer['Name'] );
               <td><input type="text" name="newServer[Hostname]" value="<?php echo $newServer['Hostname'] ?>"/></td>
             </tr>
             <tr>
-              <th scope="row"><?php echo translate('RunStats') ?></th>
-              <td>
-                <input type="radio" name="newServer[zmstats]" value="1"<?php echo $newServer['zmstats'] ? ' checked="checked"' : '' ?>/> Yes
-                <input type="radio" name="newServer[zmstats]" value="0"<?php echo $newServer['zmstats'] ? '' : ' checked="checked"' ?>/> No
-              </td>
-            </tr>
-            <tr>
               <th scope="row"><?php echo translate('RunAudit') ?></th>
               <td>
                 <input type="radio" name="newServer[zmaudit]" value="1"<?php echo $newServer['zmaudit'] ? ' checked="checked"' : '' ?>/> Yes
                 <input type="radio" name="newServer[zmaudit]" value="0"<?php echo $newServer['zmaudit'] ? '' : ' checked="checked"' ?>/> No
+              </td>
+            </tr>
+            <tr>
+              <th scope="row"><?php echo translate('RunFilter') ?></th>
+              <td>
+                <input type="radio" name="newServer[zmfilter]" value="1"<?php echo $newServer['zmfilter'] ? ' checked="checked"' : '' ?>/> Yes
+                <input type="radio" name="newServer[zmfilter]" value="0"<?php echo $newServer['zmfilter'] ? '' : ' checked="checked"' ?>/> No
+              </td>
+            </tr>
+            <tr>
+              <th scope="row"><?php echo translate('RunStats') ?></th>
+              <td>
+                <input type="radio" name="newServer[zmstats]" value="1"<?php echo $newServer['zmstats'] ? ' checked="checked"' : '' ?>/> Yes
+                <input type="radio" name="newServer[zmstats]" value="0"<?php echo $newServer['zmstats'] ? '' : ' checked="checked"' ?>/> No
               </td>
             </tr>
             <tr>
