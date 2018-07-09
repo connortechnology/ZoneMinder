@@ -206,46 +206,47 @@ if ( $command =~ /^(?:start|restart)$/ ) {
     }
 
     {
-    my $sth = $dbh->prepare_cached( $sql )
-      or Fatal( "Can't prepare '$sql': ".$dbh->errstr() );
-    my $res = $sth->execute( @values )
-      or Fatal( "Can't execute: ".$sth->errstr() );
-    while( my $monitor = $sth->fetchrow_hashref() ) {
-      if ( $monitor->{Function} ne 'None' && $monitor->{Type} ne 'WebSite' ) {
-        if ( $monitor->{Type} eq 'Local' ) {
-          runCommand( "zmdc.pl start zmc -d $monitor->{Device}" );
-        } else {
-          runCommand( "zmdc.pl start zmc -m $monitor->{Id}" );
-        }
-        if ( $monitor->{Function} ne 'Monitor' ) {
-          runCommand( "zmdc.pl start zma -m $monitor->{Id}" );
-        }
-        if ( $Config{ZM_OPT_CONTROL} ) {
-          if ( $monitor->{Function} eq 'Modect' || $monitor->{Function} eq 'Mocord' ) {
-            if ( $monitor->{Controllable} && $monitor->{TrackMotion} ) {
-              runCommand( "zmdc.pl start zmtrack.pl -m $monitor->{Id}" );
+      my $sth = $dbh->prepare_cached( $sql )
+        or Fatal( "Can't prepare '$sql': ".$dbh->errstr() );
+      my $res = $sth->execute( @values )
+        or Fatal( "Can't execute: ".$sth->errstr() );
+      while( my $monitor = $sth->fetchrow_hashref() ) {
+        if ( $monitor->{Function} ne 'None' && $monitor->{Type} ne 'WebSite' ) {
+          if ( $monitor->{Type} eq 'Local' ) {
+            runCommand( "zmdc.pl start zmc -d $monitor->{Device}" );
+          } else {
+            runCommand( "zmdc.pl start zmc -m $monitor->{Id}" );
+          }
+          if ( $monitor->{Function} ne 'Monitor' ) {
+            runCommand( "zmdc.pl start zma -m $monitor->{Id}" );
+          }
+          if ( $Config{ZM_OPT_CONTROL} ) {
+            if ( $monitor->{Function} eq 'Modect' || $monitor->{Function} eq 'Mocord' ) {
+              if ( $monitor->{Controllable} && $monitor->{TrackMotion} ) {
+                runCommand( "zmdc.pl start zmtrack.pl -m $monitor->{Id}" );
+              }
             }
           }
         }
       }
+      $sth->finish();
     }
-    $sth->finish();
-    }
-    {
-    my $sql = 'SELECT Id FROM Filters WHERE Background=1';
-    my $sth = $dbh->prepare_cached($sql)
-      or Fatal( "Can't prepare '$sql': ".$dbh->errstr() );
-    my $res = $sth->execute()
-      or Fatal( "Can't execute: ".$sth->errstr() );
-    if ( $sth->rows ) {
-      while( my $filter = $sth->fetchrow_hashref() ) {
-# This is now started unconditionally
-        runCommand("zmdc.pl start zmfilter.pl --filter_id=$$filter{Id}");
-      }
+    if ( $Server and exists $$Server{'zmfilter'} and ! $$Server{'zmfilter'} ) {
+      Debug("Not running zmfilter.pl because it is turned off for this server.");
     } else {
-      runCommand('zmdc.pl start zmfilter.pl');
-    }
-    $sth->finish();
+      my $sql = 'SELECT Id FROM Filters WHERE Background=1';
+      my $sth = $dbh->prepare_cached($sql)
+        or Fatal( "Can't prepare '$sql': ".$dbh->errstr() );
+      my $res = $sth->execute()
+        or Fatal( "Can't execute: ".$sth->errstr() );
+      if ( $sth->rows ) {
+        while( my $filter = $sth->fetchrow_hashref() ) {
+          runCommand("zmdc.pl start zmfilter.pl --filter_id=$$filter{Id}");
+        }
+      } else {
+        runCommand('zmdc.pl start zmfilter.pl');
+      }
+      $sth->finish();
     }
 
     if ( $Config{ZM_RUN_AUDIT} ) {
