@@ -435,7 +435,7 @@ void Event::updateNotes( const StringSetMap &newNoteSetMap ) {
     db_mutex.unlock();
 #endif
   } // end if update
-}
+} // end void Event::updateNotes( const StringSetMap &newNoteSetMap )
 
 void Event::AddFrames( int n_frames, Image **images, struct timeval **timestamps ) {
   for (int i = 0; i < n_frames; i += ZM_SQL_BATCH_SIZE) {
