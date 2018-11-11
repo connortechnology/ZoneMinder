@@ -732,7 +732,8 @@ sub recover_timestamps {
     my $file = "$path/$mp4_files[0]";
     ( $file ) = $file =~ /^(.*)$/;
 
-    my $first_timestamp = (stat($file))[9];
+    my $first_timestamp = (stat($path))[9];
+
     my $output = `ffprobe $file 2>&1`;
     my ($duration) = $output =~ /Duration: [:\.0-9]+/gm;
     Debug("From mp4 have duration $duration, start: $first_timestamp");
