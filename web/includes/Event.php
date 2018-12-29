@@ -145,24 +145,30 @@ class Event {
   }
 
   public function delete() {
+    if ( ! $this->{'Id'} ) {
+      Error("Cannot delete an event without an Id");
+      return;
+    }
+
     # This wouldn't work with foreign keys
     dbQuery( 'DELETE FROM Events WHERE Id = ?', array($this->{'Id'}) );
     if ( !ZM_OPT_FAST_DELETE ) {
       dbQuery( 'DELETE FROM Stats WHERE EventId = ?', array($this->{'Id'}) );
       dbQuery( 'DELETE FROM Frames WHERE EventId = ?', array($this->{'Id'}) );
+
       if ( $this->{'Scheme'} == 'Deep' ) {
 
 # Assumption: All events have a start time
-        $start_date = date_parse( $this->{'StartTime'} );
-        if ( ! $start_date ) {
-          Error('Unable to parse start time for event ' . $this->{'Id'} . ' not deleting files.' );
+        $start_date = date_parse($this->{'StartTime'});
+        if ( !$start_date ) {
+          Error('Unable to parse start time for event ' . $this->{'Id'} . ' not deleting files.');
           return;
         }
         $start_date['year'] = $start_date['year'] % 100;
 
 # So this is because ZM creates a link under the day pointing to the time that the event happened. 
         $link_path = $this->Link_Path();
-        if ( ! $link_path ) {
+        if ( !$link_path ) {
           Error('Unable to determine link path for event ' . $this->{'Id'} . ' not deleting files.' );
           return;
         }
@@ -170,15 +176,15 @@ class Event {
         $Storage = $this->Storage();
         $eventlink_path = $Storage->Path().'/'.$link_path;
 
-        if ( $id_files = glob( $eventlink_path ) ) {
+        if ( $id_files = glob($eventlink_path) ) {
           if ( ! $eventPath = readlink($id_files[0]) ) {
             Error("Unable to read link at $id_files[0]");
             return;
           }
-# I know we are using arrays here, but really there can only ever be 1 in the array
-          $eventPath = preg_replace( '/\.'.$this->{'Id'}.'$/', $eventPath, $id_files[0] );
-          deletePath( $eventPath );
-          deletePath( $id_files[0] );
+          # I know we are using arrays here, but really there can only ever be 1 in the array
+          $eventPath = preg_replace('/\.'.$this->{'Id'}.'$/', $eventPath, $id_files[0]);
+          deletePath($eventPath);
+          deletePath($id_files[0]);
           $pathParts = explode(  '/', $eventPath );
           for ( $i = count($pathParts)-1; $i >= 2; $i-- ) {
             $deletePath = join( '/', array_slice( $pathParts, 0, $i ) );
@@ -187,11 +193,11 @@ class Event {
             }
           }
         } else {
-          Warning( "Found no event files under $eventlink_path" );
+          Warning("Found no event files under $eventlink_path");
         } # end if found files
       } else {
         $eventPath = $this->Path();
-        deletePath( $eventPath );
+        deletePath($eventPath);
       } # USE_DEEP_STORAGE OR NOT
     } # ! ZM_OPT_FAST_DELETE
   } # end Event->delete

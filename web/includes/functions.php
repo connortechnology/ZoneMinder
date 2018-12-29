@@ -359,6 +359,7 @@ function getEventDefaultVideoPath( $event ) {
 }
 
 function deletePath( $path ) {
+  Logger::Debug("Deleting $path");
   if ( is_dir( $path ) ) {
     system( escapeshellcmd( 'rm -rf '.$path ) );
   } else if ( file_exists($path) ) {
@@ -369,7 +370,7 @@ function deletePath( $path ) {
 function deleteEvent( $event ) {
 
   if ( empty($event) ) {
-    Error( 'Empty event passed to deleteEvent.');
+    Error('Empty event passed to deleteEvent.');
     return;
   }
 
