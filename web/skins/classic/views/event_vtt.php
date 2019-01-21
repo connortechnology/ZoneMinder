@@ -24,7 +24,7 @@ if ( !canView('Events') ) {
 }
 
 $eid = validInt($_REQUEST['eid']);
-
+header("Content-Type:text/vtt;charset=utf-8");
 echo "WEBVTT ZoneMinder\n\n";
 $Event = new Event($eid);
   $start_seconds = strtotime($Event->StartTime());
