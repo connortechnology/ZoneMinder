@@ -150,19 +150,31 @@ if ( canEdit('Events') ) {
   } // end if Event->DefaultVideo
 ?>
         <div id="exportEvent"><button type="button" data-on-click="exportEvent"><?php echo translate('Export') ?></button></div>
-        <div id="replayControl"><label for="replayMode"><?php echo translate('Replay') ?></label><?php echo buildSelect( "replayMode", $replayModes, "changeReplayMode();" ); ?></div>
-        <div id="scaleControl"><label for="scale"><?php echo translate('Scale') ?></label><?php echo buildSelect( "scale", $scales, "changeScale();" ); ?></div>
+        <div id="replayControl">
+          <label for="replayMode"><?php echo translate('Replay') ?></label>
+          <?php echo buildSelect('replayMode', $replayModes, "changeReplayMode();" ); ?>
+        </div>
+        <div id="scaleControl">
+          <label for="scale"><?php echo translate('Scale') ?></label>
+          <?php echo buildSelect('scale', $scales, 'changeScale();'); ?>
+        </div>
       </div>
      </div>
     <div id="content">
-      <div id="eventVideo" class="">
+      <div id="eventVideo">
 <?php
 if ( $Event->DefaultVideo() ) {
 ?>
         <div id="videoFeed">
-          <video id="videoobj" class="video-js vjs-default-skin" style="transform: matrix(1, 0, 0, 1, 0, 0)" width="<?php echo reScale( $Event->Width(), $scale ) ?>" height="<?php echo reScale( $Event->Height(), $scale ) ?>" data-setup='{ "controls": true, "autoplay": true, "preload": "auto", "plugins": { "zoomrotate": { "zoom": "<?php echo $Zoom ?>"}}}'>
-          <source src="<?php echo $Event->getStreamSrc(array('mode'=>'mpeg','format'=>'h264')); ?>" type="video/mp4">
-          <track id="monitorCaption" kind="captions" label="English" srclang="en" src='data:plain/text;charset=utf-8,"WEBVTT\n\n 00:00:00.000 --> 00:00:01.000 ZoneMinder"' default>
+          <video id="videoobj"
+            class="video-js vjs-default-skin"
+            style="transform: matrix(1, 0, 0, 1, 0, 0)"
+            width="<?php echo reScale($Event->Width(), $scale) ?>"
+            height="<?php echo reScale($Event->Height(), $scale) ?>"
+            data-setup='{ "controls": true, "autoplay": true, "preload": "auto", "plugins": { "zoomrotate": { "zoom": "<?php echo $Zoom ?>"}}}'
+          >
+            <source src="<?php echo $Event->getStreamSrc(array('mode'=>'mpeg','format'=>'h264')); ?>" type="video/mp4">
+            <track id="monitorCaption" kind="captions" label="English" srclang="en" src='?view=event_vtt&eid=<?php echo $Event->Id() ?>' default>
           Your browser does not support the video tag.
           </video>
         </div><!--videoFeed-->
