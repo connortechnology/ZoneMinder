@@ -31,6 +31,6 @@ $Event = new Event($eid);
   $end_seconds = strtotime($Event->EndTime());
   $duration = $end_seconds - $start_seconds;
   for ( $time = 0; $time < $duration; $time ++ ) {
-    echo '- ' . format_duration($time).'.000 --> '.format_duration($time+1). ".000\n" . date('Y-m-d H:i:s')."\n\n";
+    echo format_duration($time).'.000 --> '.format_duration($time+1). ".000\n" . date('Y-m-d H:i:s',$start_seconds+$time)."\n\n";
   }
 ?>
