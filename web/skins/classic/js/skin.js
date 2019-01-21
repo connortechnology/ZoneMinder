@@ -392,40 +392,48 @@ function convertLabelFormat(LabelFormat, monitorName) {
   return momentLabelFormat;
 }
 
+// The track is created with it's initial content in the html video element
 function addVideoTimingTrack(video, LabelFormat, monitorName, duration, startTime) {
-//This is a hacky way to handle changing the texttrack. If we ever upgrade vjs in a revamp replace this.  Old method preserved because it's the right way.
-  var cues = vid.textTracks()[0].cues();
-  var labelFormat = convertLabelFormat(LabelFormat, monitorName);
-  startTime = moment(startTime);
+    // This is a hacky way to handle changing the texttrack.
+    // If we ever upgrade vjs in a revamp replace this.  Old method preserved because it's the right way.
+    var tracks = vid.textTracks();
+    if ( tracks.length > 1 ) {
+      console.log("More than 1 text track!");
+    }
+    console.log(tracks[0]);
+  if ( 0 ) {
+    var cues = tracks[0].cues();
+    var labelFormat = convertLabelFormat(LabelFormat, monitorName);
+    startTime = moment(startTime);
 
-  for (var i = 0; i <= duration; i++) {
-    cues[i] = {id: i, index: i, startTime: i, Ca: i+1, text: startTime.format(labelFormat)};
-    startTime.add(1, 's');
+    for ( var i = 0; i <= duration; i++ ) {
+      cues[i] = {id: i, index: i, startTime: i, Ca: i+1, text: startTime.format(labelFormat)};
+      startTime.add(1, 's');
+    }
+  } 
+  if ( 0 ) {
+    var labelFormat = convertLabelFormat(LabelFormat, monitorName);
+    var webvttformat = 'HH:mm:ss.SSS', webvttdata="WEBVTT\n\n";
+
+    startTime = moment(startTime);
+
+    var seconds = moment({s:0}), endduration = moment({s:duration});
+    while(seconds.isBefore(endduration)){
+      webvttdata += seconds.format(webvttformat) + " --> ";
+      seconds.add(1,'s');
+      webvttdata += seconds.format(webvttformat) + "\n";
+      webvttdata += startTime.format(labelFormat) + "\n\n";
+      startTime.add(1, 's');
+    }
+    var track = document.createElement('track');
+    track.kind = "captions";
+    track.srclang = "en";
+    track.label = "English";
+    track['default'] = true;
+    track.src = 'data:plain/text;charset=utf-8,'+encodeURIComponent(webvttdata);
+    vid.appendChild(track);
   }
-}
-/*
-var labelFormat = convertLabelFormat(LabelFormat, monitorName);
-var webvttformat = 'HH:mm:ss.SSS', webvttdata="WEBVTT\n\n";
-
-startTime = moment(startTime);
-
-var seconds = moment({s:0}), endduration = moment({s:duration});
-while(seconds.isBefore(endduration)){
-  webvttdata += seconds.format(webvttformat) + " --> ";
-  seconds.add(1,'s');
-  webvttdata += seconds.format(webvttformat) + "\n";
-  webvttdata += startTime.format(labelFormat) + "\n\n";
-  startTime.add(1, 's');
-}
-var track = document.createElement('track');
-track.kind = "captions";
-track.srclang = "en";
-track.label = "English";
-track['default'] = true;
-track.src = 'data:plain/text;charset=utf-8,'+encodeURIComponent(webvttdata);
-video.appendChild(track);
-}
-*/
+} // end function addVideoTimingTrack
 
 var resizeTimer;
 
