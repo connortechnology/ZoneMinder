@@ -575,9 +575,9 @@ function getEventResponse( respObj, respText ) {
   //eventImg.setStyles( { 'width': eventData.width, 'height': eventData.height } );
   if ( vid && CurEventDefVideoPath ) {
     vid.src({type: 'video/mp4', src: CurEventDefVideoPath}); //Currently mp4 is all we use
-    console.log("getEventResponse");
+    // Not sure if this is sufficient.  We might need to remove/add the track.
+    vid.textTracks()[0].src='?view=event_vtt.php?eid='+eventData.Id;
     initialAlarmCues(eventData.Id);//ajax and render, new event
-    addVideoTimingTrack(vid, LabelFormat, eventData.MonitorName, eventData.Length, eventData.StartTime);
     CurEventDefVideoPath = null;
     $j('#modeValue').html('Replay');
     $j('#zoomValue').html('1');
@@ -1030,7 +1030,6 @@ function initPage() {
   //FIXME prevent blocking...not sure what is happening or best way to unblock
   if ( $j('#videoobj').length ) {
     vid = videojs('videoobj');
-    addVideoTimingTrack(vid, LabelFormat, eventData.MonitorName, eventData.Length, eventData.StartTime);
     $j('.vjs-progress-control').append('<div class="alarmCue"></div>');//add a place for videojs only on first load
     vid.on('ended', vjsReplay);
     vid.on('play', vjsPlay);
