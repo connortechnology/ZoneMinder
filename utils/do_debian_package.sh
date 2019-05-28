@@ -222,6 +222,7 @@ IFS=',' ;for DISTRO in `echo "$DISTROS"`; do
       cp -Rpd distros/debian debian
     else
       if [ "$WINDOWS" == "Y" ]; then
+        echo "Building for windows"
         cp -Rpd distros/ubuntu1604_wsl debian
       else
         cp -Rpd distros/ubuntu1604 debian
