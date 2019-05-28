@@ -575,7 +575,7 @@ bool Monitor::connect() {
 #ifdef MAP_LOCKED
     } else {
       Error("Unable to map file %s (%d bytes) to locked memory (%d: %s)",
-          mem_file, mem_size, errnom, strerror(errno));
+          mem_file, mem_size, errno, strerror(errno));
     }
   }
 #endif
