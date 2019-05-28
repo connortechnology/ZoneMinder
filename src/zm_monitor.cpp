@@ -567,14 +567,15 @@ bool Monitor::connect() {
 #ifdef MAP_LOCKED
   mem_ptr = (unsigned char *)mmap(NULL, mem_size, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_LOCKED, map_fd, 0);
   if ( mem_ptr == MAP_FAILED ) {
-    if ( errno == EAGAIN || errno == EAFNOSUPPORT ) {
+    if ( errno == EAGAIN || errno == ENOTSUP ) {
       Debug(1, "Unable to map file %s (%d bytes) to locked memory, trying unlocked", mem_file, mem_size);
 #endif
       mem_ptr = (unsigned char *)mmap(NULL, mem_size, PROT_READ|PROT_WRITE, MAP_SHARED, map_fd, 0);
       Debug(1, "Mapped file %s (%d bytes) to unlocked memory", mem_file, mem_size);
 #ifdef MAP_LOCKED
     } else {
-      Error("Unable to map file %s (%d bytes) to locked memory (%s)", mem_file, mem_size, strerror(errno));
+      Error("Unable to map file %s (%d bytes) to locked memory (%d: %s)",
+          mem_file, mem_size, errnom, strerror(errno));
     }
   }
 #endif
