@@ -55,7 +55,7 @@ case $i in
     shift
     ;;
     -w=*|--windows=*)
-    WINDOWS="Y"
+    WINDOWS="${i#*=}"
     shift # past argument=value
     ;;
     --default)
@@ -225,6 +225,7 @@ IFS=',' ;for DISTRO in `echo "$DISTROS"`; do
         echo "Building for windows"
         cp -Rpd distros/ubuntu1604_wsl debian
       else
+        echo "Building for linux"
         cp -Rpd distros/ubuntu1604 debian
       fi;
     fi;
@@ -335,6 +336,8 @@ EOF
       if [[ "$REPLY" == [yY] ]]; then
         dput $PPA $SC
       fi;
+    else
+      dput $PPA $SC
     fi;
   fi;
 done; # foreach distro
