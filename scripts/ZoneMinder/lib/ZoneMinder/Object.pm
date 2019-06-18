@@ -459,90 +459,95 @@ sub to_string {
   return $type . ': '. join(' ', map { $_ .' => '.(defined $_[0]{$_} ? $_[0]{$_} : 'undef') } sort { $a cmp $b } keys %{$_[0]} );
 }
 
+my %basic_operators = map { $_ => $_ } ( '=', '!=', '<', '>', '<=', '>=', '<<=' );
+my %array_operators = map { $_ => $_ } ( '&&', '<@', '@>' );
+my %set_operators = map { $_ => $_ } ( 'in', 'not in' );
+
 # We make this a separate function so that we can use it to generate the sql statements for each value in an OR
 sub find_operators {
 	my ( $field, $type, $operator, $value ) = @_;
-$log->debug("find_operators: field($field) type($type) op($operator) value($value)") if DEBUG_ALL;
+  $log->debug("find_operators: field($field) type($type) op($operator) value($value)") if DEBUG_ALL;
+  my $quoted_field = $dbh->{Driver}->{Name} eq 'mysql' ? '`'.$field.'`' : $field;
 
-my $add_placeholder = ( ! ( $field =~ /\?/ ) ) ?  1 : 0;
+  my $add_placeholder = ( ! ( $field =~ /\?/ ) ) ?  1 : 0;
 
-	if ( sets::isin( $operator, [ '=', '!=', '<', '>', '<=', '>=', '<<=' ] ) ) {
-		return ( $field.$type.' ' . $operator . ( $add_placeholder ? ' ?' : '' ), $value );
+	if ( $basic_operators{$operator} ) {
+		return ( $quoted_field.$type.' ' . $operator . ( $add_placeholder ? ' ?' : '' ), $value );
 	} elsif ( $operator eq 'not' ) {
-		return ( '( NOT ' . $field.$type.')', $value );
-	} elsif ( sets::isin( $operator, [ '&&', '<@', '@>' ] ) ) {
+		return ( '( NOT ' . $quoted_field.$type.')', $value );
+	} elsif ( $array_operators{$operator} ) {
 		if ( ref $value eq 'ARRAY' ) {
 			if ( $field =~ /^\(/ ) {
-				return ( 'ARRAY('.$field.$type.') ' . $operator . ' ?', $value );
+				return ( 'ARRAY('.$quoted_field.$type.') ' . $operator . ' ?', $value );
 			} else {
-				return ( $field.$type.' ' . $operator . ' ?', $value );
+				return ( $quoted_field.$type.' ' . $operator . ' ?', $value );
 			} # emd of
 		} else {
-			return ( $field.$type.' ' . $operator . ' ?', [ $value ] );
+			return ( $quoted_field.$type.' ' . $operator . ' ?', [ $value ] );
 		} # end if
 	} elsif ( $operator eq 'exists' ) {
-			return ( $value ? '' : 'NOT ' ) . 'EXISTS ' . $field.$type;
-	} elsif ( sets::isin( $operator, [ 'in', 'not in' ] ) ) {
+			return ( $value ? '' : 'NOT ' ) . 'EXISTS ' . $quoted_field.$type;
+	} elsif ( $set_operators{$operator} ) {
 		if ( ref $value eq 'ARRAY' ) {
-			return ( $field.$type.' ' . $operator . ' ('. join(',', map { '?' } @{$value} ) . ')', @{$value} );
+			return ( $quoted_field.$type.' ' . $operator . ' ('. join(',', map { '?' } @{$value} ) . ')', @{$value} );
 		} else {
-			return ( $field.$type.' ' . $operator . ' (?)', $value );
+			return ( $quoted_field.$type.' ' . $operator . ' (?)', $value );
 		} # end if
 	} elsif ( $operator eq 'contains' ) {
-		return ( '? IN '.$field.$type, $value );
+		return ( '? IN '.$quoted_field.$type, $value );
 	} elsif ( $operator eq 'does not contain' ) {
-		return ( '? NOT IN '.$field.$type, $value );
-	} elsif ( sets::isin( $operator, [ 'like','ilike' ] ) ) {
-		return $field.'::text ' . $operator . ' ?', $value;
+		return ( '? NOT IN '.$quoted_field.$type, $value );
+	} elsif ( $operator eq 'like' or $operator eq 'ilike' ) {
+		return $quoted_field.'::text ' . $operator . ' ?', $value;
 	} elsif ( $operator eq 'null_or_<=' ) {
-		return '('.$field.$type.' IS NULL OR '.$field.$type.' <= ?)', $value;
+		return '(('.$quoted_field.$type.' IS NULL) OR ('.$quoted_field.$type.' <= ?))', $value;
 	} elsif ( $operator eq 'is null or <=' ) {
-		return '('.$field.$type.' IS NULL OR '.$field.$type.' <= ?)', $value;
+		return '(('.$quoted_field.$type.' IS NULL) OR ('.$quoted_field.$type.' <= ?))', $value;
 	} elsif ( $operator eq 'null_or_>=' ) {
-		return '('.$field.$type.' IS NULL OR '.$field.$type.' >= ?)', $value;
+		return '(('.$quoted_field.$type.' IS NULL) OR ('.$quoted_field.$type.' >= ?))', $value;
 	} elsif ( $operator eq 'is null or >=' ) {
-		return '('.$field.$type.' IS NULL OR '.$field.$type.' >= ?)', $value;
+		return '(('.$quoted_field.$type.' IS NULL) OR ('.$quoted_field.$type.' >= ?))', $value;
 	} elsif ( $operator eq 'null_or_>' or $operator eq 'is null or >' ) {
-		return '('.$field.$type.' IS NULL OR '.$field.$type.' > ?)', $value;
+		return '('.$quoted_field.$type.' IS NULL OR '.$quoted_field.$type.' > ?)', $value;
 	} elsif ( $operator eq 'null_or_<' or $operator eq 'is null or <' ) {
-		return '('.$field.$type.' IS NULL OR '.$field.$type.' < ?)', $value;
+		return '('.$quoted_field.$type.' IS NULL OR '.$quoted_field.$type.' < ?)', $value;
 	} elsif ( $operator eq 'null_or_=' or $operator eq 'is null or =' ) {
-		return '('.$field.$type.' IS NULL OR '.$field.$type.' = ?)', $value;
+		return '('.$quoted_field.$type.' IS NULL OR '.$quoted_field.$type.' = ?)', $value;
 	} elsif ( $operator eq 'null or in' or $operator eq 'is null or in' ) {
-		return '('.$field.$type.' IS NULL OR '.$field.$type.' IN ('.join(',', map { '?' } @{$value} ) . '))', @{$value};
+		return '('.$quoted_field.$type.' IS NULL OR '.$quoted_field.$type.' IN ('.join(',', map { '?' } @{$value} ) . '))', @{$value};
 	} elsif ( $operator eq 'null or not in' ) {
-		return '('.$field.$type.' IS NULL OR '.$field.$type.' NOT IN ('.join(',', map { '?' } @{$value} ) . '))', @{$value};
+		return '('.$quoted_field.$type.' IS NULL OR '.$quoted_field.$type.' NOT IN ('.join(',', map { '?' } @{$value} ) . '))', @{$value};
 	} elsif ( $operator eq 'exists' ) {
-		return ( $value ? ' EXISTS ' : 'NOT EXISTS ' ).$field;
+		return ( $value ? ' EXISTS ' : 'NOT EXISTS ' ).$quoted_field;
 	} elsif ( $operator eq 'lc' ) {
-		return 'lower('.$field.$type.') = ?', $value;
+		return 'lower('.$quoted_field.$type.') = ?', $value;
 	} elsif ( $operator eq 'uc' ) {
-		return 'upper('.$field.$type.') = ?', $value;
+		return 'upper('.$quoted_field.$type.') = ?', $value;
 	} elsif ( $operator eq 'trunc' ) {
-		return 'trunc('.$field.$type.') = ?', $value;
+		return 'trunc('.$quoted_field.$type.') = ?', $value;
 	} elsif ( $operator eq 'any' ) {
 		if ( ref $value eq 'ARRAY' ) {
-			return '(' . join(',', map { '?' } @{$value} ).") = ANY($field)", @{$value}; 
+			return '(' . join(',', map { '?' } @{$value} ).") = ANY($quoted_field)", @{$value}; 
 		} else {
-			return "? = ANY($field)", $value;
+			return "? = ANY($quoted_field)", $value;
 		} # end if
 	} elsif ( $operator eq 'not any' ) {
 		if ( ref $value eq 'ARRAY' ) {
-			return '(' . join(',', map { '?' } @{$value} ).") != ANY($field)", @{$value}; 
+			return '(' . join(',', map { '?' } @{$value} ).") != ANY($quoted_field)", @{$value}; 
 		} else {
-			return "? != ANY($field)", $value;
+			return "? != ANY($quoted_field)", $value;
 		} # end if
 	} elsif ( $operator eq 'is null' ) {
 		if ( $value ) {
-			return $field.$type. ' is null';
+			return $quoted_field.$type. ' is null';
 		} else {
-			return $field.$type. ' is not null';
+			return $quoted_field.$type. ' is not null';
 		} # end if
 	} elsif ( $operator eq 'is not null' ) {
 		if ( $value ) {
-			return $field.$type. ' is not null';
+			return $quoted_field.$type. ' is not null';
 		} else {
-			return $field.$type. ' is null';
+			return $quoted_field.$type. ' is null';
 		} # end if
 	} else {
 $log->warn("find_operators: op not found field($field) type($type) op($operator) value($value)");

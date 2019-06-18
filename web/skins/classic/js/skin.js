@@ -197,6 +197,16 @@ window.addEventListener("DOMContentLoaded", function onSkinDCL() {
     var fnName = el.getAttribute("data-on-change");
     el.onchange = window[fnName];
   });
+  // 'data-on-input' adds an event listener for the global function in the attribute value when an input happens.
+  document.querySelectorAll("select[data-on-input], input[data-on-input]").forEach(function attachOnChange(el) {
+    var fnName = el.getAttribute("data-on-input");
+    el.oninput = window[fnName];
+  });
+  // 'data-on-change-this' calls the global function in the attribute value with the element when a change happens.
+  document.querySelectorAll("select[data-on-input-this], input[data-on-input-this]").forEach(function attachOnChangeThis(el) {
+    var fnName = el.getAttribute("data-on-input-this");
+    el.oninput = window[fnName].bind(el, el);
+  });
 });
 
 function createEventPopup( eventId, eventFilter, width, height ) {

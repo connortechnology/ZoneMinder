@@ -327,8 +327,6 @@ ul.tabList li.active a {
 }
 
 fieldset {
-    border: 1px solid black;
-    padding: 4px;
     margin-bottom: 8px;
     border-radius: 2px;
     -moz-border-radius: 2px;

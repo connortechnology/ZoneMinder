@@ -1,27 +1,3 @@
-# ==========================================================================
-#
-# ZoneMinder Base Control Module, $Date$, $Revision$
-# Copyright (C) 2001-2008  Philip Coombes
-#
-# This program is free software; you can redistribute it and/or
-# modify it under the terms of the GNU General Public License
-# as published by the Free Software Foundation; either version 2
-# of the License, or (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program; if not, write to the Free Software
-# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-#
-# ==========================================================================
-#
-# This module contains the base class definitions for the camera control
-# protocol implementations
-#
 package ZoneMinder::Control;
 
 use 5.006;
@@ -41,6 +17,35 @@ our $VERSION = $ZoneMinder::Base::VERSION;
 use ZoneMinder::Logger qw(:all);
 use ZoneMinder::Database qw(:all);
 
+use vars qw(@Actions);
+
+our @Actions = (
+  'Wake',
+  'Sleep',
+  'Reset',
+  'Reboot',
+  'Zoom',
+  'ZoomAbs',
+  'ZoomRel',
+  'ZoomCon',
+  'Focus',
+  'FocusAbs',
+  'FocusRel',
+  'FocusCon',
+  'Iris',
+  'IrisAbs',
+  'IrisRel',
+  'IrisCon',
+  'Gain',
+  'GainRel',
+  'GainCon',
+  'White',
+  'WhiteAbs',
+  'WhiteRel',
+  'WhiteCon',
+  'Preset',
+);
+
 our $AUTOLOAD;
 
 sub new {
@@ -52,7 +57,7 @@ sub new {
     Fatal('No monitor defined when invoking protocol '.$self->{name});
   }
   $self->{id} = $id;
-  bless( $self, $class );
+  bless $self, $class;
   return $self;
 }
 
@@ -77,7 +82,7 @@ sub getKey {
 
 sub open {
   my $self = shift;
-  Fatal( "No open method defined for protocol ".$self->{name} );
+  Fatal('No open method defined for protocol '.$self->{name});
 }
 
 sub close {
@@ -106,11 +111,11 @@ sub getParam {
   my $default = shift;
 
   if ( defined($params->{$name}) ) {
-    return( $params->{$name} );
+    return $params->{$name};
   } elsif ( defined($default) ) {
-    return( $default );
+    return $default;
   }
-  Fatal( "Missing mandatory parameter '$name'" );
+  Fatal("Missing mandatory parameter '$name'");
 }
 
 sub executeCommand {
@@ -126,12 +131,12 @@ sub executeCommand {
 #{
 #Fatal( "Unsupported command '$command'" );
 #}
-  &{$self->{$command}}( $self, $params );
+  &{$self->{$command}}($self, $params);
 }
 
 sub printMsg {
   my $self = shift;
-  Fatal( "No printMsg method defined for protocol ".$self->{name} );
+  Fatal('No printMsg method defined for protocol '.$self->{name});
 }
 
 1;
@@ -140,49 +145,42 @@ __END__
 
 =head1 NAME
 
-ZoneMinder::Database - Perl extension for blah blah blah
+ZoneMinder::Control - Parent Module for PTZ Control scripts
 
 =head1 SYNOPSIS
 
-use ZoneMinder::Database;
-blah blah blah
+use ZoneMinder::Control;
 
 =head1 DESCRIPTION
 
-Stub documentation for ZoneMinder, created by h2xs. It looks like the
-author of the extension was negligent enough to leave the stub
-unedited.
-
-Blah blah blah.
-
 =head2 EXPORT
 
-None by default.
-
-
+Actions
 
 =head1 SEE ALSO
 
-Mention other useful documentation such as the documentation of
-related modules or operating system documentation (such as man pages
-in UNIX), or any relevant external documentation such as RFCs or
-standards.
-
-If you have a mailing list set up for your module, mention it here.
-
-If you have a web site set up for your module, mention it here.
+Each Control protocol will have it's own relevant documentation.
 
 =head1 AUTHOR
 
-Philip Coombes, E<lt>philip.coombes@zoneminder.comE<gt>
+Isaac Connor, E<lt>isaac@zoneminder.comE<gt>
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2001-2008  Philip Coombes
+Copyright (C) 2019  ZoneMinder LLC
 
-This library is free software; you can redistribute it and/or modify
-it under the same terms as Perl itself, either Perl version 5.8.3 or,
-at your option, any later version of Perl 5 you may have available.
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
 
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 =cut

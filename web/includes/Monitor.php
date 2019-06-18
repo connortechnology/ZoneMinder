@@ -634,7 +634,7 @@ private $control_fields = array(
         } else {
           $source = $this->{'Path'};
         }
-      } elseif ( ZM_WEB_FILTER_SOURCE == "NoCredentials" ) {
+      } elseif ( ZM_WEB_FILTER_SOURCE == 'NoCredentials' ) {
         # Filter out sensitive and common items
         unset($url_parts['user']);
         unset($url_parts['pass']);
@@ -657,6 +657,14 @@ private $control_fields = array(
   public function UrlToIndex() {
     return $this->Server()->UrlToIndex();
     //ZM_MIN_STREAMING_PORT ? (ZM_MIN_STREAMING_PORT+$this->Id()) : null);
+  }
+
+  static function Objects_Indexed_By_Id() {
+    $Monitors = array();
+    foreach ( Monitor::find(null, array('order'=>'lower(Name)')) as $Monitor ) {
+      $Monitors[$Monitor->Id()] = $Monitor;
+    }
+    return $Monitors;
   }
 
 } // end class Monitor

@@ -59,6 +59,8 @@ var popupSizes = {
   'options':      {'width': 1000, 'height': 660},
   'preset':       {'width': 300, 'height': 220},
   'server':       {'width': 600, 'height': 405},
+  'sensor_action':{'width': 600, 'height': 405},
+  'sensor_server':{'width': 600, 'height': 405},
   'settings':     {'width': 220, 'height': 235},
   'shutdown':     {'width': 400, 'height': 400},
   'state':        {'width': 400, 'height': 170},

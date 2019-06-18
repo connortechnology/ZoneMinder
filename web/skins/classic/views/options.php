@@ -31,6 +31,7 @@ $tabs['system'] = translate('System');
 $tabs['config'] = translate('Config');
 $tabs['API'] = translate('API');
 $tabs['servers'] = translate('Servers');
+$tabs['sensor_servers'] = translate('SensorServers');
 $tabs['storage'] = translate('Storage');
 $tabs['web'] = translate('Web');
 $tabs['images'] = translate('Images');
@@ -181,7 +182,7 @@ foreach ( array_map('basename', glob('skins/'.$current_skin.'/css/*',GLOB_ONLYDI
       }
 ?>
             <tr>
-              <td class="colUsername"><?php echo makePopupLink('?view=user&amp;uid='.$row['Id'], 'zmUser', 'user', validHtmlStr($row['Username']).($user['Username']==$row['Username']?"*":""), $canEdit) ?></td>
+              <td class="colUsername"><?php echo makePopupLink('?view=user&amp;uid='.$row['Id'], 'zmUser', 'user', validHtmlStr($row['Username'].($user['Username']==$row['Username']?'*':'')), $canEdit) ?></td>
               <td class="colLanguage"><?php echo $row['Language']?validHtmlStr($row['Language']):'default' ?></td>
               <td class="colEnabled"><?php echo $row['Enabled']?translate('Yes'):translate('No') ?></td>
               <td class="colStream"><?php echo validHtmlStr($row['Stream']) ?></td>
@@ -201,7 +202,7 @@ foreach ( array_map('basename', glob('skins/'.$current_skin.'/css/*',GLOB_ONLYDI
           </tbody>
         </table>
         <div id="contentButtons">
-        <?php echo makePopupButton('?view=user&uid=0', 'zmUser', 'user', translate("AddNewUser"), canEdit('System')); ?>
+        <?php echo makePopupButton('?view=user&uid=0', 'zmUser', 'user', translate('AddNewUser'), canEdit('System')); ?>
           <button type="submit" class="btn-danger" name="deleteBtn" value="Delete" disabled="disabled"><?php echo translate('Delete') ?></button>
         </div>
       </form>
@@ -244,9 +245,9 @@ foreach ( array_map('basename', glob('skins/'.$current_skin.'/css/*',GLOB_ONLYDI
               <td class="colPathToZMS"><?php echo makePopupLink('?view=server&amp;id='.$Server->Id(), 'zmServer', 'server', validHtmlStr($Server->PathToZMS()), $canEdit) ?></td>
               <td class="colPathToApi"><?php echo makePopupLink('?view=server&amp;id='.$Server->Id(), 'zmServer', 'server', validHtmlStr($Server->PathToApi()), $canEdit) ?></td>
               <td class="colStatus <?php if ( $Server->Status() == 'NotRunning' ) { echo 'danger'; } ?>">
-                  <?php echo makePopupLink('?view=server&amp;id='.$Server->Id(), 'zmServer', 'server', validHtmlStr($Server->Status()), $canEdit) ?></td>
+                  <?php echo makePopupLink('?view=server&amp;id='.$Server->Id(), 'zmServer', 'server', $Server->Status(), $canEdit) ?></td>
               <td class="colMonitorCount">
-                  <?php echo makePopupLink('?view=server&amp;id='.$Server->Id(), 'zmServer', 'server', validHtmlStr($monitor_counts[$Server->Id()]), $canEdit) ?>
+                  <?php echo makePopupLink('?view=server&amp;id='.$Server->Id(), 'zmServer', 'server', $monitor_counts[$Server->Id()], $canEdit) ?>
               </td>
               <td class="colCpuLoad <?php if ( $Server->CpuLoad() > 5 ) { echo 'danger'; } ?>">
                   <?php echo makePopupLink('?view=server&amp;id='.$Server->Id(), 'zmServer', 'server',$Server->CpuLoad(), $canEdit) ?>
@@ -295,13 +296,12 @@ foreach ( array_map('basename', glob('skins/'.$current_skin.'/css/*',GLOB_ONLYDI
           <tbody>
 <?php foreach( ZM\Storage::find( null, array('order'=>'lower(Name)') ) as $Storage ) { ?>
             <tr>
-              <td class="colId"><?php echo makePopupLink('?view=storage&amp;id='.$Storage->Id(), 'zmStorage', 'storage', validHtmlStr($Storage->Id()), $canEdit ) ?></td>
+              <td class="colId"><?php echo makePopupLink('?view=storage&amp;id='.$Storage->Id(), 'zmStorage', 'storage', $Storage->Id(), $canEdit ) ?></td>
               <td class="colName"><?php echo makePopupLink('?view=storage&amp;id='.$Storage->Id(), 'zmStorage', 'storage', validHtmlStr($Storage->Name()), $canEdit ) ?></td>
               <td class="colPath"><?php echo makePopupLink('?view=storage&amp;id='.$Storage->Id(), 'zmStorage', 'storage', validHtmlStr($Storage->Path()), $canEdit ) ?></td>
-              <td class="colType"><?php echo makePopupLink('?view=storage&amp;id='.$Storage->Id(), 'zmStorage', 'storage', validHtmlStr($Storage->Type()), $canEdit ) ?></td>
-              <td class="colScheme"><?php echo makePopupLink('?view=storage&amp;id='.$Storage->Id(), 'zmStorage', 'storage', validHtmlStr($Storage->Scheme()), $canEdit ) ?></td>
-              <td class="colServer"><?php
-              echo makePopupLink('?view=storage&amp;id='.$Storage->Id(), 'zmStorage', 'storage', validHtmlStr($Storage->Server()->Name()), $canEdit ) ?></td>
+              <td class="colType"><?php echo makePopupLink('?view=storage&amp;id='.$Storage->Id(), 'zmStorage', 'storage', $Storage->Type(), $canEdit ) ?></td>
+              <td class="colScheme"><?php echo makePopupLink('?view=storage&amp;id='.$Storage->Id(), 'zmStorage', 'storage', $Storage->Scheme(), $canEdit ) ?></td>
+              <td class="colServer"><?php echo makePopupLink('?view=storage&amp;id='.$Storage->Id(), 'zmStorage', 'storage', validHtmlStr($Storage->Server()->Name()), $canEdit) ?></td>
               <td class="colDiskSpace"><?php echo human_filesize($Storage->disk_used_space()) . ' of ' . human_filesize($Storage->disk_total_space()) ?></td>
               <td class="colMark"><input type="checkbox" name="markIds[]" value="<?php echo $Storage->Id() ?>" data-on-click-this="configureDeleteButton"<?php if ( !$canEdit ) { ?> disabled="disabled"<?php } ?>/></td>
             </tr>
@@ -315,6 +315,9 @@ foreach ( array_map('basename', glob('skins/'.$current_skin.'/css/*',GLOB_ONLYDI
       </form>
 
   <?php
+} else if ( $tab == 'sensor_servers' ) {
+  include('sensor_servers.php');
+
   } else if ($tab == 'API') {
   
     $apiEnabled = dbFetchOne("SELECT Value FROM Config WHERE Name='ZM_OPT_USE_API'");
