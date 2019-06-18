@@ -1,0 +1,157 @@
+#!/usr/bin/perl -wT
+#
+# ==========================================================================
+#
+# ZoneMinder Sensors Monitor Script
+# Copyright (C) 2019 ZoneMinder LLC
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# ==========================================================================
+
+use strict;
+
+# Include from system perl paths only
+use Getopt::Long;
+use autouse 'Pod::Usage'=>qw(pod2usage);
+
+$| = 1;
+
+$ENV{PATH}  = '/bin:/usr/bin:/usr/local/bin';
+$ENV{SHELL} = '/bin/sh' if exists $ENV{SHELL};
+delete @ENV{qw(IFS CDPATH ENV BASH_ENV)};
+
+
+my $arg_string = join(' ', @ARGV);
+
+my %options;
+
+GetOptions(
+) or pod2usage(-exitstatus => -1);
+
+
+use ZoneMinder;
+logInit();
+require LWP;
+require XML::Hash::LX;
+use Data::Dumper;
+use Time::HiRes qw{ gettimeofday tv_interval usleep };
+require ZoneMinder::Control;
+require ZoneMinder::Sensor_Server;
+require ZoneMinder::Sensor;
+require ZoneMinder::Sensor_Action;
+
+use constant POLL_INTERVAL => 3; # seconds
+
+my $api_url = 'http://www.texonglobal.com/astatus.xml';
+
+my $browser = LWP::UserAgent->new();
+my %Alarm_Types = (
+  '01' => 'HIGH_VB_ALARM',
+  '02' => 'TEMP_ALARM',
+  '03' => 'MAG_ALARM',
+  '04' => 'WIND_FILTER',
+  '05' => 'TREND_FILTER',
+  '06' => 'RADAR_FILTER',
+  '07' => 'NODE_MISSING_ALARM',
+  '08' => 'WIRECUT',
+);
+
+while (1) {
+
+  my $poll_start = [gettimeofday()];
+
+  foreach my $Server ( ZoneMinder::Sensor_Server->find() ) {
+    if ( !$Server->Url() ) {
+      Error("No url configured for Sensor Server $$Server{Name}");
+      next;
+    }
+
+    my $response = $browser->get($Server->Url());
+    if ( ! $response->is_success ) {
+      Warning("Failed getting xml chain data from $$Server{Url}: ".$response->status_line);
+    } else {
+      Debug($response->content());
+      my $xml = XML::Hash::LX::xml2hash($response->content());
+      if ( !($xml and $$xml{response}) ) {
+        Warning("Error getting xml chain data from $api_url");
+        Data::Dumper->Dump($xml);
+      } else {
+        my $response = $$xml{response};
+        Data::Dumper::Dump($xml);
+        foreach my $chain ( keys %{$response} ) {
+          Debug("Handling chain $chain $$response{$chain}");
+          my $chain_data = $$response{$chain};
+          foreach my $sensor_value ( $chain_data =~ /(#\d+!)/g ) {
+            my ( $type_id, $sensor_id, $value ) = ( $sensor_value =~ /^#(\d\d)(\d\d)(\d\d)!$/ );
+            if ( ! $Alarm_Types{$type_id} ) {
+              Warning("Unknown alarm type! $type_id");
+            }
+            Debug("Type id: $type_id $Alarm_Types{$type_id} sensor id: $sensor_id value: $value");
+            foreach my $SA ( ZoneMinder::Sensor_Action->find(
+                SensorId  =>  $sensor_id,
+                TypeId    =>  $type_id,
+                'MinValue is null or <='=> $value,
+                'MaxValue is null or >='=> $value,
+              ) ) {
+              Debug("Performing $$SA{Action} for sensor $sensor_id");
+            } # end foreach Sensor_Action
+
+          } # end foreach sensor_value
+        } # end foreach chain
+      } #end if valid response
+    } # end have response
+
+  } # end foreach Sensor Server
+
+  my $elapsed = tv_interval($poll_start);
+  Debug("Elapsed: $elapsed");
+
+  last;
+  usleep(1000000 * (POLL_INTERVAL - $elapsed));
+
+} # end while main loop
+
+exit(0);
+
+1;
+__END__
+
+=head1 NAME
+
+zmcontrol.pl - ZoneMinder control script
+
+=head1 SYNOPSIS
+
+ zmcontrol.pl --id {monitor_id} [--command={command}] [various options]
+
+=head1 DESCRIPTION
+
+FIXME FIXME
+
+=head1 OPTIONS
+
+ --autostop          -
+ --xcoord [ arg ]    - X-coord
+ --ycoord [ arg ]    - Y-coord
+ --speed [ arg ]     - Speed
+ --step [ arg ]      -
+ --panspeed [ arg ]  -
+ --panstep [ arg ]   -
+ --tiltspeed [ arg ] -
+ --tiltstep [ arg ]  -
+ --preset [ arg ]    -
+
+=cut
