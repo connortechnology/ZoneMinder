@@ -221,7 +221,7 @@ if ( $command =~ /^(?:start|restart)$/ ) {
           }
           if ( $Config{ZM_OPT_CONTROL} ) {
             if ( $monitor->{Controllable} ) {
-              runCommand("zmdc.pl start zmcontrol.pl --id $monitor->{Id}");
+              runCommand("zmdc.pl start zmcontrol.pl --id=$monitor->{Id}");
               if ( $monitor->{TrackMotion} ) {
                 if ( $monitor->{Function} eq 'Modect' || $monitor->{Function} eq 'Mocord' ) {
                   runCommand("zmdc.pl start zmtrack.pl -m $monitor->{Id}");
