@@ -102,7 +102,7 @@ my @daemons = (
     'zmstats.pl',
     'zmtrack.pl',
     'zmcontrol.pl',
-    'zmtelemetry.pl'
+    'zmtelemetry.pl',
     'zmsensor_monitor.pl',
     );
 
