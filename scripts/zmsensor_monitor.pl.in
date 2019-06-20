@@ -38,12 +38,44 @@ my $arg_string = join(' ', @ARGV);
 
 my %options;
 
+my $zm_terminate = 0;
+my $daemon = 0;
+my $server_id;
+my $version = 0;
+
 GetOptions(
+  daemon        =>\$daemon,
+  'server_id=s' =>\$server_id,
+  version       =>\$version,
 ) or pod2usage(-exitstatus => -1);
 
-
 use ZoneMinder;
-logInit();
+if ( $version ) {
+  print ZoneMinder::Base::ZM_VERSION . "\n";
+  exit(0);
+}
+logInit($server_id?(id=>'zmsensor_monitor_'.$server_id):());
+sub HupHandler {
+  # This idea at this time is to just exit, freeing up the memory.
+  # zmfilter.pl will be respawned by zmdc.
+  TermHandler();
+  return;
+
+  Info('Received HUP, reloading');
+  ZoneMinder::Object::init_cache();
+  &ZoneMinder::Logger::logHupHandler();
+}
+sub TermHandler {
+  Info('Received TERM, exiting');
+  $zm_terminate = 1;
+}
+sub Term {
+  exit(0);
+}
+$SIG{HUP} = \&HupHandler;
+$SIG{TERM} = \&TermHandler;
+$SIG{INT} = \&TermHandler;
+
 require LWP;
 require XML::Hash::LX;
 use Data::Dumper;
@@ -52,10 +84,6 @@ require ZoneMinder::Control;
 require ZoneMinder::Sensor_Server;
 require ZoneMinder::Sensor;
 require ZoneMinder::Sensor_Action;
-
-use constant POLL_INTERVAL => 3; # seconds
-
-my $api_url = 'http://www.texonglobal.com/astatus.xml';
 
 my $browser = LWP::UserAgent->new();
 my %Alarm_Types = (
@@ -69,11 +97,11 @@ my %Alarm_Types = (
   '08' => 'WIRECUT',
 );
 
-while (1) {
+while (!$zm_terminate) {
 
   my $poll_start = [gettimeofday()];
 
-  foreach my $Server ( ZoneMinder::Sensor_Server->find() ) {
+  foreach my $Server ( ZoneMinder::Sensor_Server->find($server_id?(Id=>$server_id):()) ) {
     if ( !$Server->Url() ) {
       Error("No url configured for Sensor Server $$Server{Name}");
       next;
@@ -86,7 +114,7 @@ while (1) {
       Debug($response->content());
       my $xml = XML::Hash::LX::xml2hash($response->content());
       if ( !($xml and $$xml{response}) ) {
-        Warning("Error getting xml chain data from $api_url");
+        Warning("Error getting xml chain data from $$Server{Url}");
         Data::Dumper->Dump($xml);
       } else {
         my $response = $$xml{response};
@@ -114,14 +142,16 @@ while (1) {
       } #end if valid response
     } # end have response
 
+    if ( !$daemon ) {
+      $zm_terminate = 1;
+      next;
+    }
+
+    my $elapsed = tv_interval($poll_start);
+    Debug("Elapsed: $elapsed");
+    usleep(1000000 * ($Server->PollFrequency() - $elapsed));
+
   } # end foreach Sensor Server
-
-  my $elapsed = tv_interval($poll_start);
-  Debug("Elapsed: $elapsed");
-
-  last;
-  usleep(1000000 * (POLL_INTERVAL - $elapsed));
-
 } # end while main loop
 
 exit(0);
