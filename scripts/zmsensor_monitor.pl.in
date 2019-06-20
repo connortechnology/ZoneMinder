@@ -119,6 +119,12 @@ while (!$zm_terminate) {
       } else {
         my $response = $$xml{response};
         Data::Dumper::Dump($xml);
+
+
+        # Since we can have conflicting sensors, we will build up a list of actions to take for each Monitor.
+        # Then iterate over them and perform the ones with the highest value.
+        my %Monitor_Actions;
+        
         foreach my $chain ( keys %{$response} ) {
           Debug("Handling chain $chain $$response{$chain}");
           my $chain_data = $$response{$chain};
@@ -134,11 +140,27 @@ while (!$zm_terminate) {
                 'MinValue is null or <='=> $value,
                 'MaxValue is null or >='=> $value,
               ) ) {
-              Debug("Performing $$SA{Action} for sensor $sensor_id");
+              $Monitor_Actions{$$SA{MonitorId}} = [] if ! $Monitor_Actions{$$SA{MonitorId}};
+              push @{$Monitor_Actions{$$SA{MonitorId}}}, {Value=>$value, Action=>$SA};
             } # end foreach Sensor_Action
 
           } # end foreach sensor_value
         } # end foreach chain
+
+        foreach my $MonitorId ( keys %Monitor_Actions ) {
+          my @Sorted_Actions = sort { $$a{Value} <=> $$b{Value} } @{$Monitor_Actions{$MonitorId}};
+
+          foreach my $SSA ( @Sorted_Actions ) {
+            my $SA = $$SSA{Action};
+            Debug("Have $$SSA{Value} " . $SA->to_string());
+          }
+          my $SSA = $Sorted_Actions[0];
+          my $SA = $$SSA{Action};
+            
+          Debug("Performing $$SA{Action}");
+
+          $SA->do();
+        }
       } #end if valid response
     } # end have response
 
@@ -149,7 +171,8 @@ while (!$zm_terminate) {
 
     my $elapsed = tv_interval($poll_start);
     Debug("Elapsed: $elapsed");
-    usleep(1000000 * ($Server->PollFrequency() - $elapsed));
+    my $sleep_seconds = ($Server->PollFrequency() - $elapsed);
+    usleep(1000000 * $sleep_seconds) if $sleep_seconds > 0;
 
   } # end foreach Sensor Server
 } # end while main loop
