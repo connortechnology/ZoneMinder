@@ -30,6 +30,8 @@ use warnings;
 
 require ZoneMinder::Base;
 require ZoneMinder::Object;
+require ZoneMinder::Monitor;
+require ZoneMinder::Logger;
 
 use parent qw(ZoneMinder::Object);
 
@@ -50,6 +52,33 @@ $primary_key = 'Id';
 sub Monitor {
 	return new ZoneMinder::Monitor($_[0]{MonitorId});
 } # end sub Monitor
+
+# Performs the action
+sub do {
+  my $SA = shift;
+
+  if ( $$SA{Action} =~ /^Preset (\d+)/ ) {
+    my $preset_id = $1;
+
+    my $command = join('',
+      $ZoneMinder::Config{ZM_PATH_BIN},
+      '/zmcontrol.pl --id=',
+      $$SA{MonitorId},
+
+      ' --command=presetGoto',
+      ' --preset=',
+      $preset_id,
+    );
+    ZoneMinder::Logger::Debug("Command: $command");
+    my $output = qx($command);
+    chomp($output);
+    my $status = $? >> 8;
+    if ( $status || ZoneMinder::Logger::logDebugging() ) {
+      ZoneMinder::Logger::Debug("Output: $output");
+    }
+  } # end if Preset
+
+} # end sub do
 
 1;
 __END__
