@@ -103,6 +103,7 @@ my @daemons = (
     'zmtrack.pl',
     'zmcontrol.pl',
     'zmtelemetry.pl'
+    'zmsensor_monitor.pl',
     );
 
 if ( $Config{ZM_OPT_USE_EVENTNOTIFICATION} ) {
