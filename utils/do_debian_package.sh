@@ -54,6 +54,10 @@ case $i in
     PACKAGE_VERSION="${i#*=}"
     shift
     ;;
+    -w=*|--windows=*)
+    WINDOWS="Y"
+    shift # past argument=value
+    ;;
     --default)
     DEFAULT=YES
     shift # past argument with no value
@@ -216,8 +220,13 @@ IFS=',' ;for DISTRO in `echo "$DISTROS"`; do
   else 
     if [ "$DISTRO" == "wheezy" ]; then 
       cp -Rpd distros/debian debian
-    else 
-      cp -Rpd distros/ubuntu1604 debian
+    else
+      if [ "$WINDOWS" == "Y" ]; then
+        echo "Building for windows"
+        cp -Rpd distros/ubuntu1604_wsl debian
+      else
+        cp -Rpd distros/ubuntu1604 debian
+      fi;
     fi;
   fi;
 
