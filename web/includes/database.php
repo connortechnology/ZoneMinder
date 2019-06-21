@@ -202,6 +202,8 @@ function dbFetchAssoc( $sql, $indexCol, $dataCol=false ) {
   $result = dbQuery( $sql );
 
   $dbRows = array();
+  if ( !$result )
+    return $dbRows;
   while( $dbRow = $result->fetch( PDO::FETCH_ASSOC ) )
     $dbRows[$dbRow[$indexCol]] = $dataCol?$dbRow[$dataCol]:$dbRow;
   return( $dbRows );
