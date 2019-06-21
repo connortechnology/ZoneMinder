@@ -200,12 +200,12 @@ class Sensor_Action {
     $changes = array();
     foreach ( $this->defaults as $field=>$default_value ) {
       if ( array_key_exists($field, $new_values) ) {
-      Logger::Debug("Checking default $field => $default_value exists in new values");
+      Logger::Debug("Checking default $field => $default_value exists in new values :".$this->{$field} . " " .$new_values[$field]);
         if ( (!array_key_exists($field, $this)) or ( $this->{$field} != $new_values[$field] ) ) {
       Logger::Debug("Checking default $field => $default_value changes becaause" . $new_values[$field].' != '.$new_values[$field]);
-          $changes[$field]=$new_values[$field];
+          $changes[$field] = $new_values[$field];
         #} else if  {
-      #Logger::Debug("Checking default $field => $default_value changes becaause " . $new_values[$field].' != '.$new_values[$field]);
+      Logger::Debug("Checking default $field => $default_value changes becaause " . $new_values[$field].' != '.$new_values[$field]);
           #array_push( $changes, [$field=>$defaults[$field]] );
         }
       } else {
@@ -224,7 +224,7 @@ class Sensor_Action {
 
     if ( $this->Id() ) {
       $fields = array_keys($this->defaults);
-      $sql = 'UPDATE Sensor_Actions SET '.implode(', ', array_map(function($field) {return '`'.$field.'=?'.'`';}, $fields )) . ' WHERE Id=?';
+      $sql = 'UPDATE Sensor_Actions SET '.implode(', ', array_map(function($field) {return '`'.$field.'`=?';}, $fields )) . ' WHERE Id=?';
       $values = array_map(function($field){return $this->{$field};}, $fields);
       $values[] = $this->{'Id'};
       if ( dbQuery($sql, $values) )
