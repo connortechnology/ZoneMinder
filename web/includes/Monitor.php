@@ -2,12 +2,14 @@
 namespace ZM;
 require_once('database.php');
 require_once('Server.php');
+require_once('Object.php');
 
 $monitor_cache = array();
 
-class Monitor {
+class Monitor extends ZM_Object {
 
-private $defaults = array(
+  protected static $table = 'Monitors';
+protected $defaults = array(
   'Id' => null,
   'Name' => '',
   'ServerId' => 0,
@@ -209,52 +211,29 @@ private $control_fields = array(
 );
 
   public function __construct( $IdOrRow = NULL ) {
-    if ( $IdOrRow ) {
-      $row = NULL;
-      if ( is_integer($IdOrRow) or is_numeric($IdOrRow) ) {
-        $row = dbFetchOne('SELECT * FROM Monitors WHERE Id=?', NULL, array($IdOrRow));
-        if ( ! $row ) {
-          Error("Unable to load Monitor record for Id=" . $IdOrRow);
-        }
-      } elseif ( is_array($IdOrRow) ) {
-        $row = $IdOrRow;
-      } else {
-        Error("Unknown argument passed to Monitor Constructor ($IdOrRow)");
-        return;
-      }
+    parent::__construct($IdOrRow);
 
-      if ( $row ) {
-        foreach ($row as $k => $v) {
-          $this->{$k} = $v;
-        }
-        if ( $this->{'Controllable'} ) {
-          $s = dbFetchOne('SELECT * FROM Controls WHERE Id=?', NULL, array($this->{'ControlId'}) );
-          if ( $s ) {
-            foreach ($s as $k => $v) {
-              if ( $k == 'Id' ) {
-                continue;
-  # The reason for these is that the name overlaps Monitor fields.
-              } else if ( $k == 'Protocol' ) {
-                $this->{'ControlProtocol'} = $v;
-              } else if ( $k == 'Name' ) {
-                $this->{'ControlName'} = $v;
-              } else if ( $k == 'Type' ) {
-                $this->{'ControlType'} = $v;
-              } else {
-                $this->{$k} = $v;
-              }
-            }
+    if ( $this->{'Controllable'} ) {
+      $s = dbFetchOne('SELECT * FROM Controls WHERE Id=?', NULL, array($this->{'ControlId'}) );
+      if ( $s ) {
+        foreach ($s as $k => $v) {
+          if ( $k == 'Id' ) {
+            continue;
+            # The reason for these is that the name overlaps Monitor fields.
+          } else if ( $k == 'Protocol' ) {
+            $this->{'ControlProtocol'} = $v;
+          } else if ( $k == 'Name' ) {
+            $this->{'ControlName'} = $v;
+          } else if ( $k == 'Type' ) {
+            $this->{'ControlType'} = $v;
           } else {
-            Warning('No Controls found for monitor '.$this->{'Id'} . ' ' . $this->{'Name'}.' althrough it is marked as controllable');
+            $this->{$k} = $v;
           }
         }
-        global $monitor_cache;
-        $monitor_cache[$row['Id']] = $this;
-
       } else {
-        Error('No row for Monitor ' . $IdOrRow);
+        Warning('No Controls found for monitor '.$this->{'Id'} . ' ' . $this->{'Name'}.' althrough it is marked as controllable');
       }
-    } # end if isset($IdOrRow)
+    }
   } // end function __construct
 
   public function Server() {
