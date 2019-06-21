@@ -60,6 +60,8 @@ Depends: ${shlibs:Depends}, ${misc:Depends}, ${perl:Depends}
         ,libimage-info-perl
         ,libjson-maybexs-perl
         ,libsys-mmap-perl [!hurd-any]
+        ,libxml-hash-lx-perl
+        ,libdatetime-perl
         ,liburi-encode-perl
         ,libwww-perl
         ,libdata-dump-perl
