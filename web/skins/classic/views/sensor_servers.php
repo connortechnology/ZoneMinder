@@ -60,7 +60,7 @@ foreach ( ZM\Sensor_Server::find() as $Server ) {
       </tbody>
     </table>
     <div id="contentButtons">
-    <?php echo makePopupButton('?view=server&id=0', 'zmServer', 'server', translate('AddNewServer'), canEdit('System')); ?>
+      <?php echo makePopupButton('?view=server&id=0', 'zmServer', 'server', translate('AddNewServer'), $canEdit); ?>
       <button type="submit" class="btn-danger" name="deleteBtn" value="Delete" disabled="disabled"><?php echo translate('Delete') ?></button>
     </div>
   </form>
