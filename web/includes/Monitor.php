@@ -63,6 +63,7 @@ protected $defaults = array(
   'StreamReplayBuffer'  => 0,
   'AlarmFrameCount'     =>  1,
   'SectionLength'       =>  600,
+  'MinSectionLength'    =>  10,
   'FrameSkip'           =>  0,
   'AnalysisFPSLimit'  =>  null,
   'AnalysisUpdateDelay'  =>  0,
