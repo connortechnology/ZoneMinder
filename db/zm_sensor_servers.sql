@@ -5,7 +5,8 @@ CREATE TABLE Sensor_Servers (
   `Name`    VARCHAR(255),
   `Url`    VARCHAR(255),
   `PollFrequency` INTEGER UNSIGNED,
+  `Chains`  VARCHAR(255),
   PRIMARY KEY (`Id`)
 );
 
-INSERT INTO Sensor_Servers (`Name`,`Url`,`PollFrequency`) VALUES ('Node1','http://www.texonglobal.com/astatus.xml', 3);
+INSERT INTO Sensor_Servers (`Name`,`Url`,`PollFrequency`) VALUES ('Node1','http://www.texonglobal.com/astatus.xml', 3, '1:Left,2:Right');
