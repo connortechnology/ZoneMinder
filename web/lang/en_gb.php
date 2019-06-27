@@ -691,6 +691,7 @@ $SLANG = array(
     'SelectLog'             => 'Select Log',
     'SelfIntersecting'      => 'Polygon edges must not intersect',
     'SensorServer'          => 'Sensor Server',
+    'SensorServers'         => 'Sensor Servers',
     'SetNewBandwidth'       => 'Set New Bandwidth',
     'SetPreset'             => 'Set Preset',
     'Set'                   => 'Set',
