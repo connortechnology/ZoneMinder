@@ -84,18 +84,10 @@ require ZoneMinder::Control;
 require ZoneMinder::Sensor_Server;
 require ZoneMinder::Sensor;
 require ZoneMinder::Sensor_Action;
+require ZoneMinder::Sensor_Action_Type;
 
 my $browser = LWP::UserAgent->new();
-my %Alarm_Types = (
-  '01' => 'HIGH_VB_ALARM',
-  '02' => 'TEMP_ALARM',
-  '03' => 'MAG_ALARM',
-  '04' => 'WIND_FILTER',
-  '05' => 'TREND_FILTER',
-  '06' => 'RADAR_FILTER',
-  '07' => 'NODE_MISSING_ALARM',
-  '08' => 'WIRECUT',
-);
+my %Alarm_Types = map { $$_{TypeId} => $$_{Name} } ZoneMinder::Sensor_Action_Type->find();
 
 while (!$zm_terminate) {
 
