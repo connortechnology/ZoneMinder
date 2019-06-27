@@ -19,7 +19,6 @@ class Sensor_Action extends ZM_Object {
     'Action'      =>  '',
   );
 
-
   public static function find($parameters = array(), $options = array() ) {
     return ZM_Object::_find(get_class(), $parameters, $options);
   }
