@@ -25,6 +25,7 @@ if ( !$canEdit ) {
 }
 
 require_once('includes/Sensor_Server.php');
+require_once('includes/Sensor.php');
 $Server = new ZM\Sensor_Server($_REQUEST['id']);
 if ( $_REQUEST['id'] and ! $Server->Id() ) {
   $view = 'error';
@@ -59,18 +60,34 @@ xhtmlHeaders(__FILE__, translate('SensorServer').' - '.$Server->Name());
               <th scope="row"><?php echo translate('PollFrequency') ?></th>
               <td><input type="number" name="newServer[PollFrequency]" value="<?php echo $Server->PollFrequency() ?>"/><?php echo translate('Seconds');?></td>
             </tr>
+            <tr>
+              <th scope="row"><?php echo translate('Chains') ?></th>
+              <td><input type="text" name="newServer[Chains]" value="<?php echo $Server->Chains() ?>"/></td>
+            </tr>
           </tbody>
         </table>
-<fieldset><legend>Sensors</legend>
-        <table>
-          <thead>
-            <tr>
-              <th class="SensorId">Id</th>
-              <th class="SensorName"><?php echo translate('Name') ?></th>
-              <th class="SensorActions"><?php echo translate('Actions') ?></th>
-            </tr>
-          </thead>
-          <tbody>
+<?php
+if ( $Server->Chains() ) {
+  $chunks = array_chunk(preg_split('/(:|,)/', $Server->Chains()), 2);
+  $chains = array_combine(array_column($chunks, 0), array_column($chunks,1));
+} else {
+  $chains = array(null=>'');
+}
+foreach ( $chains as $chain_id=>$chain_name ) {
+?>
+
+  <div class="Chain" style="width: <?php echo 100/count(array_keys($chains))?>%;">
+        <fieldset><legend>Sensors<?php echo $chain_id ? ' on ' . $chain_name : '' ?></legend>
+          <table>
+            <thead>
+              <tr>
+                <th class="SensorId">Id</th>
+                <th class="SensorName"><?php echo translate('Name') ?></th>
+                <th class="SensorActions"><?php echo translate('Actions') ?></th>
+                <th class="buttons"><?php echo makePopupButton((new ZM\Sensor())->link_to().'&amp;newServer[SensorServerId]='.$Server->Id(),'zmSensorNew', 'sensor', '+', $canEdit ) ?></th>
+              </tr>
+            </thead>
+            <tbody>
 <?php
 
 $action_link = function($Action){
@@ -82,26 +99,29 @@ $action_link = function($Action){
     $Action->to_string(),
     $canEdit );
 };
-foreach ( $Server->Sensors() as $Sensor ) {
+foreach ( ZM\Sensor::find(array('SensorServerId'=>$Server->Id(),'Chain'=>$chain_id)) as $Sensor ) {
   echo sprintf('
     <tr>
       <td class="SensorId"><input type="text" name="Sensor%1$dd[SensorId]" value="%2$s"/></td>
       <td class="SensorName"><input type="text" name="Sensor%1$dd[SensorName]" value="%3$s"/></td>
       <td class="SensorActions">%4$s</td>
       <td class="buttons">%5$s</td>
-    </tr>', $Sensor->Id(), $Sensor->SensorId(), $Sensor->Name(),
-    implode('<br/>', array_map($action_link, $Sensor->Actions() )),
-    makePopupButton((new ZM\Sensor_Action())->link_to().'&amp;newAction[SensorId]='.$Sensor->Id(),
-    'zmActionNew',
-    'sensor_action',
-    '+',
-    $canEdit )
+    </tr>',
+    $Sensor->Id(), $Sensor->SensorId(), $Sensor->Name(),
+    implode('<br/>', array_map($action_link, $Sensor->Actions())),
+    makePopupButton($Sensor->link_to(), 'zmSensor'.$Sensor->Id(), 'sensor', 'Edit', $canEdit)
   );
-}
+} # end foreach
+
 ?>
-          </tbody>
-        </table>
-</fieldset>
+            </tbody>
+          </table>
+        </fieldset>
+</div>
+<?php
+} # end foreach Chain
+?>
+
         <div id="contentButtons">
           <button type="submit" name="action" value="Save" ><?php echo translate('Save') ?></button>
           <button type="button" data-on-click="closeWindow"><?php echo translate('Cancel') ?></button>
