@@ -25,6 +25,7 @@ if ( !canEdit('System') ) {
 $canEdit = canEdit('System');
 
 require_once('includes/Sensor_Action.php');
+require_once('includes/Sensor_Action_Type.php');
 require_once('includes/Sensor.php');
 require_once('includes/Monitor.php');
 
@@ -70,6 +71,20 @@ echo htmlSelect('newAction[SensorId]', $Sensors, $Action->SensorId(),
               <th scope="row"><?php echo translate('Name') ?></th>
               <td><input type="text" name="newAction[Name]" value="<?php echo $Action->Name() ?>"/></td>
             </tr>
+<tr>
+              <th scope="row"><?php echo translate('Type') ?></th>
+              <td>
+<?php
+$Types = array(''=>'Unknown')+ZM\Sensor_Action_Type::Objects_Indexed_By_Id();
+echo htmlSelect('newAction[SensorId]', $Types, $Action->TypeId(),
+    array(
+      'class'=>'chosen',
+      'data-placeholder'=>'Unknown',
+      'data-on-change-this'=>'updateButtons'
+    ) );
+?>
+            </tr>
+
             <tr>
               <th scope="row"><?php echo translate('MinValue') ?></th>
               <td><input type="number" name="newAction[MinValue]" value="<?php echo $Action->MinValue() ?>" data-on-input-this="updateButtons"/></td>
