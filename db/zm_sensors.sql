@@ -4,6 +4,7 @@ CREATE TABLE Sensors (
   `Id` integer unsigned NOT NULL auto_increment,
   `SensorId`    VARCHAR(255),
   `SensorServerId`  integer unsigned,
+  `Chain`       integer unsigned,
   `Name`    VARCHAR(255),
   KEY `Sensors_SensorId_idx` (`SensorId`),
   KEY `Sensors_ServerId_idx` (`SensorServerId`),
