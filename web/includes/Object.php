@@ -137,6 +137,7 @@ class ZM_Object {
       if ( method_exists($this, $k) ) {
         $this->{$k}($v);
       } else {
+        Logger::Debug("Setting $k => $v");
         if ( is_array( $v ) ) {
 # perhaps should turn into a comma-separated string
           $this->{$k} = implode(',',$v);
@@ -204,6 +205,12 @@ class ZM_Object {
     }
     return false;
   } // end function save
+
+  public function delete() {
+    $class = get_class($this);
+    $table = $class::$table;
+    dbQuery("DELETE FROM $table WHERE Id=?", array($this->{'Id'}));
+  }
 
 } # end class Sensor Action
 ?>
