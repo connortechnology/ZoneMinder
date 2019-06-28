@@ -32,6 +32,12 @@ if ( $action == 'delete' ) {
           dbQuery('DELETE FROM Servers WHERE Id=?', array($Id));
       }
       $refreshParent = true;
+    } else if ( $_REQUEST['object'] == 'sensor_server' ) {
+      if ( !empty($_REQUEST['markIds']) ) {
+        foreach( $_REQUEST['markIds'] as $Id )
+          dbQuery('DELETE FROM Sensor_Servers WHERE Id=?', array($Id));
+      }
+      $refreshParent = true;
     } else if ( $_REQUEST['object'] == 'storage' ) {
       if ( !empty($_REQUEST['markIds']) ) {
         foreach( $_REQUEST['markIds'] as $Id )

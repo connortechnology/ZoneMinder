@@ -25,6 +25,7 @@ if ( !$canEdit ) {
 }
 
 require_once('includes/Sensor_Server.php');
+require_once('includes/Sensor_Server_Type.php');
 require_once('includes/Sensor.php');
 $Server = new ZM\Sensor_Server($_REQUEST['id']);
 if ( $_REQUEST['id'] and ! $Server->Id() ) {
@@ -53,6 +54,19 @@ xhtmlHeaders(__FILE__, translate('SensorServer').' - '.$Server->Name());
               <td><input type="text" name="newServer[Name]" value="<?php echo $Server->Name() ?>"/></td>
             </tr>
             <tr>
+              <th scope="row"><?php echo translate('Sensor') ?></th>
+              <td>
+<?php
+$SensorServerTypes = array(''=>'None')+ZM\Sensor_Server_Type::Objects_Indexed_By_Id();
+echo htmlSelect('newSensor[TypeId]', $SensorServerTypes, $Server->TypeId(),
+    array(
+      'class'=>'chosen',
+      'data-placeholder'=>'Unknown',
+      'data-on-change-this'=>'updateButtons'
+    ) );
+?>
+            </tr>
+            <tr>
               <th scope="row"><?php echo translate('Url') ?></th>
               <td><input type="url" name="newServer[Url]" value="<?php echo $Server->Url() ?>"/></td>
             </tr>
@@ -67,13 +81,14 @@ xhtmlHeaders(__FILE__, translate('SensorServer').' - '.$Server->Name());
           </tbody>
         </table>
 <?php
-if ( $Server->Chains() ) {
-  $chunks = array_chunk(preg_split('/(:|,)/', $Server->Chains()), 2);
-  $chains = array_combine(array_column($chunks, 0), array_column($chunks,1));
-} else {
-  $chains = array(null=>'');
-}
-foreach ( $chains as $chain_id=>$chain_name ) {
+if ( $Server->Id() ) {
+  if ( $Server->Chains() ) {
+    $chunks = array_chunk(preg_split('/(:|,)/', $Server->Chains()), 2);
+    $chains = array_combine(array_column($chunks, 0), array_column($chunks,1));
+  } else {
+    $chains = array(null=>'');
+  }
+  foreach ( $chains as $chain_id=>$chain_name ) {
 ?>
 
   <div class="Chain" style="width: <?php echo 100/count(array_keys($chains))?>%;">
@@ -120,6 +135,9 @@ foreach ( ZM\Sensor::find(array('SensorServerId'=>$Server->Id(),'Chain'=>$chain_
 </div>
 <?php
 } # end foreach Chain
+} else {
+  echo "Please save the server before entering/editing Servers.";
+}
 ?>
 
         <div id="contentButtons">

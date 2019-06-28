@@ -76,7 +76,7 @@ echo htmlSelect('newAction[SensorId]', $Sensors, $Action->SensorId(),
               <td>
 <?php
 $Types = array(''=>'Unknown')+ZM\Sensor_Action_Type::Objects_Indexed_By_Id();
-echo htmlSelect('newAction[SensorId]', $Types, $Action->TypeId(),
+echo htmlSelect('newAction[TypeId]', $Types, $Action->TypeId(),
     array(
       'class'=>'chosen',
       'data-placeholder'=>'Unknown',

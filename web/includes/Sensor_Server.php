@@ -4,12 +4,11 @@ require_once('database.php');
 require_once('Sensor.php');
 require_once('Object.php');
 
-$sensor_server_cache = array();
-
 class Sensor_Server extends ZM_Object {
   protected static $table = 'Sensor_Servers';
-  private $defaults = array(
+  protected $defaults = array(
     'Id'                   => null,
+    'TypeId'               => null,
     'Name'                 => '',
     'Url'                  => '',
     'PollFrequency'        => 3,

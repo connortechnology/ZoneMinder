@@ -25,28 +25,45 @@ if ( ! canEdit('System') ) {
 }
 
 if ( $action == 'Save' ) {
+  require_once('includes/Sensor_Server.php');
+  require_once('includes/Sensor_Server_Type.php');
+  require_once('includes/Sensor.php');
+
   if ( !empty($_REQUEST['id']) ) {
-    $dbServer = dbFetchOne(
-      'SELECT * FROM Sensor_Servers WHERE Id=?',
-      NULL,
-      array($_REQUEST['id']) );
+    $Server = ZM\Sensor_Server::find_one(array('Id'=>$_REQUEST['id']));
+    if ( ! $Server ) {
+      ZM\Error("Server not found");
+      return;
+    }
   } else {
-    $dbServer = array();
+    $Server = new ZM\Sensor_Server();
   }
 
-  $types = array();
-  $changes = getFormChanges($dbServer, $_REQUEST['newServer'], $types);
+  $changes = $Server->changes($_REQUEST['newServer']);
 
   if ( count($changes) ) {
-    if ( !empty($_REQUEST['id']) ) {
-      dbQuery('UPDATE Sensor_Servers SET '.implode(', ', $changes).' WHERE Id = ?',
-        array($_REQUEST['id']) );
+    if ( !$Server->Id() ) {
+      $Server->save($changes);
+      $view = 'none';
     } else {
-      dbQuery('INSERT INTO Sensor_Servers SET '.implode(', ', $changes));
+      $Server->set($changes);
+      if ( $Server->TypeId() ) {
+        $ServerType = ZM\Sensor_Server_Type::find_one(array('Id'=>$Server->TypeId()));
+        if ( $ServerType->Chains() and ! $Server->Chains() )
+          $Server->Chains($ServerType->Chains());
+        $Server->save();
+        if ( $ServerType->MaxSensors() ) {
+          for ( $sensor_id = 1; $sensor_id < $ServerType->MaxSensors(); $sensor_id += 1 ) {
+            $Sensor = new ZM\Sensor();
+            $Sensor->save(array('SensorServerId'=>$Server->Id()));
+          }
+        }
+      } else {
+        $Server->save();
+      }
     }
     $refreshParent = true;
   }
-  $view = 'none';
 } else {
   ZM\Error("Unknown action $action in saving Sensor_Server");
 }

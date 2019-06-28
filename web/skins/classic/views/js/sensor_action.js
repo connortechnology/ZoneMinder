@@ -11,13 +11,28 @@ function validateForm(form) {
 }
 function updateButtons(element) {
   var form = element.form;
-  console.log("UPDtate buttons");
+  if ( ! form ) {
+    form = $j('[name="contentForm"]');
+    if ( ! form ) {
+      console.log('No form found.');
+      return;
+    }
+    form = form[0];
+  }
+  console.log(form);
+  var elements = form.elements;
+  console.log(elements);
 
   var canSave = true;
-  if ( form.elements['newAction[SensorId]'] && !form.elements['newAction[SensorId]'].value ) {
+  if ( !elements['newAction[SensorId]'] ) {
+    console.log('No SensorId');
     canSave = false;
-  } else if ( form.elements['newAction[Action]'] && !form.elements['newAction[Action]'].value ) {
+  } else if ( !( elements['newAction[SensorId]'].selectedIndex > 0 ) ) {
+    console.log('No SensorId value' + elements['newAction[SensorId]'].selectedIndex );
     canSave = false;
+  } else if ( elements['newAction[Action]'] && !elements['newAction[Action]'].value ) {
+    canSave = false;
+    console.log('No action');
   }
   $j('#SaveButton')[0].disabled = !canSave;
 }

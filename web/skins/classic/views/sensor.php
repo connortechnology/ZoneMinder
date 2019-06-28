@@ -45,7 +45,7 @@ xhtmlHeaders(__FILE__, translate('Sensor').' - '.$Sensor->Name());
 <body>
   <div id="page">
     <div id="header">
-      <h2><?php echo translate('SensorSensor').' - '.$Sensor->Name() ?></h2>
+      <h2><?php echo translate('Sensor').' - '.$Sensor->Name() ?></h2>
     </div>
     <div id="content">
       <form name="contentForm" method="post" action="?" class="validateFormOnSubmit">
@@ -55,7 +55,7 @@ xhtmlHeaders(__FILE__, translate('Sensor').' - '.$Sensor->Name());
         <table id="contentTable" class="major">
           <tbody>
             <tr>
-              <th scope="row"><?php echo translate('Sensor') ?></th>
+              <th scope="row"><?php echo translate('SensorServer') ?></th>
               <td>
 <?php
 $SensorServers = array(''=>'Unknown')+ZM\Sensor_Server::Objects_Indexed_By_Id();

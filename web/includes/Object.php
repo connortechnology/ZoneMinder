@@ -8,7 +8,6 @@ class ZM_Object {
 
   public function __construct($IdOrRow = NULL) {
     $class = get_class($this);
-    Error("Class $class");
     global $object_cache;
     if ( ! isset($object_cache[$class]) )
       $object_cache[$class] = array();
@@ -103,6 +102,8 @@ class ZM_Object {
 
   public static function _find_one($class, $parameters = array() ) {
     global $object_cache;
+    if ( ! isset($object_cache[$class]) )
+      $object_cache[$class] = array();
     $cache = $object_cache[$class];
     if ( 
         ( count($parameters) == 1 ) and
@@ -110,7 +111,7 @@ class ZM_Object {
         isset($cache[$parameters['Id']]) ) {
       return $cache[$parameters['Id']];
     }
-    $results = _find($class, $parameters, array('limit'=>1));
+    $results = ZM_Object::_find($class, $parameters, array('limit'=>1));
     if ( ! sizeof($results) ) {
       return;
     }
