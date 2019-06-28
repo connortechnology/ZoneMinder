@@ -58,7 +58,7 @@ xhtmlHeaders(__FILE__, translate('SensorServer').' - '.$Server->Name());
               <td>
 <?php
 $SensorServerTypes = array(''=>'None')+ZM\Sensor_Server_Type::Objects_Indexed_By_Id();
-echo htmlSelect('newSensor[TypeId]', $SensorServerTypes, $Server->TypeId(),
+echo htmlSelect('newServer[TypeId]', $SensorServerTypes, $Server->TypeId(),
     array(
       'class'=>'chosen',
       'data-placeholder'=>'Unknown',
