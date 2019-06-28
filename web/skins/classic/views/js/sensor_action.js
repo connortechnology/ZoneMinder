@@ -30,6 +30,9 @@ function updateButtons(element) {
   } else if ( !( elements['newAction[SensorId]'].selectedIndex > 0 ) ) {
     console.log('No SensorId value' + elements['newAction[SensorId]'].selectedIndex );
     canSave = false;
+  } else if ( !( elements['newAction[MonitorId]'].selectedIndex > 0 ) ) {
+    console.log('No MonitorId value' + elements['newAction[MonitorId]'].selectedIndex );
+    canSave = false;
   } else if ( elements['newAction[Action]'] && !elements['newAction[Action]'].value ) {
     canSave = false;
     console.log('No action');
