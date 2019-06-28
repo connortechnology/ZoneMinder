@@ -125,6 +125,9 @@ while (!$zm_terminate) {
             if ( ! $Alarm_Types{$type_id} ) {
               Warning("Unknown alarm type! $type_id");
             }
+
+            my %Sensors = map { $$_{Id}, $_ } ZoneMinder::Sensor->find(ServerId=>$$Server{Id}, Chain=>$chain);
+
             Debug("Type id: $type_id $Alarm_Types{$type_id} sensor id: $sensor_id value: $value");
             foreach my $SA ( ZoneMinder::Sensor_Action->find(
                 SensorId  =>  $sensor_id,
@@ -132,6 +135,10 @@ while (!$zm_terminate) {
                 'MinValue is null or <='=> $value,
                 'MaxValue is null or >='=> $value,
               ) ) {
+              if ( ! $Sensors{$$SA{SensorId}} ) {
+                Debug("Sensor $$SA{SensorId} Not found for Chain $chain");
+                next;
+              }
               $Monitor_Actions{$$SA{MonitorId}} = [] if ! $Monitor_Actions{$$SA{MonitorId}};
               push @{$Monitor_Actions{$$SA{MonitorId}}}, {Value=>$value, Action=>$SA};
             } # end foreach Sensor_Action
