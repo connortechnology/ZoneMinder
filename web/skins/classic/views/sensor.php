@@ -93,7 +93,9 @@ Values detected above this will generate a warning. Leave blank for no limit.
             </tr>
           </tbody>
         </table>
-
+<?php 
+if ( $Sensor->Id() ) {
+?>
 <div class="Actions">
       <fieldset><legend>Actions</legend>
           <table>
@@ -133,8 +135,11 @@ foreach ( ZM\Sensor_Action::find(array('SensorId'=>$Sensor->Id())) as $Action ) 
           </table>
         </fieldset>
 </div>
-
-
+<?php 
+} else {
+  echo "Please save the sensor defore defining actions";
+}
+?>
         <div id="contentButtons">
           <button type="submit" name="action" value="Save" id="SaveButton"><?php echo translate('Save') ?></button>
           <button type="submit" name="action" value="Delete" <?php echo $Sensor->Id() ? '' : 'disabled'?>><?php echo translate('Delete') ?></button>
