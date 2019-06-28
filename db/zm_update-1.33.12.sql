@@ -5,7 +5,7 @@ SET @s = (SELECT IF(
       AND column_name = 'TypeId'
     ) > 0,
     "SELECT 'Column TypeId already exists in Sensor_Servers'",
-    "ALTER TABLE Monitors ADD `TypeId`  integer AFTER `Name`"
+    "ALTER TABLE Sensor_Servers ADD `TypeId`  integer AFTER `Name`"
     ));
 
 PREPARE stmt FROM @s;
@@ -20,3 +20,5 @@ CREATE TABLE Sensor_Server_Types (
 );
 
 INSERT INTO Sensor_Server_Types (`Name`,`Chains`,`MaxSensors`) VALUES ('Node','1:Left,2:Right', 250);
+
+ALTER TABLE Sensors add Chain integer unsigned after SensorServerId;

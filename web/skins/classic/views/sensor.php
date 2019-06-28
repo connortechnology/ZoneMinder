@@ -107,7 +107,7 @@ if ( $Sensor->Id() ) {
                 <th class="MaxValue"><?php echo translate('MaxValue') ?></th>
                 <th class="Monitor"><?php echo translate('Monitor') ?></th>
                 <th class="Monitor"><?php echo translate('Actions') ?></th>
-                <th class="buttons"><?php echo makePopupButton((new ZM\Sensor_Action())->link_to().'&amp;newSensor[SensorId]='.$Sensor->Id(),'zmSensorActionNew', 'sensor_action', '+', $canEdit ) ?></th>
+                <th class="buttons"><?php echo makePopupButton((new ZM\Sensor_Action())->link_to().'&amp;newAction[SensorId]='.$Sensor->Id(),'zmSensorActionNew', 'sensor_action', '+', $canEdit ) ?></th>
               </tr>
             </thead>
             <tbody>
@@ -123,7 +123,7 @@ foreach ( ZM\Sensor_Action::find(array('SensorId'=>$Sensor->Id())) as $Action ) 
       <td class="Actions">%8$s</td>
       <td class="buttons">%9$s</td>
     </tr>',
-    $Action->Id(), $Action->SensorId(), $Action->Name(), $Action->Type(), $Action->MinValue(), $Action->MaxValue(),
+    $Action->Id(), $Action->SensorId(), $Action->Name(), $Action->Type()->Name(), $Action->MinValue(), $Action->MaxValue(),
     $Action->Monitor()->Name(),
     $Action->Action(),
     makePopupButton($Action->link_to(), 'zmAction'.$Action->Id(), 'sensor_action', 'Edit', $canEdit)

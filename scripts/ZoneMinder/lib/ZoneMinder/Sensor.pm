@@ -33,7 +33,8 @@ require ZoneMinder::Object;
 
 use parent qw(ZoneMinder::Object);
 
-use vars qw/ $table $primary_key %fields /;
+use vars qw/ $debug $table $primary_key %fields /;
+$debug = 0;
 $table = 'Sensors';
 $primary_key = 'Id';
 
@@ -41,6 +42,7 @@ $primary_key = 'Id';
         Id              =>  'Id',
         Name            =>  'Name',
         SensorServerId  =>  'SensorServerId',
+	Chain		=>	'Chain',
 );
 
 

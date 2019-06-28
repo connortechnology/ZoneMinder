@@ -3,6 +3,7 @@ namespace ZM;
 require_once('database.php');
 require_once('Monitor.php');
 require_once('Object.php');
+require_once('Sensor_Action_Type.php');
 
 $sensor_action_cache = array();
 
@@ -61,6 +62,8 @@ class Sensor_Action extends ZM_Object {
     return $string;
   } # end public function to_string
 
-
+  public function Type() {
+	  return Sensor_Action_Type::find_one(array('Id'=>$this->{'TypeId'}));
+  }
 } # end class Sensor Action
 ?>

@@ -12,6 +12,8 @@ class Sensor extends ZM_Object {
     'SensorServerId'       => null,
     'Name'                 => '',
     'Chain'                => null,
+    'MaxValue'		=> null,
+    'MinValue'	=> null,
   );
 
   public static function find($parameters = array(), $options = array() ) {
@@ -37,7 +39,7 @@ class Sensor extends ZM_Object {
   static function Objects_Indexed_By_Id() {
     $Objects = array();
     foreach ( Sensor::find(null, array('order'=>'lower(Name)')) as $Object ) {
-      $Objects[$Object->Id()] = $Object;
+      $Objects[$Object->Id()] = 'Chain ' . $Object->Chain() . ' ' . $Object->SensorId();
     }
     return $Objects;
   }

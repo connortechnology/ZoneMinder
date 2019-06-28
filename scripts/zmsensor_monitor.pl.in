@@ -88,12 +88,17 @@ require ZoneMinder::Sensor_Action_Type;
 
 my $browser = LWP::UserAgent->new();
 my %Alarm_Types = map { $$_{TypeId} => $$_{Name} } ZoneMinder::Sensor_Action_Type->find();
+Debug("Found " . %Alarm_Types . ' alarm types');
 
 while (!$zm_terminate) {
 
-  my $poll_start = [gettimeofday()];
+	my $poll_start = [gettimeofday()];
 
-  foreach my $Server ( ZoneMinder::Sensor_Server->find($server_id?(Id=>$server_id):()) ) {
+	my @Servers = ZoneMinder::Sensor_Server->find($server_id?(Id=>$server_id):());
+	if ( ! @Servers ) {
+		die " Found no servers";
+	}
+  foreach my $Server ( @Servers ) {
     if ( !$Server->Url() ) {
       Error("No url configured for Sensor Server $$Server{Name}");
       next;
@@ -103,14 +108,18 @@ while (!$zm_terminate) {
     if ( ! $response->is_success ) {
       Warning("Failed getting xml chain data from $$Server{Url}: ".$response->status_line);
     } else {
-      Debug($response->content());
+      if ( !$response->content() ) {
+	      Warning(" NO Content");
+	      next;
+      }
+      #Debug($response->content());
       my $xml = XML::Hash::LX::xml2hash($response->content());
       if ( !($xml and $$xml{response}) ) {
         Warning("Error getting xml chain data from $$Server{Url}");
         Data::Dumper->Dump($xml);
       } else {
         my $response = $$xml{response};
-        Data::Dumper::Dump($xml);
+	#Data::Dumper::Dump($xml);
 
 
         # Since we can have conflicting sensors, we will build up a list of actions to take for each Monitor.
@@ -118,24 +127,38 @@ while (!$zm_terminate) {
         my %Monitor_Actions;
         
         foreach my $chain ( keys %{$response} ) {
-          Debug("Handling chain $chain $$response{$chain}");
+		#Debug("Handling chain $chain $$response{$chain}");
           my $chain_data = $$response{$chain};
+	  my ($chain_name, $chain_id) = $chain =~ /^(\w+)(\d)$/;
+	  my @Sensors = ZoneMinder::Sensor->find(
+		  SensorServerId=>$$Server{Id},
+		  Chain=>$chain_id);
+	  my %Sensors_By_SensorId = map { $$_{SensorId}, $_ }  @Sensors;
+	  my %Sensors_By_Id = map { $$_{Id}, $_ }  @Sensors;
+
           foreach my $sensor_value ( $chain_data =~ /(#\d+!)/g ) {
             my ( $type_id, $sensor_id, $value ) = ( $sensor_value =~ /^#(\d\d)(\d\d)(\d\d)!$/ );
+	    if ( ! $Sensors_By_SensorId{$sensor_id} ) {
+		    Warning("No sensors found for $sensor_id on change $chain_id");
+		    next;
+	    }
             if ( ! $Alarm_Types{$type_id} ) {
               Warning("Unknown alarm type! $type_id");
             }
 
-            my %Sensors = map { $$_{Id}, $_ } ZoneMinder::Sensor->find(ServerId=>$$Server{Id}, Chain=>$chain);
-
             Debug("Type id: $type_id $Alarm_Types{$type_id} sensor id: $sensor_id value: $value");
-            foreach my $SA ( ZoneMinder::Sensor_Action->find(
-                SensorId  =>  $sensor_id,
-                TypeId    =>  $type_id,
-                'MinValue is null or <='=> $value,
-                'MaxValue is null or >='=> $value,
-              ) ) {
-              if ( ! $Sensors{$$SA{SensorId}} ) {
+	    my @Actions = 
+	    ZoneMinder::Sensor_Action->find(
+		    SensorId  =>  $Sensors_By_SensorId{$sensor_id}{Id},
+		    TypeId    =>  1*$type_id,
+		    'MinValue is null or <='=> $value,
+		    'MaxValue is null or >='=> $value,
+	    );
+	    if ( ! @Actions ) {
+		    Debug("No actions for Sesnors $sensor_id type $type_id for value $value");
+	    }
+            foreach my $SA (@Actions ) {
+              if ( ! $Sensors_By_Id{$$SA{SensorId}} ) {
                 Debug("Sensor $$SA{SensorId} Not found for Chain $chain");
                 next;
               }
@@ -147,6 +170,7 @@ while (!$zm_terminate) {
         } # end foreach chain
 
         foreach my $MonitorId ( keys %Monitor_Actions ) {
+		Debug("Actions for monitor $MonitorId");
           my @Sorted_Actions = sort { $$a{Value} <=> $$b{Value} } @{$Monitor_Actions{$MonitorId}};
 
           foreach my $SSA ( @Sorted_Actions ) {
