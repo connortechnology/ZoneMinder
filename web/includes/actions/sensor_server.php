@@ -42,7 +42,7 @@ if ( $action == 'Save' ) {
   $changes = $Server->changes($_REQUEST['newServer']);
 
   if ( count($changes) ) {
-    if ( !$Server->Id() ) {
+    if ( $Server->Id() ) {
       $Server->save($changes);
       $view = 'none';
     } else {
@@ -53,14 +53,24 @@ if ( $action == 'Save' ) {
           $Server->Chains($ServerType->Chains());
         $Server->save();
         if ( $ServerType->MaxSensors() ) {
-          for ( $sensor_id = 1; $sensor_id < $ServerType->MaxSensors(); $sensor_id += 1 ) {
-            $Sensor = new ZM\Sensor();
-            $Sensor->save(array('SensorServerId'=>$Server->Id()));
+          if ( $Server->Chains() ) {
+            $chunks = array_chunk(preg_split('/(:|,)/', $Server->Chains()), 2);
+            $chains = array_combine(array_column($chunks, 0), array_column($chunks,1));
+          } else {
+            $chains = array(null=>'');
           }
+          foreach ( $chains as $chain_id=>$chain_name ) {
+            for ( $sensor_id = 1; $sensor_id < $ServerType->MaxSensors(); $sensor_id += 1 ) {
+              $Sensor = new ZM\Sensor();
+              $Sensor->save(array('SensorServerId'=>$Server->Id(), 'Chain'=>$chain_id, 'SensorId'=>$sensor_id));
+            }
+          } # end foreach Chain
         }
       } else {
+        ZM\Error("No TypeId" . $Server->TypeId());
         $Server->save();
       }
+      $_REQUEST['id'] = $Server->Id();
     }
     $refreshParent = true;
   }
