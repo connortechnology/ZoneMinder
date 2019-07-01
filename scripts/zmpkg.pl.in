@@ -271,7 +271,7 @@ if ( $command =~ /^(?:start|restart)$/ ) {
       runCommand('zmdc.pl start zmx10.pl -c start');
     }
     #if ( $Config{ZM_OPT_SENSOR_MONITOR} ) {
-      runCommand('zmdc.pl start zmsensor_monitor.pl');
+      runCommand('zmdc.pl start zmsensor_monitor.pl --daemon');
     #}
 
     runCommand('zmdc.pl start zmwatch.pl');

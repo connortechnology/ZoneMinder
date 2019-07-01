@@ -139,8 +139,12 @@ while (!$zm_terminate) {
           foreach my $sensor_value ( $chain_data =~ /(#\d+!)/g ) {
             my ( $type_id, $sensor_id, $value ) = ( $sensor_value =~ /^#(\d\d)(\d\d)(\d\d)!$/ );
 	    if ( ! $Sensors_By_SensorId{$sensor_id} ) {
+		    if ( $Sensors_By_SensorId{1*$sensor_id} ) {
+			    $sensor_id *= 1;
+		    } else {
 		    Warning("No sensors found for $sensor_id on change $chain_id");
 		    next;
+	    }
 	    }
             if ( ! $Alarm_Types{$type_id} ) {
               Warning("Unknown alarm type! $type_id");

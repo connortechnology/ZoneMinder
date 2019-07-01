@@ -57,7 +57,7 @@ sub Monitor {
 sub do {
   my $SA = shift;
 
-  if ( $$SA{Action} =~ /^Preset (\d+)/ ) {
+  if ( $$SA{Action} =~ /^Preset (\d+)/i ) {
     my $preset_id = $1;
 
     my $command = join('',

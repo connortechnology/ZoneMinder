@@ -99,7 +99,7 @@ if ( $Server->Id() ) {
                 <th class="SensorId">Id</th>
                 <th class="SensorName"><?php echo translate('Name') ?></th>
                 <th class="SensorActions"><?php echo translate('Actions') ?></th>
-                <th class="buttons"><?php echo makePopupButton((new ZM\Sensor())->link_to().'&amp;newServer[SensorServerId]='.$Server->Id(),'zmSensorNew', 'sensor', '+', $canEdit ) ?></th>
+                <th class="buttons"><?php echo makePopupButton((new ZM\Sensor())->link_to().'&amp;newSensor[SensorServerId]='.$Server->Id().'&newSensor[Chain]='.$chain_id,'zmSensorNew', 'sensor', '+', $canEdit ) ?></th>
               </tr>
             </thead>
             <tbody>

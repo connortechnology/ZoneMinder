@@ -79,7 +79,7 @@ if ( canView('Control') && $monitor->Type() == 'Local' ) {
     </div>
 <?php
 if ( $monitor->Status() != 'Capturing' ) {
-  echo '<div class="warning">Monitor is not capturing. We will be unable to provide an image</div>';
+  #echo '<div class="warning">Monitor is not capturing. We will be unable to provide an image</div>'.$monitor->Status();
 }
 ?>
     <div id="content">
