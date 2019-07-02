@@ -42,5 +42,15 @@ class Sensor_Server extends ZM_Object {
     return $Objects;
   }
 
+  public function Chains_array() {
+    if ( $this->Chains() ) {
+      $chunks = array_chunk(preg_split('/(:|,)/', $this->Chains()), 2);
+      $chains = array_combine(array_column($chunks, 0), array_column($chunks, 1));
+    } else {
+      $chains = array(null=>'');
+    }
+    return $chains;
+  }
+
 } # end class Sensor_Server
 ?>
