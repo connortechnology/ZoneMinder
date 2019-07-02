@@ -4,6 +4,7 @@ require_once('database.php');
 require_once('Monitor.php');
 require_once('Object.php');
 require_once('Sensor_Action_Type.php');
+require_once('Sensor.php');
 
 $sensor_action_cache = array();
 
@@ -38,6 +39,18 @@ class Sensor_Action extends ZM_Object {
         $this->{'Monitor'} = new Monitor();
     }
     return $this->{'Monitor'};
+  }
+
+  public function Sensor($new=-1) {
+    if ( $new != -1 )
+      $this->{'Sensor'} = $new;
+
+    if ( !(array_key_exists('Sensor', $this) and $this->{'Sensor'} ) ) {
+      $this->{'Sensor'} = Sensor::find_one(array('Id'=>$this->SensorId()));
+      if ( ! $this->{'Sensor'} )
+        $this->{'Sensor'} = new Sensor();
+    }
+    return $this->{'Sensor'};
   }
 
   public function link_to() {
