@@ -36,15 +36,21 @@ class Sensor extends ZM_Object {
     return $this->{'Actions'};
   } # end public function Actions
 
-  static function Objects_Indexed_By_Id() {
+  static function Objects_Indexed_By_Id( $Sensors = null ) {
+    if ( !$Sensors )
+      $Sensors = Sensor::find(null, array('order'=>'lower(Name)'));
+
     $Objects = array();
-    foreach ( Sensor::find(null, array('order'=>'lower(Name)')) as $Object ) {
+    foreach ( $Sensors as $Object ) {
       $Objects[$Object->Id()] = 'Chain ' . $Object->Chain() . ' ' . $Object->SensorId();
     }
     return $Objects;
   }
   public function link_to() {
     return '?view=sensor&id='.$this->{'Id'};
+  }
+  public function Server() {
+    return Sensor_Server::find_one(array('Id'=>$this->SensorServerId()));
   }
 
 } # end class Sensor
