@@ -73,11 +73,22 @@ echo htmlSelect('newSensor[SensorServerId]', $SensorServers, $Sensor->SensorServ
             </tr>
             <tr>
               <th scope="row"><?php echo translate('SensorChain') ?></th>
-              <td><input type="text" name="newSensor[Chain]" value="<?php echo $Sensor->Chain() ?>"/></td>
+              <td>
+<?php
+$Server = $Sensor->Server();
+if ( $Server->Chains() ) {
+  echo htmlSelect('newSensor[Chain]', $Server->Chains_array(), $Sensor->Chain());
+} else {
+  echo '<input type="text" name="newSensor[Chain]" value="'. $Sensor->Chain() .'"/>';
+}
+?>
+              </td>
             </tr>
             <tr>
               <th scope="row"><?php echo translate('SensorId') ?></th>
-              <td><input type="text" name="newSensor[SensorId]" value="<?php echo $Sensor->SensorId() ?>"/></td>
+              <td>
+                <input type="text" name="newSensor[SensorId]" value="<?php echo $Sensor->SensorId() ?>"/>
+              </td>
             </tr>
             <tr>
               <th scope="row"><?php echo translate('MinValue') ?></th>
