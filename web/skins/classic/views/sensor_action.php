@@ -30,7 +30,7 @@ require_once('includes/Sensor.php');
 require_once('includes/Monitor.php');
 
 $Action = new ZM\Sensor_Action($_REQUEST['id']);
-if ( $_REQUEST['id'] and ! $Action->Id() ) {
+if ( $_REQUEST['id'] and !$Action->Id() ) {
   $view = 'error';
   return;
 }
@@ -58,8 +58,17 @@ xhtmlHeaders(__FILE__, translate('SensorAction').' - '.$Action->Name());
               <th scope="row"><?php echo translate('Sensor') ?></th>
               <td>
 <?php
-$Sensors = array(''=>'Unknown')+ZM\Sensor::Objects_Indexed_By_Id();
-echo htmlSelect('newAction[SensorId]', $Sensors, $Action->SensorId(),
+$Sensors = array(''=>'Unknown')+ZM\Sensor::Objects_Indexed_By_Id(
+  ZM\Sensor::find(array('Chain'=>$Action->Sensor()->Chain()), array('order'=>'lower(Name)'))
+);
+echo htmlSelect('newAction[MinSensorId]', $Sensors, $Action->MinSensorId(),
+    array(
+      'class'=>'chosen',
+      'data-placeholder'=>'Unknown',
+      'data-on-change-this'=>'updateButtons'
+    ) );
+echo ' to ';
+echo htmlSelect('newAction[MaxSensorId]', $Sensors, $Action->MaxSensorId(),
     array(
       'class'=>'chosen',
       'data-placeholder'=>'Unknown',
@@ -71,7 +80,7 @@ echo htmlSelect('newAction[SensorId]', $Sensors, $Action->SensorId(),
               <th scope="row"><?php echo translate('Name') ?></th>
               <td><input type="text" name="newAction[Name]" value="<?php echo $Action->Name() ?>"/></td>
             </tr>
-<tr>
+            <tr>
               <th scope="row"><?php echo translate('Type') ?></th>
               <td>
 <?php
