@@ -82,13 +82,7 @@ echo htmlSelect('newServer[TypeId]', $SensorServerTypes, $Server->TypeId(),
         </table>
 <?php
 if ( $Server->Id() ) {
-  if ( $Server->Chains() ) {
-    $chunks = array_chunk(preg_split('/(:|,)/', $Server->Chains()), 2);
-    $chains = array_combine(array_column($chunks, 0), array_column($chunks,1));
-  } else {
-    $chains = array(null=>'');
-  }
-  foreach ( $chains as $chain_id=>$chain_name ) {
+  foreach ( $Server->Chains_array() as $chain_id=>$chain_name ) {
 ?>
 
   <div class="Chain" style="width: <?php echo 100/count(array_keys($chains))?>%;">
