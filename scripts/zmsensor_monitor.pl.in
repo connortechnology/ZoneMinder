@@ -105,11 +105,11 @@ while (!$zm_terminate) {
     }
 
     my $response = $browser->get($Server->Url());
-    if ( ! $response->is_success ) {
+    if ( !$response->is_success ) {
       Warning("Failed getting xml chain data from $$Server{Url}: ".$response->status_line);
     } else {
       if ( !$response->content() ) {
-	      Warning(" NO Content");
+	      Warning("No Content");
 	      next;
       }
       #Debug($response->content());
@@ -119,48 +119,48 @@ while (!$zm_terminate) {
         Data::Dumper->Dump($xml);
       } else {
         my $response = $$xml{response};
-	#Data::Dumper::Dump($xml);
-
+      	#Data::Dumper::Dump($xml);
 
         # Since we can have conflicting sensors, we will build up a list of actions to take for each Monitor.
         # Then iterate over them and perform the ones with the highest value.
         my %Monitor_Actions;
         
         foreach my $chain ( keys %{$response} ) {
-		#Debug("Handling chain $chain $$response{$chain}");
+          #Debug("Handling chain $chain $$response{$chain}");
           my $chain_data = $$response{$chain};
-	  my ($chain_name, $chain_id) = $chain =~ /^(\w+)(\d)$/;
-	  my @Sensors = ZoneMinder::Sensor->find(
-		  SensorServerId=>$$Server{Id},
-		  Chain=>$chain_id);
-	  my %Sensors_By_SensorId = map { $$_{SensorId}, $_ }  @Sensors;
-	  my %Sensors_By_Id = map { $$_{Id}, $_ }  @Sensors;
+          my ($chain_name, $chain_id) = $chain =~ /^(\w+)(\d)$/;
+          my @Sensors = ZoneMinder::Sensor->find(
+            SensorServerId=>$$Server{Id},
+            Chain=>$chain_id);
+          my %Sensors_By_SensorId = map { $$_{SensorId}, $_ }  @Sensors;
+          my %Sensors_By_Id = map { $$_{Id}, $_ }  @Sensors;
 
           foreach my $sensor_value ( $chain_data =~ /(#\d+!)/g ) {
             my ( $type_id, $sensor_id, $value ) = ( $sensor_value =~ /^#(\d\d)(\d\d)(\d\d)!$/ );
-	    if ( ! $Sensors_By_SensorId{$sensor_id} ) {
-		    if ( $Sensors_By_SensorId{1*$sensor_id} ) {
-			    $sensor_id *= 1;
-		    } else {
-		    Warning("No sensors found for $sensor_id on change $chain_id");
-		    next;
-	    }
-	    }
+            if ( ! $Sensors_By_SensorId{$sensor_id} ) {
+              if ( $Sensors_By_SensorId{1*$sensor_id} ) {
+                $sensor_id *= 1;
+              } else {
+                Debug("No sensors found for $sensor_id on chain $chain_id $chain_name");
+                next;
+              }
+            }
             if ( ! $Alarm_Types{$type_id} ) {
               Warning("Unknown alarm type! $type_id");
             }
 
             Debug("Type id: $type_id $Alarm_Types{$type_id} sensor id: $sensor_id value: $value");
-	    my @Actions = 
-	    ZoneMinder::Sensor_Action->find(
-		    SensorId  =>  $Sensors_By_SensorId{$sensor_id}{Id},
-		    TypeId    =>  1*$type_id,
-		    'MinValue is null or <='=> $value,
-		    'MaxValue is null or >='=> $value,
-	    );
-	    if ( ! @Actions ) {
-		    Debug("No actions for Sesnors $sensor_id type $type_id for value $value");
-	    }
+            my @Actions = 
+            ZoneMinder::Sensor_Action->find(
+              'MinSensorId is null or <=' =>  $Sensors_By_SensorId{$sensor_id}{Id},
+              'MaxSensorId is null or >=' =>  $Sensors_By_SensorId{$sensor_id}{Id},
+              TypeId    =>  1*$type_id,
+              'MinValue is null or <='=> $value,
+              'MaxValue is null or >='=> $value,
+            );
+            if ( ! @Actions ) {
+              Debug("No actions for Sesnors $sensor_id type $type_id for value $value");
+            }
             foreach my $SA (@Actions ) {
               if ( ! $Sensors_By_Id{$$SA{SensorId}} ) {
                 Debug("Sensor $$SA{SensorId} Not found for Chain $chain");
@@ -174,7 +174,7 @@ while (!$zm_terminate) {
         } # end foreach chain
 
         foreach my $MonitorId ( keys %Monitor_Actions ) {
-		Debug("Actions for monitor $MonitorId");
+          Debug("Actions for monitor $MonitorId");
           my @Sorted_Actions = sort { $$a{Value} <=> $$b{Value} } @{$Monitor_Actions{$MonitorId}};
 
           foreach my $SSA ( @Sorted_Actions ) {
@@ -183,11 +183,11 @@ while (!$zm_terminate) {
           }
           my $SSA = $Sorted_Actions[0];
           my $SA = $$SSA{Action};
-            
+
           Debug("Performing $$SA{Action}");
 
           $SA->do();
-        }
+        } # end foreach Monitor in %Monitor_Actions
       } #end if valid response
     } # end have response
 
