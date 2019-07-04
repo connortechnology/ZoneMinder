@@ -13,6 +13,7 @@ class Sensor_Server extends ZM_Object {
     'Url'                  => '',
     'PollFrequency'        => 3,
     'Chains'               => null,
+    'Enabled'              => true,
   );
 
   public function Sensors($new=-1) {
@@ -30,8 +31,8 @@ class Sensor_Server extends ZM_Object {
     return ZM_Object::_find(get_class(), $parameters, $options);
   }
 
-  public static function find_one( $parameters = array() ) {
-    return ZM_Object::_find_one(get_class(), $parameters);
+  public static function find_one( $parameters = array(), $options = array() ) {
+    return ZM_Object::_find_one(get_class(), $parameters, $options);
   }
 
   static function Objects_Indexed_By_Id() {
@@ -50,6 +51,9 @@ class Sensor_Server extends ZM_Object {
       $chains = array(null=>'');
     }
     return $chains;
+  }
+  public function link_to() {
+    return '?view=sensor_server&id='.$this->{'Id'};
   }
 
 } # end class Sensor_Server
