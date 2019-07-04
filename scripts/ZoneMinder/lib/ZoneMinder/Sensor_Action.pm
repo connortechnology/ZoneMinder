@@ -40,13 +40,14 @@ $table = 'Sensor_Actions';
 $primary_key = 'Id';
 
 %fields = (
-        Id        =>  'Id',
-        SensorId  =>  'SensorId',
-        MonitorId =>  'MonitorId',
-        TypeId    =>  'TypeId',
-        Action    =>  'Action',
-        MinValue  =>  'MinValue',
-        MaxValue  =>  'MaxValue',
+        Id          =>  'Id',
+        MinSensorId =>  'MinSensorId',
+        MaxSensorId =>  'MaxSensorId',
+        MonitorId   =>  'MonitorId',
+        TypeId      =>  'TypeId',
+        Action      =>  'Action',
+        MinValue    =>  'MinValue',
+        MaxValue    =>  'MaxValue',
 );
 
 sub Monitor {
