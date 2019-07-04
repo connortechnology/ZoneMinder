@@ -24,7 +24,7 @@ class Sensor_Action_Type extends ZM_Object {
   static function Objects_Indexed_By_Id() {
     $Objects = array();
     foreach ( ZM_Object::_find(get_class(), null, array('order'=>'lower(Name)')) as $Object ) {
-      $Objects[$Object->TypeId()] = $Object;
+      $Objects[$Object->Id()] = $Object;
     }
     return $Objects;
   }
