@@ -44,6 +44,18 @@ if ( $action == 'Save' ) {
   }
   $refreshParent = true;
   $view = 'none';
+} else if ( $action == 'Delete' ) {
+  if ( !empty($_REQUEST['id']) ) {
+    $Sensor = ZM\Sensor::find_one(array('Id'=>$_REQUEST['id']));
+  }
+  if ( !$Sensor ) {
+    ZM\Error('Sensor ' . $_REQUEST['id'] . ' not found.');
+    return;
+  }
+  $Sensor->delete();
+  $refreshParent = true;
+  $view = 'none';
+
 } else {
   ZM\Error("Unknown action $action in saving Sensor_Action");
 }
