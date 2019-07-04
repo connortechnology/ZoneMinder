@@ -65,9 +65,9 @@ class ZM_Object {
       foreach ( $parameters as $field => $value ) {
         if ( $value == null ) {
           $fields[] = $field.' IS NULL';
-        } else if ( is_array( $value ) ) {
+        } else if ( is_array($value) ) {
           $func = function(){return '?';};
-          $fields[] = $field.' IN ('.implode(',', array_map( $func, $value ) ). ')';
+          $fields[] = $field.' IN ('.implode(',', array_map($func, $value)). ')';
           $values += $value;
 
         } else {
@@ -100,7 +100,7 @@ class ZM_Object {
     return $results;
   } # end public function find()
 
-  public static function _find_one($class, $parameters = array() ) {
+  public static function _find_one($class, $parameters = array(), $options = array() ) {
     global $object_cache;
     if ( ! isset($object_cache[$class]) )
       $object_cache[$class] = array();
@@ -111,7 +111,8 @@ class ZM_Object {
         isset($cache[$parameters['Id']]) ) {
       return $cache[$parameters['Id']];
     }
-    $results = ZM_Object::_find($class, $parameters, array('limit'=>1));
+    $options['limit'] = 1;
+    $results = ZM_Object::_find($class, $parameters, $options);
     if ( ! sizeof($results) ) {
       return;
     }
@@ -133,21 +134,25 @@ class ZM_Object {
   }
 
   public function set($data) {
-    foreach ($data as $k => $v) {
+    foreach ( $data as $k => $v ) {
       if ( method_exists($this, $k) ) {
         $this->{$k}($v);
       } else {
         Logger::Debug("Setting $k => $v");
-        if ( is_array( $v ) ) {
+        if ( is_array($v) ) {
 # perhaps should turn into a comma-separated string
           $this->{$k} = implode(',',$v);
-        } else if ( is_string( $v ) ) {
-          $this->{$k} = trim( $v );
-        } else if ( is_integer( $v ) ) {
+        } else if ( is_string($v) ) {
+          if ( $v == '' and array_key_exists($k, $this->defaults) ) {
+            $this->{$k} = $this->defaults[$k];
+          } else {
+            $this->{$k} = trim($v);
+          }
+        } else if ( is_integer($v) ) {
           $this->{$k} = $v;
-        } else if ( is_bool( $v ) ) {
+        } else if ( is_bool($v) ) {
           $this->{$k} = $v;
-        } else if ( is_null( $v ) ) {
+        } else if ( is_null($v) ) {
           $this->{$k} = $v;
         } else {
           Error( "Unknown type $k => $v of var " . gettype( $v ) );
@@ -210,6 +215,8 @@ class ZM_Object {
     $class = get_class($this);
     $table = $class::$table;
     dbQuery("DELETE FROM $table WHERE Id=?", array($this->{'Id'}));
+    if ( isset($object_cache[$class]) and isset($object_cache[$class][$this->{'Id'}]) )
+      unset($object_cache[$class][$this->{'Id'}]);
   }
 
 } # end class Sensor Action
