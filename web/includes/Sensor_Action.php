@@ -6,27 +6,26 @@ require_once('Object.php');
 require_once('Sensor_Action_Type.php');
 require_once('Sensor.php');
 
-$sensor_action_cache = array();
-
 class Sensor_Action extends ZM_Object {
   protected static $table = 'Sensor_Actions';
   protected $defaults = array(
     'Id'          => null,
-    'Name'        =>  '',
-    'SensorId'    => null,
+    'Name'        => '',
+    'MinSensorId' => null,
+    'MaxSensorId' => null,
     'MonitorId'   => null,
     'TypeId'      => null,
-    'MinValue'    =>  null,
-    'MaxValue'    =>  null,
-    'Action'      =>  '',
+    'MinValue'    => null,
+    'MaxValue'    => null,
+    'Action'      => '',
   );
 
   public static function find($parameters = array(), $options = array() ) {
     return ZM_Object::_find(get_class(), $parameters, $options);
   }
 
-  public static function find_one( $parameters = array() ) {
-    return ZM_Object::_find_one(get_class(), $parameters);
+  public static function find_one( $parameters = array(), $options = array() ) {
+    return ZM_Object::_find_one(get_class(), $parameters, $options);
   }
 
   public function Monitor($new=-1) {
@@ -41,16 +40,18 @@ class Sensor_Action extends ZM_Object {
     return $this->{'Monitor'};
   }
 
-  public function Sensor($new=-1) {
+  public function Sensors($new=-1) {
     if ( $new != -1 )
-      $this->{'Sensor'} = $new;
+      $this->{'Sensors'} = $new;
 
-    if ( !(array_key_exists('Sensor', $this) and $this->{'Sensor'} ) ) {
-      $this->{'Sensor'} = Sensor::find_one(array('Id'=>$this->SensorId()));
-      if ( ! $this->{'Sensor'} )
-        $this->{'Sensor'} = new Sensor();
+    if ( !( array_key_exists('Sensors', $this) and $this->{'Sensors'} ) ) {
+      $sql = 'SELECT * FROM Sensors WHERE `Id` >= ? AND `Id` <= ?';
+      $this->{'Sensors'} = array_map(
+        function($row){ return new Sensor($row); },
+          dbFetchAll($sql, null, array($this->{'MinSensorId'}, $this->{'MaxSensorId'}))
+        );
     }
-    return $this->{'Sensor'};
+    return $this->{'Sensors'};
   }
 
   public function link_to() {
@@ -71,12 +72,22 @@ class Sensor_Action extends ZM_Object {
         $string .= ' >= ' .$this->{'MaxValue'};
     }
     $string .= $this->Action();
-    Error($string);
     return $string;
   } # end public function to_string
 
   public function Type() {
 	  return Sensor_Action_Type::find_one(array('Id'=>$this->{'TypeId'}));
+  }
+  public function Chain() {
+    $Sensors = $this->Sensors();
+    if ( count($Sensors) ) {
+      $Sensor = $Sensors[0];
+      if ( $Sensor ) {
+        return $Sensor->Chain();
+      } else {
+        Logger::Debug(print_r($Sensors,true));
+      }
+    }
   }
 } # end class Sensor Action
 ?>
