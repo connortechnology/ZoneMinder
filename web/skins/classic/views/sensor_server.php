@@ -114,7 +114,7 @@ if ( $Server->Id() ) {
                 <th class="SensorName"><?php echo translate('Name') ?></th>
                 <th class="SensorActions"><?php echo translate('Actions') ?></th>
                 <th class="buttons">
-                <a href="<?php echo $Server->link_to() ?>&amp;action=add_more_sensors" class="btn-primary">+</a>
+                <a href="<?php echo $Server->link_to() ?>&amp;action=add_more_sensors&amp;chain_id=<?php echo $chain_id?>" class="btn-primary">+</a>
 <?php 
    if (0 ) 
 echo makePopupButton((new ZM\Sensor())->link_to().'&amp;newSensor[SensorServerId]='.$Server->Id().'&newSensor[Chain]='.$chain_id,'zmSensorNew', 'sensor', '+', $canEdit ) ?></th>
@@ -132,7 +132,20 @@ $action_link = function($Action){
     $Action->to_string(),
     $canEdit );
 };
-foreach ( ZM\Sensor::find(array('SensorServerId'=>$Server->Id(),'Chain'=>$chain_id)) as $Sensor ) {
+
+$Sensors = ZM\Sensor::find(array('SensorServerId'=>$Server->Id(),'Chain'=>$chain_id));
+/*
+$sql = 'SELECT * FROM Sensor_Actions WHERE 
+  (`MinSensorId` IS NULL OR `MinSensorId` IN ('.implode(',',array_map(function(){ return '?';}, $Sensors)).'))
+ AND
+ (`MaxSensorId IS NULL or `MaxSensorId` IN ('.implode(',',array_map(function(){ return '?';}, $Sensors)).'))';
+$Actions = array_map( function($row) { return new ZM\Sensor_Action($row); },
+  dbFetchAll($sql,null,
+  array_map(function($Sensor){return $Sensor->SensorId();}, $Sensors),
+  array_map(function($Sensor){return $Sensor->SensorId();}, $Sensors)
+  );
+ */
+foreach ( $Sensors as $Sensor ) {
   echo sprintf('
     <tr>
       <td class="SensorId">%2$s</td>
