@@ -6,6 +6,8 @@ CREATE TABLE Sensors (
   `SensorServerId`  integer unsigned,
   `Chain`       integer unsigned,
   `Name`    VARCHAR(255),
+  `MinValue`  INTEGER,
+  `MaxValue`  INTEGER,
   KEY `Sensors_SensorId_idx` (`SensorId`),
   KEY `Sensors_ServerId_idx` (`SensorServerId`),
   PRIMARY KEY (`Id`)
