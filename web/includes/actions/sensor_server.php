@@ -24,20 +24,23 @@ if ( ! canEdit('System') ) {
   return;
 }
 
-if ( $action == 'Save' ) {
-  require_once('includes/Sensor_Server.php');
-  require_once('includes/Sensor_Server_Type.php');
-  require_once('includes/Sensor.php');
+require_once('includes/Sensor_Server.php');
+require_once('includes/Sensor_Server_Type.php');
+require_once('includes/Sensor.php');
 
-  if ( !empty($_REQUEST['id']) ) {
-    $Server = ZM\Sensor_Server::find_one(array('Id'=>$_REQUEST['id']));
-    if ( ! $Server ) {
-      ZM\Error("Server not found");
-      return;
-    }
-  } else {
-    $Server = new ZM\Sensor_Server();
+if ( !empty($_REQUEST['id']) ) {
+  $Server = ZM\Sensor_Server::find_one(array('Id'=>$_REQUEST['id']));
+  if ( ! $Server ) {
+    ZM\Error("Server not found");
+    return;
   }
+}
+
+if ( $action == 'Save' ) {
+
+  if ( !$Server )
+    $Server = new ZM\Sensor_Server();
+ 
 
   $changes = $Server->changes($_REQUEST['newServer']);
 
@@ -74,6 +77,34 @@ if ( $action == 'Save' ) {
     }
     $refreshParent = true;
   }
+} else if ( $action == 'add_more_sensors' ) {
+  $ServerType = ZM\Sensor_Server_Type::find_one(array('Id'=>$Server->TypeId()));
+  if ( $ServerType->MaxSensors() ) {
+    if ( $Server->Chains() ) {
+      $chunks = array_chunk(preg_split('/(:|,)/', $Server->Chains()), 2);
+      $chains = array_combine(array_column($chunks, 0), array_column($chunks,1));
+    } else {
+      $chains = array(null=>'');
+    }
+    foreach ( $chains as $chain_id=>$chain_name ) {
+      if ( isset($_REQUEST['chain_id']) and ($chain_id != $_REQUEST['chain_id']) )
+        continue;
+
+      $max_sensor = ZM\Sensor::find_one(array('SensorServerId'=>$Server->Id(), 'Chain'=>$chain_id), array('order'=>'Id DESC'));
+      $start_id = $max_sensor ? intval($max_sensor->SensorId()) + 1 : 1;
+      $end_id = $start_id + $ServerType->MaxSensors();
+      ZM\Logger::Debug("From $start_id top $end_id");
+      for (
+        $sensor_id = $start_id;
+        $sensor_id < $end_id;
+        $sensor_id += 1
+        ) {
+        $Sensor = new ZM\Sensor();
+        $Sensor->save(array('SensorServerId'=>$Server->Id(), 'Chain'=>$chain_id, 'SensorId'=>$sensor_id));
+      }
+    } # end foreach Chain
+  }
+
 } else {
   ZM\Error("Unknown action $action in saving Sensor_Server");
 }
