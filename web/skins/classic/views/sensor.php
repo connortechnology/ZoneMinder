@@ -120,7 +120,7 @@ if ( $Sensor->Id() ) {
                     <th class="Monitor"><?php echo translate('Actions') ?></th>
                     <th class="buttons">
 <?php echo makePopupButton(
-  (new ZM\Sensor_Action())->link_to().'&amp;newAction[SensorId]='.$Sensor->Id(),
+  (new ZM\Sensor_Action())->link_to().'&amp;newAction[MinSensorId]='.$Sensor->Id().'&amp;newAction[MaxSensorId]='.$Sensor->Id(),
   'zmSensorActionNew',
   'sensor_action',
   '+',
