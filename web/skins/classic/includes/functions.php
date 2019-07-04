@@ -65,6 +65,23 @@ if ( file_exists( "skins/$skin/css/$css/graphics/favicon.ico" ) ) {
   echo "
   <link rel=\"icon\" type=\"image/ico\" href=\"skins/$skin/css/$css/graphics/favicon.ico\"/>
   <link rel=\"shortcut icon\" href=\"skins/$skin/css/$css/graphics/favicon.ico\"/>
+  <link rel=\"apple-touch-icon\" sizes=\"57x57\" href=\"skins/$skin/css/$css/graphics/apple-icon-57x57.png\">
+  <link rel=\"apple-touch-icon\" sizes=\"60x60\" href=\"skins/$skin/css/$css/graphics/apple-icon-60x60.png\">
+  <link rel=\"apple-touch-icon\" sizes=\"72x72\" href=\"skins/$skin/css/$css/graphics/apple-icon-72x72.png\">
+  <link rel=\"apple-touch-icon\" sizes=\"76x76\" href=\"skins/$skin/css/$css/graphics/apple-icon-76x76.png\">
+  <link rel=\"apple-touch-icon\" sizes=\"114x114\" href=\"skins/$skin/css/$css/graphics/apple-icon-114x114.png\">
+  <link rel=\"apple-touch-icon\" sizes=\"120x120\" href=\"skins/$skin/css/$css/graphics/apple-icon-120x120.png\">
+  <link rel=\"apple-touch-icon\" sizes=\"144x144\" href=\"skins/$skin/css/$css/graphics/apple-icon-144x144.png\">
+  <link rel=\"apple-touch-icon\" sizes=\"152x152\" href=\"skins/$skin/css/$css/graphics/apple-icon-152x152.png\">
+  <link rel=\"apple-touch-icon\" sizes=\"180x180\" href=\"skins/$skin/css/$css/graphics/apple-icon-180x180.png\">
+  <link rel=\"icon\" type=\"image/png\" sizes=\"192x192\"  href=\"skins/$skin/css/$css/graphics/android-icon-192x192.png\">
+  <link rel=\"icon\" type=\"image/png\" sizes=\"32x32\" href=\"skins/$skin/css/$css/graphics/favicon-32x32.png\">
+  <link rel=\"icon\" type=\"image/png\" sizes=\"96x96\" href=\"skins/$skin/css/$css/graphics/favicon-96x96.png\">
+  <link rel=\"icon\" type=\"image/png\" sizes=\"16x16\" href=\"skins/$skin/css/$css/graphics/favicon-16x16.png\">
+  <link rel=\"manifest\" href=\"skins/$skin/css/$css/graphics/manifest.json\">
+  <meta name=\"msapplication-TileColor\" content=\"#ffffff\">
+  <meta name=\"msapplication-TileImage\" content=\"skins/$skin/css/$css/graphics/ms-icon-144x144.png\">
+  <meta name=\"theme-color\" content=\"#ffffff\">
 ";
 } else {
   echo '

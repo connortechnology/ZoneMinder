@@ -58,8 +58,9 @@ xhtmlHeaders(__FILE__, translate('SensorAction').' - '.$Action->Name());
               <th scope="row"><?php echo translate('Sensor') ?></th>
               <td>
 <?php
+
 $Sensors = array(''=>'Unknown')+ZM\Sensor::Objects_Indexed_By_Id(
-  ZM\Sensor::find(array('Chain'=>$Action->Sensor()->Chain()), array('order'=>'lower(Name)'))
+  ZM\Sensor::find(array('Chain'=>$Action->Chain()), array('order'=>'Id ASC'))
 );
 echo htmlSelect('newAction[MinSensorId]', $Sensors, $Action->MinSensorId(),
     array(

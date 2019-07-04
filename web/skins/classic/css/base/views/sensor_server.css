@@ -10,3 +10,10 @@ input[type="url"] {
   table-layout: fixed;
   width: 100%;
 }
+.Chain table .SensorId {
+  width: 40px;
+}
+
+.Chain table .buttons {
+  width: 60px;
+}

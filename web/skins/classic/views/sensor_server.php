@@ -27,6 +27,7 @@ if ( !$canEdit ) {
 require_once('includes/Sensor_Server.php');
 require_once('includes/Sensor_Server_Type.php');
 require_once('includes/Sensor.php');
+
 $Server = new ZM\Sensor_Server($_REQUEST['id']);
 if ( $_REQUEST['id'] and ! $Server->Id() ) {
   $view = 'error';
@@ -54,10 +55,10 @@ xhtmlHeaders(__FILE__, translate('SensorServer').' - '.$Server->Name());
               <td><input type="text" name="newServer[Name]" value="<?php echo $Server->Name() ?>"/></td>
             </tr>
             <tr>
-              <th scope="row"><?php echo translate('Sensor') ?></th>
+              <th scope="row"><?php echo translate('Type') ?></th>
               <td>
 <?php
-$SensorServerTypes = array(''=>'None')+ZM\Sensor_Server_Type::Objects_Indexed_By_Id();
+$SensorServerTypes = array(''=>'Unknown')+ZM\Sensor_Server_Type::Objects_Indexed_By_Id();
 echo htmlSelect('newServer[TypeId]', $SensorServerTypes, $Server->TypeId(),
     array(
       'class'=>'chosen',
@@ -72,28 +73,51 @@ echo htmlSelect('newServer[TypeId]', $SensorServerTypes, $Server->TypeId(),
             </tr>
             <tr>
               <th scope="row"><?php echo translate('PollFrequency') ?></th>
-              <td><input type="number" name="newServer[PollFrequency]" value="<?php echo $Server->PollFrequency() ?>"/><?php echo translate('Seconds');?></td>
+              <td>
+                <input type="number" name="newServer[PollFrequency]" value="<?php echo $Server->PollFrequency() ?>"/>
+                <?php echo translate('Seconds');?>
+              </td>
             </tr>
             <tr>
               <th scope="row"><?php echo translate('Chains') ?></th>
               <td><input type="text" name="newServer[Chains]" value="<?php echo $Server->Chains() ?>"/></td>
             </tr>
+            <tr>
+              <th scope="row"><?php echo translate('Enabled') ?></th>
+              <td>
+<?php
+echo htmlSelect(
+  'newServer[Enabled]',
+  array('1'=>translate('Enabled'),'0'=>translate('Disabled')),
+  $Server->Enabled(),
+  array(
+    'class'=>'chosen',
+    'data-on-change-this'=>'updateButtons'
+  ));
+?>
+              </td>
+            </tr>
           </tbody>
         </table>
 <?php
 if ( $Server->Id() ) {
-  foreach ( $Server->Chains_array() as $chain_id=>$chain_name ) {
+  $chains = $Server->Chains_array();
+  foreach ( $chains as $chain_id=>$chain_name ) {
 ?>
 
   <div class="Chain" style="width: <?php echo 100/count(array_keys($chains))?>%;">
         <fieldset><legend>Sensors<?php echo $chain_id ? ' on ' . $chain_name : '' ?></legend>
-          <table>
+          <table class="table table-striped">
             <thead>
               <tr>
                 <th class="SensorId">Id</th>
                 <th class="SensorName"><?php echo translate('Name') ?></th>
                 <th class="SensorActions"><?php echo translate('Actions') ?></th>
-                <th class="buttons"><?php echo makePopupButton((new ZM\Sensor())->link_to().'&amp;newSensor[SensorServerId]='.$Server->Id().'&newSensor[Chain]='.$chain_id,'zmSensorNew', 'sensor', '+', $canEdit ) ?></th>
+                <th class="buttons">
+                <a href="<?php echo $Server->link_to() ?>&amp;action=add_more_sensors" class="btn-primary">+</a>
+<?php 
+   if (0 ) 
+echo makePopupButton((new ZM\Sensor())->link_to().'&amp;newSensor[SensorServerId]='.$Server->Id().'&newSensor[Chain]='.$chain_id,'zmSensorNew', 'sensor', '+', $canEdit ) ?></th>
               </tr>
             </thead>
             <tbody>
@@ -111,8 +135,8 @@ $action_link = function($Action){
 foreach ( ZM\Sensor::find(array('SensorServerId'=>$Server->Id(),'Chain'=>$chain_id)) as $Sensor ) {
   echo sprintf('
     <tr>
-      <td class="SensorId"><input type="text" name="Sensor%1$dd[SensorId]" value="%2$s"/></td>
-      <td class="SensorName"><input type="text" name="Sensor%1$dd[SensorName]" value="%3$s"/></td>
+      <td class="SensorId">%2$s</td>
+      <td class="SensorName">%3$s</td>
       <td class="SensorActions">%4$s</td>
       <td class="buttons">%5$s</td>
     </tr>',

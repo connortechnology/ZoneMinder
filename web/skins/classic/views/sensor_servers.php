@@ -39,6 +39,7 @@ require_once('includes/Sensor_Server.php');
           <th class="colUrl"><?php echo translate('Url') ?></th>
           <th class="colPollFrequency"><?php echo translate('Poll Frequency') ?></th>
           <th class="colSensorCount"><?php echo translate('Sensors') ?></th>
+          <th class="colEnabled"><?php echo translate('Enabled') ?></th>
           <th class="colMark"><?php echo translate('Mark') ?></th>
         </tr>
       </thead>
@@ -48,12 +49,26 @@ $monitor_counts = dbFetchAssoc('SELECT Id,(SELECT COUNT(Id) FROM Sensors WHERE S
 foreach ( ZM\Sensor_Server::find() as $Server ) {
 ?>
         <tr>
-          <td class="colName"><?php echo makePopupLink('?view=sensor_server&amp;id='.$Server->Id(), 'zmSensorServer'.$Server->Id(), 'sensor_server', validHtmlStr($Server->Name()), $canEdit) ?></td>
-          <td class="colUrl"><?php echo makePopupLink('?view=sensor_server&amp;id='.$Server->Id(), 'zmSensorServer'.$Server->Id(), 'sensor_server', validHtmlStr($Server->Url()), $canEdit) ?></td>
+          <td class="colName">
+<?php echo makePopupLink(
+  '?view=sensor_server&amp;id='.$Server->Id(),
+  'zmSensorServer'.$Server->Id(),
+  'sensor_server',
+  validHtmlStr($Server->Name()),
+  $canEdit);
+?>
+          </td>
+          <td class="colUrl"><?php echo makePopupLink(
+            '?view=sensor_server&amp;id='.$Server->Id(),
+            'zmSensorServer'.$Server->Id(),
+            'sensor_server',
+            validHtmlStr($Server->Url()),
+            $canEdit); ?></td>
           <td class="colPollFrequency"><?php echo makePopupLink('?view=sensor_server&amp;id='.$Server->Id(), 'zmSensorServer'.$Server->Id(), 'sensor_server', validHtmlStr($Server->PollFrequency()), $canEdit) ?></td>
-          <td class="colMonitorCount">
+          <td class="colSensorCount">
               <?php echo makePopupLink('?view=sensor_server&amp;id='.$Server->Id(), 'zmSensorServer'.$Server->Id(), 'sensor_server', validHtmlStr($monitor_counts[$Server->Id()]), $canEdit) ?>
           </td>
+          <td class="colEnabled"><?php echo makePopupLink('?view=sensor_server&amp;id='.$Server->Id(), 'zmSensorServer'.$Server->Id(), 'sensor_server', ($Server->Enabled() ? translate('Enabled') : translate('Disabled')), $canEdit) ?></td>
           <td class="colMark"><input type="checkbox" name="markIds[]" value="<?php echo $Server->Id() ?>" data-on-click-this="configureDeleteButton"<?php if ( !$canEdit ) { ?> disabled="disabled"<?php } ?>/></td>
   </tr>
 <?php } #end foreach Server ?>
