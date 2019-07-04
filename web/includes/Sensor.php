@@ -12,16 +12,16 @@ class Sensor extends ZM_Object {
     'SensorServerId'       => null,
     'Name'                 => '',
     'Chain'                => null,
-    'MaxValue'		=> null,
-    'MinValue'	=> null,
+    'MaxValue'             => null,
+    'MinValue'             => null,
   );
 
   public static function find($parameters = array(), $options = array() ) {
     return ZM_Object::_find(get_class(), $parameters, $options);
   }
 
-  public static function find_one( $parameters = array() ) {
-    return ZM_Object::_find_one(get_class(), $parameters);
+  public static function find_one( $parameters = array(), $options = array() ) {
+    return ZM_Object::_find_one(get_class(), $parameters, $options);
   }
 
   public function Actions($new=-1) {
@@ -30,9 +30,15 @@ class Sensor extends ZM_Object {
     }
 
     if ( !(array_key_exists('Actions', $this) and $this->{'Actions'}) ) {
-      $this->{'Actions'} = Sensor_Action::find(array('SensorId'=>$this->Id()));
+      $sql = 'SELECT * FROM `Sensor_Actions` WHERE
+        ((`MinSensorId` IS NULL) OR (`MinSensorId` <= ?))
+        AND
+        ((`MaxSensorId` IS NULL) OR (`MaxSensorId` >= ?))';
+      $this->{'Actions'} = array_map(
+        function($row){ return new Sensor_Action($row); },
+        dbFetchAll($sql, null, array($this->{'Id'}, $this->{'Id'}))
+        );
     }
-    Error("Have " .count($this->{'Actions'}). " Actions" );
     return $this->{'Actions'};
   } # end public function Actions
 
