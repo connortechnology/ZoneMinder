@@ -126,13 +126,13 @@ while (!$zm_terminate) {
         my %Monitor_Actions;
         
         foreach my $chain ( keys %{$response} ) {
-          #Debug("Handling chain $chain $$response{$chain}");
+          Debug("Handling chain $chain on $$Server{Url} $$response{$chain}");
           my $chain_data = $$response{$chain};
           my ($chain_name, $chain_id) = $chain =~ /^(\w+)(\d)$/;
           my @Sensors = ZoneMinder::Sensor->find(
             SensorServerId=>$$Server{Id},
-            Chain=>$chain_id);
-          my %Sensors_By_SensorId = map { $$_{SensorId}, $_ }  @Sensors;
+            Chain=>1*$chain_id);
+          my %Sensors_By_SensorId = map { $$_{SensorId}, $_ } @Sensors;
           my %Sensors_By_Id = map { $$_{Id}, $_ }  @Sensors;
 
           foreach my $sensor_value ( $chain_data =~ /(#\d+!)/g ) {
@@ -152,7 +152,7 @@ while (!$zm_terminate) {
             Debug("Type id: $type_id $Alarm_Types{$type_id} sensor id: $sensor_id value: $value");
             my @Actions = 
             ZoneMinder::Sensor_Action->find(
-              Chain     => $chain_id,
+              Chain     => 1*$chain_id,
               'MinSensorId is null or <=' =>  $Sensors_By_SensorId{$sensor_id}{Id},
               'MaxSensorId is null or >=' =>  $Sensors_By_SensorId{$sensor_id}{Id},
               TypeId    =>  1*$type_id,
@@ -163,10 +163,10 @@ while (!$zm_terminate) {
               Debug("No actions for Sesnors $sensor_id type $type_id for value $value");
             }
             foreach my $SA (@Actions ) {
-              if ( ! $Sensors_By_Id{$$SA{SensorId}} ) {
-                Debug("Sensor $$SA{SensorId} Not found for Chain $chain");
-                next;
-              }
+		    #if ( ! $Sensors_By_Id{$$SA{SensorId}} ) {
+		    #Debug("Sensor $$SA{SensorId} Not found for Chain $chain");
+		    #next;
+		    #}
               $Monitor_Actions{$$SA{MonitorId}} = [] if ! $Monitor_Actions{$$SA{MonitorId}};
               push @{$Monitor_Actions{$$SA{MonitorId}}}, {Value=>$value, Action=>$SA};
             } # end foreach Sensor_Action
