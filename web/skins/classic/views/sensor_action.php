@@ -55,6 +55,13 @@ xhtmlHeaders(__FILE__, translate('SensorAction').' - '.$Action->Name());
         <table id="contentTable" class="major">
           <tbody>
             <tr>
+              <th scope="row"><?php echo translate('Chain') ?></th>
+	      <td><?php
+echo $Action->Chain();
+?>
+</td>
+</tr>
+            <tr>
               <th scope="row"><?php echo translate('Sensor') ?></th>
               <td>
 <?php

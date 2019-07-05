@@ -31,12 +31,13 @@ class Sensor extends ZM_Object {
 
     if ( !(array_key_exists('Actions', $this) and $this->{'Actions'}) ) {
       $sql = 'SELECT * FROM `Sensor_Actions` WHERE
+	      `Chain`=? AND
         ((`MinSensorId` IS NULL) OR (`MinSensorId` <= ?))
         AND
         ((`MaxSensorId` IS NULL) OR (`MaxSensorId` >= ?))';
       $this->{'Actions'} = array_map(
         function($row){ return new Sensor_Action($row); },
-        dbFetchAll($sql, null, array($this->{'Id'}, $this->{'Id'}))
+        dbFetchAll($sql, null, array($this->{'Chain'}, $this->{'Id'}, $this->{'Id'}))
         );
     }
     return $this->{'Actions'};

@@ -11,6 +11,7 @@ class Sensor_Action extends ZM_Object {
   protected $defaults = array(
     'Id'          => null,
     'Name'        => '',
+    'Chain'                => null,
     'MinSensorId' => null,
     'MaxSensorId' => null,
     'MonitorId'   => null,
@@ -77,17 +78,6 @@ class Sensor_Action extends ZM_Object {
 
   public function Type() {
 	  return Sensor_Action_Type::find_one(array('Id'=>$this->{'TypeId'}));
-  }
-  public function Chain() {
-    $Sensors = $this->Sensors();
-    if ( count($Sensors) ) {
-      $Sensor = $Sensors[0];
-      if ( $Sensor ) {
-        return $Sensor->Chain();
-      } else {
-        Logger::Debug(print_r($Sensors,true));
-      }
-    }
   }
 } # end class Sensor Action
 ?>

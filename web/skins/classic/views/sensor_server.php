@@ -170,7 +170,7 @@ foreach ( $Sensors as $Sensor ) {
   echo "Please save the server before entering/editing Servers.";
 }
 ?>
-
+<div class="clear"></div>
         <div id="contentButtons">
           <button type="submit" name="action" value="Save" ><?php echo translate('Save') ?></button>
           <button type="button" data-on-click="closeWindow"><?php echo translate('Cancel') ?></button>
