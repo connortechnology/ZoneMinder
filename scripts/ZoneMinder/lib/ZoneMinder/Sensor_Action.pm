@@ -41,6 +41,8 @@ $primary_key = 'Id';
 
 %fields = (
         Id          =>  'Id',
+        Name        =>  'Name',
+        Chain       =>  'Chain',
         MinSensorId =>  'MinSensorId',
         MaxSensorId =>  'MaxSensorId',
         MonitorId   =>  'MonitorId',

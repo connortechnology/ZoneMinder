@@ -152,6 +152,7 @@ while (!$zm_terminate) {
             Debug("Type id: $type_id $Alarm_Types{$type_id} sensor id: $sensor_id value: $value");
             my @Actions = 
             ZoneMinder::Sensor_Action->find(
+              Chain     => $chain_id,
               'MinSensorId is null or <=' =>  $Sensors_By_SensorId{$sensor_id}{Id},
               'MaxSensorId is null or >=' =>  $Sensors_By_SensorId{$sensor_id}{Id},
               TypeId    =>  1*$type_id,
