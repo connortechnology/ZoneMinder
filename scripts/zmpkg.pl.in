@@ -271,6 +271,7 @@ if ( $command =~ /^(?:start|restart)$/ ) {
       runCommand('zmdc.pl start zmx10.pl -c start');
     }
     #if ( $Config{ZM_OPT_SENSOR_MONITOR} ) {
+      require ZoneMinder::Sensor_Server;
     my @Sensor_Servers = ZoneMinder::Sensor_Server->find(Enabled=>1);
     foreach my $Sensor_Server ( @Sensor_Servers ) {
 	    runCommand("zmdc.pl start zmsensor_monitor.pl --daemon --sensor_id=$$Sensor_Server{Id}");
