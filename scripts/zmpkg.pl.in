@@ -274,7 +274,7 @@ if ( $command =~ /^(?:start|restart)$/ ) {
       require ZoneMinder::Sensor_Server;
     my @Sensor_Servers = ZoneMinder::Sensor_Server->find(Enabled=>1);
     foreach my $Sensor_Server ( @Sensor_Servers ) {
-	    runCommand("zmdc.pl start zmsensor_monitor.pl --daemon --sensor_id=$$Sensor_Server{Id}");
+	    runCommand("zmdc.pl start zmsensor_monitor.pl --daemon --server_id=$$Sensor_Server{Id}");
     }
 
     runCommand('zmdc.pl start zmwatch.pl');
