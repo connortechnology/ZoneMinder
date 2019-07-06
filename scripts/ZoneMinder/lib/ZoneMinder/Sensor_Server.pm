@@ -42,6 +42,7 @@ $primary_key = 'Id';
         Name          =>  'Name',
         Url           =>  'Url',
         PollFrequency =>  'PollFrequency',
+	Enabled	=> 'Enabled',
 );
 
 1;

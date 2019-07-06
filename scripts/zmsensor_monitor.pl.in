@@ -45,7 +45,7 @@ my $version = 0;
 
 GetOptions(
   daemon        =>\$daemon,
-  'server_id=s' =>\$server_id,
+  'server_id=i' =>\$server_id,
   version       =>\$version,
 ) or pod2usage(-exitstatus => -1);
 
@@ -94,7 +94,7 @@ while (!$zm_terminate) {
 
 	my $poll_start = [gettimeofday()];
 
-	my @Servers = ZoneMinder::Sensor_Server->find($server_id?(Id=>$server_id):());
+	my @Servers = ZoneMinder::Sensor_Server->find($server_id?(Id=>$server_id):(Enabled=>1));
 	if ( ! @Servers ) {
 		die " Found no servers";
 	}
@@ -103,6 +103,7 @@ while (!$zm_terminate) {
       Error("No url configured for Sensor Server $$Server{Name}");
       next;
     }
+    Debug("Polling server $$Server{Url}");
 
     my $response = $browser->get($Server->Url());
     if ( !$response->is_success ) {
@@ -200,7 +201,12 @@ while (!$zm_terminate) {
     my $elapsed = tv_interval($poll_start);
     Debug("Elapsed: $elapsed");
     my $sleep_seconds = ($Server->PollFrequency() - $elapsed);
-    usleep(1000000 * $sleep_seconds) if $sleep_seconds > 0;
+    if(  ($sleep_seconds > 0) and ! $zm_terminate ) {
+    Debug("Sleeping $sleep_seconds");
+    usleep(1000000 * int($sleep_seconds));
+    } else {
+    Debug("Not Sleeping $sleep_seconds");
+    }
 
   } # end foreach Sensor Server
 } # end while main loop
