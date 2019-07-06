@@ -92,12 +92,12 @@ Debug("Found " . %Alarm_Types . ' alarm types');
 
 while (!$zm_terminate) {
 
-	my $poll_start = [gettimeofday()];
+  my $poll_start = [gettimeofday()];
 
-	my @Servers = ZoneMinder::Sensor_Server->find($server_id?(Id=>$server_id):(Enabled=>1));
-	if ( ! @Servers ) {
-		die " Found no servers";
-	}
+  my @Servers = ZoneMinder::Sensor_Server->find($server_id?(Id=>$server_id):(Enabled=>1));
+  if ( ! @Servers ) {
+    die " Found no servers";
+  }
   foreach my $Server ( @Servers ) {
     if ( !$Server->Url() ) {
       Error("No url configured for Sensor Server $$Server{Name}");
@@ -110,8 +110,8 @@ while (!$zm_terminate) {
       Warning("Failed getting xml chain data from $$Server{Url}: ".$response->status_line);
     } else {
       if ( !$response->content() ) {
-	      Warning("No Content");
-	      next;
+        Warning("No Content");
+        next;
       }
       #Debug($response->content());
       my $xml = XML::Hash::LX::xml2hash($response->content());
@@ -120,7 +120,7 @@ while (!$zm_terminate) {
         Data::Dumper->Dump($xml);
       } else {
         my $response = $$xml{response};
-      	#Data::Dumper::Dump($xml);
+        #Data::Dumper::Dump($xml);
 
         # Since we can have conflicting sensors, we will build up a list of actions to take for each Monitor.
         # Then iterate over them and perform the ones with the highest value.
@@ -160,14 +160,10 @@ while (!$zm_terminate) {
               'MinValue is null or <='=> $value,
               'MaxValue is null or >='=> $value,
             );
-            if ( ! @Actions ) {
-              Debug("No actions for Sesnors $sensor_id type $type_id for value $value");
+            if ( !@Actions ) {
+              Debug("No actions for Sensors $sensor_id type $type_id for value $value");
             }
-            foreach my $SA (@Actions ) {
-		    #if ( ! $Sensors_By_Id{$$SA{SensorId}} ) {
-		    #Debug("Sensor $$SA{SensorId} Not found for Chain $chain");
-		    #next;
-		    #}
+            foreach my $SA ( @Actions ) {
               $Monitor_Actions{$$SA{MonitorId}} = [] if ! $Monitor_Actions{$$SA{MonitorId}};
               push @{$Monitor_Actions{$$SA{MonitorId}}}, {Value=>$value, Action=>$SA};
             } # end foreach Sensor_Action
@@ -177,16 +173,16 @@ while (!$zm_terminate) {
 
         foreach my $MonitorId ( keys %Monitor_Actions ) {
           Debug("Actions for monitor $MonitorId");
-          my @Sorted_Actions = sort { $$a{Value} <=> $$b{Value} } @{$Monitor_Actions{$MonitorId}};
+          my @Sorted_Actions = sort { $$b{Value} <=> $$a{Value} } @{$Monitor_Actions{$MonitorId}};
 
           foreach my $SSA ( @Sorted_Actions ) {
             my $SA = $$SSA{Action};
-            Debug("Have $$SSA{Value} " . $SA->to_string());
+            Debug("Have value=$$SSA{Value} " . $SA->to_string());
           }
           my $SSA = $Sorted_Actions[0];
           my $SA = $$SSA{Action};
 
-          Debug("Performing $$SA{Action}");
+          Debug("Performing $$SA{Action} because value $$SSA{Value} was highest value");
 
           $SA->do();
         } # end foreach Monitor in %Monitor_Actions
