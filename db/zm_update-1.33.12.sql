@@ -1,24 +1,30 @@
+--
+-- Add primary keys for Logs and Stats tables
+--
 
 SET @s = (SELECT IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema = DATABASE()
-      AND table_name = 'Sensor_Servers'
-      AND column_name = 'TypeId'
+     AND table_name = 'Logs'
+     AND column_name = 'Id'
     ) > 0,
-    "SELECT 'Column TypeId already exists in Sensor_Servers'",
-    "ALTER TABLE Sensor_Servers ADD `TypeId`  integer AFTER `Name`"
-    ));
+"SELECT 'Column Id already exists in Logs'",
+"ALTER TABLE `Logs` ADD COLUMN `Id` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT FIRST, ADD PRIMARY KEY (`Id`)"
+));
 
 PREPARE stmt FROM @s;
 EXECUTE stmt;
 
-CREATE TABLE Sensor_Server_Types (
-  `Id` integer unsigned NOT NULL auto_increment,
-  `Name`    VARCHAR(255),
-  `Chains`  VARCHAR(255),
-  `MaxSensors`  integer,
-  PRIMARY KEY (`Id`)
-);
+<<<<<<< HEAD
+=======
+SET @s = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema = DATABASE()
+     AND table_name = 'Stats'
+     AND column_name = 'Id'
+    ) > 0,
+"SELECT 'Column Id already exists in Stats'",
+"ALTER TABLE `Stats` ADD COLUMN `Id` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT FIRST, ADD PRIMARY KEY (`Id`)"
+));
 
-INSERT INTO Sensor_Server_Types (`Name`,`Chains`,`MaxSensors`) VALUES ('Node','1:Left,2:Right', 250);
-
-ALTER TABLE Sensors add Chain integer unsigned after SensorServerId;
+PREPARE stmt FROM @s;
+EXECUTE stmt;
+>>>>>>> master
