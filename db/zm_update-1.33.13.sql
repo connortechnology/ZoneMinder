@@ -14,7 +14,6 @@ EXECUTE stmt;
 SET @s = (SELECT IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = DATABASE()
       AND table_name = 'Sensor_Server_Types'
-      AND column_name = 'TypeId'
     ) > 0,
     "SELECT 'Tables Sensor_Server_Types already exists'",
 "CREATE TABLE Sensor_Server_Types (

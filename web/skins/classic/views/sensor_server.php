@@ -99,6 +99,12 @@ echo htmlSelect(
             </tr>
           </tbody>
         </table>
+        <div id="contentButtons">
+          <button type="submit" name="action" value="Save" ><?php echo translate('Save') ?></button>
+          <button type="button" data-on-click="closeWindow"><?php echo translate('Cancel') ?></button>
+        </div>
+        <div class="clear"></div>
+<div class="Chains">
 <?php
 if ( $Server->Id() ) {
   $chains = $Server->Chains_array();
@@ -163,17 +169,14 @@ foreach ( $Sensors as $Sensor ) {
             </tbody>
           </table>
         </fieldset>
-</div>
+      </div>
 <?php
 } # end foreach Chain
 } else {
   echo "Please save the server before entering/editing Servers.";
 }
 ?>
-<div class="clear"></div>
-        <div id="contentButtons">
-          <button type="submit" name="action" value="Save" ><?php echo translate('Save') ?></button>
-          <button type="button" data-on-click="closeWindow"><?php echo translate('Cancel') ?></button>
+        <div class="clear"></div>
         </div>
       </form>
     </div>

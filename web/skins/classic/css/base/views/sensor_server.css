@@ -17,3 +17,13 @@ input[type="url"] {
 .Chain table .buttons {
   width: 60px;
 }
+
+.Chains {
+  margin-top: 20px;
+  height: 40vmax;
+  position: relative;
+  top: 0;
+  bottom 0;
+  overflow-y: scroll;
+  overflow-x: hidden;
+}
