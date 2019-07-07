@@ -30,8 +30,8 @@ require_once('includes/Sensor.php');
 
 if ( !empty($_REQUEST['id']) ) {
   $Server = ZM\Sensor_Server::find_one(array('Id'=>$_REQUEST['id']));
-  if ( ! $Server ) {
-    ZM\Error("Server not found");
+  if ( !$Server ) {
+    ZM\Error('Server not found');
     return;
   }
 }
@@ -41,7 +41,6 @@ if ( $action == 'Save' ) {
   if ( !$Server )
     $Server = new ZM\Sensor_Server();
  
-
   $changes = $Server->changes($_REQUEST['newServer']);
 
   if ( count($changes) ) {
@@ -75,6 +74,11 @@ if ( $action == 'Save' ) {
       }
       $_REQUEST['id'] = $Server->Id();
     }
+    if ( $Server->Enabled() ) {
+      daemonControl('restart', 'zmsensor_monitor.pl --daemon --server_id='.$Server->Id());
+    } else {
+      daemonControl('stop', 'zmsensor_monitor.pl --daemon --server_id='.$Server->Id());
+    }
     $refreshParent = true;
   }
 } else if ( $action == 'add_more_sensors' ) {
@@ -103,8 +107,8 @@ if ( $action == 'Save' ) {
         $Sensor->save(array('SensorServerId'=>$Server->Id(), 'Chain'=>$chain_id, 'SensorId'=>$sensor_id));
       }
     } # end foreach Chain
-  }
-
+  } # end if has Max Sensors
+  $redirect = $Server->link_to();
 } else {
   ZM\Error("Unknown action $action in saving Sensor_Server");
 }
