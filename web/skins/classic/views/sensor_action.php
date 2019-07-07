@@ -59,6 +59,7 @@ xhtmlHeaders(__FILE__, translate('SensorAction').' - '.$Action->Name());
 	      <td><?php
 echo $Action->Chain();
 ?>
+	<input type="hidden" name="newAction[Chain]" value="<?php echo $Action->Chain()?>"/>
 </td>
 </tr>
             <tr>

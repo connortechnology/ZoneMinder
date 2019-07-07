@@ -35,9 +35,10 @@ require ZoneMinder::Logger;
 
 use parent qw(ZoneMinder::Object);
 
-use vars qw/ $table $primary_key %fields /;
+use vars qw/ $table $primary_key %fields $debug /;
 $table = 'Sensor_Actions';
 $primary_key = 'Id';
+$debug = 1;
 
 %fields = (
         Id          =>  'Id',

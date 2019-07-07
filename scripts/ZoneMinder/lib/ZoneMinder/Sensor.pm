@@ -34,7 +34,7 @@ require ZoneMinder::Object;
 use parent qw(ZoneMinder::Object);
 
 use vars qw/ $debug $table $primary_key %fields /;
-$debug = 0;
+$debug = 1;
 $table = 'Sensors';
 $primary_key = 'Id';
 
