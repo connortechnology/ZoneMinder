@@ -136,8 +136,13 @@ while (!$zm_terminate) {
           my %Sensors_By_SensorId = map { $$_{SensorId}, $_ } @Sensors;
           my %Sensors_By_Id = map { $$_{Id}, $_ }  @Sensors;
 
-          foreach my $sensor_value ( $chain_data =~ /(#\d+!)/g ) {
-            my ( $type_id, $sensor_id, $value ) = ( $sensor_value =~ /^#(\d\d)(\d\d)(\d\d)!$/ );
+          foreach my $sensor_value ( $chain_data =~ /(#[0-9A-Fa-f]+!)/g ) {
+            my ( $type_id_x, $sensor_id_x, $value_x ) = ( $sensor_value =~ /^#([0-9A-Fa-f]{2})([0-9A-Fa-f]{2})([0-9A-Fa-f]{2})!$/ );
+            my $type_id = hex($type_id_x);
+            my $sensor_id = hex($sensor_id_x);
+            my $value = hex($value_x);
+            Debug("Type: $type_id_x => $type_id, sensor_id: $sensor_id_x=>$sensor_id, value: $value_x => $value");
+
             if ( ! $Sensors_By_SensorId{$sensor_id} ) {
               if ( $Sensors_By_SensorId{1*$sensor_id} ) {
                 $sensor_id *= 1;
@@ -146,7 +151,9 @@ while (!$zm_terminate) {
                 next;
               }
             }
-            if ( ! $Alarm_Types{$type_id} ) {
+            my $Sensor = $Sensors_By_SensorId{$sensor_id};
+            Debug("Have sensor for $sensor_id: " . $Sensor ? $Sensor->to_string() : '');
+            if ( !$Alarm_Types{$type_id} ) {
               Warning("Unknown alarm type! $type_id");
             }
 
@@ -162,6 +169,10 @@ while (!$zm_terminate) {
             );
             if ( !@Actions ) {
               Debug("No actions for Sensors $sensor_id type $type_id for value $value");
+            } else {
+              foreach my $Action ( @Actions ) {
+                Debug("found actions for Sensors $sensor_id type $type_id for value $value " . $Action->to_string());
+              }
             }
             foreach my $SA ( @Actions ) {
               $Monitor_Actions{$$SA{MonitorId}} = [] if ! $Monitor_Actions{$$SA{MonitorId}};
