@@ -18,7 +18,7 @@ class ZM_Object {
     $row = NULL;
     if ( $IdOrRow ) {
       if ( is_integer($IdOrRow) or ctype_digit($IdOrRow) ) {
-        $row = dbFetchOne("SELECT * FROM $table WHERE Id=?", NULL, array($IdOrRow));
+        $row = dbFetchOne("SELECT * FROM `$table` WHERE `Id`=?", NULL, array($IdOrRow));
         if ( !$row ) {
           Error("Unable to load $class record for Id=$IdOrRow");
         }
@@ -56,7 +56,7 @@ class ZM_Object {
   public static function _find($class, $parameters = null, $options = null ) {
     $table = $class::$table;
     $filters = array();
-    $sql = "SELECT * FROM $table ";
+    $sql = "SELECT * FROM i`$table` ";
     $values = array();
 
     if ( $parameters ) {
@@ -64,14 +64,14 @@ class ZM_Object {
       $sql .= 'WHERE ';
       foreach ( $parameters as $field => $value ) {
         if ( $value == null ) {
-          $fields[] = $field.' IS NULL';
+          $fields[] = '`'.$field.'` IS NULL';
         } else if ( is_array($value) ) {
           $func = function(){return '?';};
-          $fields[] = $field.' IN ('.implode(',', array_map($func, $value)). ')';
+          $fields[] = '`'.$field.'` IN ('.implode(',', array_map($func, $value)). ')';
           $values += $value;
 
         } else {
-          $fields[] = $field.'=?';
+          $fields[] = '`'.$field.'`=?';
           $values[] = $value;
         }
       }

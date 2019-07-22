@@ -136,7 +136,6 @@ FfmpegCamera::FfmpegCamera(
   }
 
   hwaccel = false;
-  hwFrame = NULL;
 
   mFormatContext = NULL;
   mVideoStreamId = -1;
@@ -154,6 +153,8 @@ FfmpegCamera::FfmpegCamera(
   packetqueue = NULL;
   error_count = 0;
 #if HAVE_LIBAVUTIL_HWCONTEXT_H
+  hwFrame = NULL;
+  hw_device_ctx = NULL;
   hw_pix_fmt = AV_PIX_FMT_NONE;
 #endif
 
@@ -648,6 +649,12 @@ int FfmpegCamera::Close() {
     av_frame_free(&mRawFrame);
     mRawFrame = NULL;
   }
+#if HAVE_LIBAVUTIL_HWCONTEXT_H
+  if ( hwFrame ) {
+    av_frame_free(&hwFrame);
+    hwFrame = NULL;
+  }
+#endif
 
 #if HAVE_LIBSWSCALE
   if ( mConvertContext ) {
@@ -675,6 +682,12 @@ int FfmpegCamera::Close() {
 #endif
     mAudioCodecContext = NULL;  // Freed by av_close_input_file
   }
+
+#if HAVE_LIBAVUTIL_HWCONTEXT_H
+  if ( hw_device_ctx ) {
+    av_buffer_unref(&hw_device_ctx);
+  }
+#endif
 
   if ( mFormatContext ) {
 #if !LIBAVFORMAT_VERSION_CHECK(53, 17, 0, 25, 0)

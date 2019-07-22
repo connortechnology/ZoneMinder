@@ -30,6 +30,10 @@ case $i in
     INTERACTIVE="${i#*=}"
     shift # past argument=value
     ;;
+    -p=*|--ppa=*)
+    PPA="${i#*=}"
+    shift # past argument=value
+    ;;
     -r=*|--release=*)
     RELEASE="${i#*=}"
     shift
@@ -124,20 +128,21 @@ else
   fi;
 fi
 
-PPA="";
-if [ "$RELEASE" != "" ]; then
-  # We need to use our official tarball for the original source, so grab it and overwrite our generated one.
-  IFS='.' read -r -a VERSION <<< "$RELEASE"
-  if [ "${VERSION[0]}.${VERSION[1]}" == "1.30" ]; then
-    PPA="ppa:iconnor/zoneminder-stable"
+if [ "$PPA" == "" ]; then
+  if [ "$RELEASE" != "" ]; then
+    # We need to use our official tarball for the original source, so grab it and overwrite our generated one.
+    IFS='.' read -r -a VERSION <<< "$RELEASE"
+    if [ "${VERSION[0]}.${VERSION[1]}" == "1.30" ]; then
+      PPA="ppa:iconnor/zoneminder-stable"
+    else
+      PPA="ppa:iconnor/zoneminder-${VERSION[0]}.${VERSION[1]}"
+    fi;
   else
-    PPA="ppa:iconnor/zoneminder-${VERSION[0]}.${VERSION[1]}"
-  fi;
-else
-  if [ "$BRANCH" == "" ]; then
-    PPA="ppa:iconnor/zoneminder-master";
-  else 
-    PPA="ppa:iconnor/zoneminder-$BRANCH";
+    if [ "$BRANCH" == "" ]; then
+      PPA="ppa:iconnor/zoneminder-master";
+    else
+      PPA="ppa:iconnor/zoneminder-$BRANCH";
+    fi;
   fi;
 fi;
 
@@ -336,7 +341,8 @@ EOF
         dput $PPA $SC
       fi;
     else
-        dput $PPA $SC
+      echo "dputting to $PPA";
+      dput $PPA $SC
     fi;
   fi;
 done; # foreach distro
@@ -348,5 +354,3 @@ if [ "$INTERACTIVE" != "no" ]; then
 else 
   rm -fr "$DIRECTORY.orig"; echo "The checked out copy has been deleted";
 fi
-
-
