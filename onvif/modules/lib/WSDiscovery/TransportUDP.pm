@@ -64,10 +64,9 @@ sub send_multi() {
   my ($self, $address, $port, $utf8_string) = @_;
 
   my $destination = $address . ':' . $port;
+  print "new multicast PeerAddr=>$destination port: $port\n";
   my $socket = IO::Socket::Multicast->new(PROTO => 'udp', 
-      LocalPort=>$port, PeerAddr=>$destination, ReuseAddr=>1)
-      
-      or die 'Cannot open multicast socket to ' . ${address} . ':' . ${port};
+      LocalPort=>$port, PeerAddr=>$destination, ReuseAddr=>1) or die 'Cannot open multicast socket to ' . ${address} . ':' . ${port};
 
   my $bytes = $utf8_string;
   utf8::encode($bytes);
