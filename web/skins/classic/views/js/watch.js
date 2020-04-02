@@ -1,3 +1,4 @@
+var monitorSocket;
 
 function showEvents() {
   $('ptzControls').addClass('hidden');
@@ -834,6 +835,34 @@ function initPage() {
   } else if ( monitorRefresh > 0 ) {
     setInterval(reloadWebSite, monitorRefresh*1000);
   }
+
+  monitorSocket = new WebSocket(monitorWSSUrl);
+  monitorSocket.onopen = start_status_timer;
+  monitorSocket.onmessage = log_message;
+}
+
+function send_wss() {
+  if ( ! monitorSocket.readyState ) {
+    console.log("Socket is not read");
+    return;
+  }
+  var msg = {
+    type: "get",
+    what: "status",
+    monitor_id: monitorId,
+    date: Date.now()
+  };
+  console.log("Sending");
+  monitorSocket.send(JSON.stringify(msg));
+}
+
+function start_status_timer() {
+  console.log("Socket open");
+  send_wss();
+}
+
+function log_message(event) {
+  console.log(event.data);
 }
 
 // Kick everything off

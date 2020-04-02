@@ -48,6 +48,7 @@ var monitorId = <?php echo $monitor->Id() ?>;
 var monitorWidth = <?php echo $monitor->ViewWidth() ?>;
 var monitorHeight = <?php echo $monitor->ViewHeight() ?>;
 var monitorUrl = '<?php echo $monitor->UrlToIndex() ?>';
+var monitorWSSUrl = '<?php echo $monitor->UrlToWSS() ?>';
 var monitorType = '<?php echo $monitor->Type() ?>';
 var monitorRefresh = '<?php echo $monitor->Refresh() ?>';
 var monitorStreamReplayBuffer = <?php echo $monitor->StreamReplayBuffer() ?>;
