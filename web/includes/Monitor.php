@@ -175,6 +175,11 @@ class Monitor extends ZM_Object {
       Warning("Unknown function call Monitor->$fn from $file:$line");
     }
   }
+  public function UrlToWSS() {
+    $url = 'wss://';
+    $url .= $this->Server()->Hostname().':'.(9000+$this->{'Id'});
+    return $url;
+  }
 
   public function getStreamSrc($args, $querySep='&amp;') {
 
