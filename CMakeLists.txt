@@ -413,6 +413,7 @@ else(PTHREAD_LIBRARIES)
             "ZoneMinder requires pthread but it was not found on your system")
 endif(PTHREAD_LIBRARIES)
 
+
 # pcre (using find_library and find_path)
 find_library(PCRE_LIBRARIES pcre)
 if(PCRE_LIBRARIES)
@@ -695,12 +696,18 @@ if(NOT ZM_NO_LIBVNC)
 	endif(LIBVNC_LIBRARIES)
 endif(NOT ZM_NO_LIBVNC)
 
-#find_package(Boost 1.36.0)
-#if(Boost_FOUND)
-  #include_directories(${Boost_INCLUDE_DIRS})
+find_package(Boost 1.55.0 REQUIRED COMPONENTS system thread)
+if(Boost_FOUND)
+  include_directories(${Boost_INCLUDE_DIRS})
+  link_directories(${Boost_LIBRARY_DIRS})
   ##set(CMAKE_REQUIRED_INCLUDES "${Boost_INCLUDE_DIRS}")
-  #list(APPEND ZM_BIN_LIBS "${Boost_LIBRARIES}")
-#endif()
+  list(APPEND ZM_BIN_LIBS "${Boost_LIBRARIES}")
+endif()
+
+find_package(nlohmann_json 3.2.0 REQUIRED)
+list(APPEND ZM_BIN_LIBS "nlohmann_json::nlohmann_json")
+
+
 #
 # *** END OF LIBRARY CHECKS ***
 
