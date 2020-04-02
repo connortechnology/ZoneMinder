@@ -60,7 +60,7 @@ set(ZM_BIN_SRC_FILES
   zm_utils.cpp
   zm_video.cpp
   zm_videostore.cpp
-  zm_websocket.cpp
+  zm_websocket_server.cpp
   zm_zone.cpp
   )
 
@@ -78,7 +78,7 @@ add_executable(zms zms.cpp)
 include_directories(libbcrypt/include/bcrypt)
 include_directories(jwt-cpp/include/jwt-cpp)
 
-target_link_libraries(zmc zm ${ZM_EXTRA_LIBS} ${ZM_BIN_LIBS} ${CMAKE_DL_LIBS})
+target_link_libraries(zmc zm ${ZM_EXTRA_LIBS} ${ZM_BIN_LIBS} ${CMAKE_DL_LIBS} ${Boost_LIBRARIES} -lcrypto -lssl)
 target_link_libraries(zma zm ${ZM_EXTRA_LIBS} ${ZM_BIN_LIBS} ${CMAKE_DL_LIBS})
 target_link_libraries(zmu zm ${ZM_EXTRA_LIBS} ${ZM_BIN_LIBS} ${CMAKE_DL_LIBS} bcrypt)
 target_link_libraries(zms zm ${ZM_EXTRA_LIBS} ${ZM_BIN_LIBS} ${CMAKE_DL_LIBS} bcrypt)
