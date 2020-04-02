@@ -16,22 +16,20 @@
 // along with this program; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
-#ifndef ZM_WEBSOCKET_H
-#define ZM_WEBSOCKET_H
+#ifndef ZM_WEBSOCKET_SERVER_H
+#define ZM_WEBSOCKET_SERVER_H
 
-#include <websocketpp/config/asio_no_tls.hpp>
-
+#include <websocketpp/config/asio.hpp>
 #include <websocketpp/server.hpp>
-
-#include <iostream>
-#include <set>
-
-/*#include <boost/thread.hpp>
-#include <boost/thread/mutex.hpp>
-#include <boost/thread/condition_variable.hpp>*/
 #include <websocketpp/common/thread.hpp>
 
-typedef websocketpp::server<websocketpp::config::asio> server;
+#include <set>
+
+#include "zm_monitor.h"
+
+typedef websocketpp::server<websocketpp::config::asio_tls> server;
+//typedef websocketpp::config::asio::message_type::ptr message_ptr;
+typedef websocketpp::lib::shared_ptr<websocketpp::lib::asio::ssl::context> context_ptr;
 
 using websocketpp::connection_hdl;
 using websocketpp::lib::placeholders::_1;
@@ -49,10 +47,18 @@ using websocketpp::lib::condition_variable;
  * on_message queue send to all channels
  */
 
+// See https://wiki.mozilla.org/Security/Server_Side_TLS for more details about
+// the TLS modes. The code below demonstrates how to implement both the modern
+enum tls_mode {
+    MOZILLA_INTERMEDIATE = 1,
+    MOZILLA_MODERN = 2
+};
+
 enum action_type {
     SUBSCRIBE,
     UNSUBSCRIBE,
-    MESSAGE
+    MESSAGE,
+    QUIT
 };
 
 struct action {
@@ -65,24 +71,35 @@ struct action {
     server::message_ptr msg;
 };
 
-class broadcast_server {
+class WebSocket_Server {
   public:
-    broadcast_server(uint16_t p_port);
+    WebSocket_Server(Monitor *p_monitor, uint16_t p_port);
     void run();
+    void start();
+    void stop();
     void on_open(connection_hdl hdl);
     void on_close(connection_hdl hdl);
     void on_message(connection_hdl hdl, server::message_ptr msg);
+    void broadcast(std::string message);
     void process_messages();
-  private:
-    typedef std::set<connection_hdl,std::owner_less<connection_hdl> > con_list;
+    context_ptr on_tls_init(tls_mode mode, websocketpp::connection_hdl hdl);
+    std::string get_password();
 
+  private:
+
+    Monitor *monitor;
     uint16_t m_port;
     server m_server;
+
+    typedef std::set<connection_hdl,std::owner_less<connection_hdl> > con_list;
     con_list m_connections;
     std::queue<action> m_actions;
 
     mutex m_action_lock;
     mutex m_connection_lock;
     condition_variable m_action_cond;
+
+    thread *message_processor_thread;
+    thread *websocket_thread;
 };
-#endif // ZM_WEBSOCKET_H
+#endif // ZM_WEBSOCKET_SERVER_H

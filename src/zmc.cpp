@@ -70,7 +70,7 @@ possible, this should run at more or less constant speed.
 #include "zm_time.h"
 #include "zm_signal.h"
 #include "zm_monitor.h"
-#include "zm_websocket.h"
+#include "zm_websocket_server.h"
 
 void Usage() {
   fprintf(stderr, "zmc -d <device_path> or -r <proto> -H <host> -P <port> -p <path> or -f <file_path> or -m <monitor_id>\n");
@@ -237,25 +237,14 @@ int main(int argc, char *argv[]) {
 
   int prime_capture_log_count = 0;
 
-  try {
-    Debug(1, "Instantiating WebSocket");
-    broadcast_server server_instance(9000+monitors[0]->Id());
+  WebSocket_Server *websockets[n_monitors];
 
-    Debug(1, "Starting Message Processor");
-    // Start a thread to run the processing loop
-    thread message_processor_thread(bind(&broadcast_server::process_messages, &server_instance));
+  for ( int i = 0; i < n_monitors; i++ ) {
+    Debug(1, "Instantiating WebSocket for monitor %d", monitors[i]->Id());
+    websockets[i] = new WebSocket_Server(monitors[i], 9000+monitors[i]->Id());
+    websockets[i]->start();
 
-    Debug(1, "Running WebSocket");
-    // Run the asio loop with the main thread
-    thread websocket_thread(bind(&broadcast_server::run, &server_instance));
-    //server_instance.run(9000+monitors[0]->Id());
 
-    //Debug(1, "Joining thread");
-    //t.join();
-
-  } catch (websocketpp::exception const & e) {
-    Error("Exception: %s", e.what());
-  }
   Debug(1, "Done websocket init");
 
   while ( !zm_terminate ) {
@@ -264,6 +253,7 @@ int main(int argc, char *argv[]) {
     for ( int i = 0; i < n_monitors; i++ ) {
       time_t now = (time_t)time(NULL);
       monitors[i]->setStartupTime(now);
+      monitors[i]->setWebSocketServer(
 
       snprintf(sql, sizeof(sql),
           "REPLACE INTO Monitor_Status (MonitorId, Status) VALUES ('%d','Running')",
@@ -383,6 +373,7 @@ int main(int argc, char *argv[]) {
   } // end while ! zm_terminate outer connection loop
 
   for ( int i = 0; i < n_monitors; i++ ) {
+    websockets[i]->stop();
     static char sql[ZM_SQL_SML_BUFSIZ];
     snprintf(sql, sizeof(sql),
         "REPLACE INTO Monitor_Status (MonitorId, Status) VALUES ('%d','NotRunning')",
