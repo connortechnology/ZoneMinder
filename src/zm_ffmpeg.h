@@ -308,7 +308,7 @@ void zm_dump_codec(const AVCodecContext *codec);
 #if LIBAVCODEC_VERSION_CHECK(57, 64, 0, 64, 0)
 void zm_dump_codecpar(const AVCodecParameters *par);
 #endif
-#define zm_dump_frame(frame, text) Debug(1, "%s: format %d %s sample_rate %" PRIu32 " nb_samples %d channels %d" \
+#define zm_dump_frame(frame, text) Debug(2, "%s: format %d %s sample_rate %" PRIu32 " nb_samples %d channels %d" \
       " duration %" PRId64 \
       " layout %d pts %" PRId64, \
       text, \
@@ -322,7 +322,7 @@ void zm_dump_codecpar(const AVCodecParameters *par);
       );
 
 #if LIBAVUTIL_VERSION_CHECK(54, 4, 0, 74, 100)
-#define zm_dump_video_frame(frame,text) Debug(1, "%s: format %d %s %dx%d linesize:%dx%d pts: %" PRId64, \
+#define zm_dump_video_frame(frame,text) Debug(2, "%s: format %d %s %dx%d linesize:%dx%d pts: %" PRId64, \
       text, \
       frame->format, \
       av_get_pix_fmt_name((AVPixelFormat)frame->format), \
@@ -333,7 +333,7 @@ void zm_dump_codecpar(const AVCodecParameters *par);
       );
 
 #else
-#define zm_dump_video_frame(frame,text) Debug(1, "%s: format %d %s %dx%d linesize:%dx%d pts: %" PRId64, \
+#define zm_dump_video_frame(frame,text) Debug(2, "%s: format %d %s %dx%d linesize:%dx%d pts: %" PRId64, \
       text, \
       frame->format, \
       "unsupported", \
