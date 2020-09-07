@@ -649,9 +649,7 @@ bool EventStream::sendFrame(int delta_us) {
 
   // This needs to be abstracted.  If we are saving jpgs, then load the capture file.
   // If we are only saving analysis frames, then send that.
-  if ( event_data->SaveJPEGs & 1 ) {
-    snprintf(filepath, sizeof(filepath), staticConfig.capture_file_format, event_data->path, curr_frame_id);
-  } else if ( event_data->SaveJPEGs & 2 ) {
+  if ( ( frame_type == FRAME_ANALYSIS ) && ( event_data->SaveJPEGs & 2 ) ) {
     snprintf(filepath, sizeof(filepath), staticConfig.analyse_file_format, event_data->path, curr_frame_id);
     if ( stat(filepath, &filestat) < 0 ) {
       Debug(1, "analyze file %s not found will try to stream from other", filepath);
@@ -661,6 +659,9 @@ bool EventStream::sendFrame(int delta_us) {
         filepath[0] = 0;
       }
     }
+  } else if ( event_data->SaveJPEGs & 1 ) {
+    Debug(1, "Using normal frame");
+    snprintf(filepath, sizeof(filepath), staticConfig.capture_file_format, event_data->path, curr_frame_id);
   } else if ( !ffmpeg_input ) {
     Fatal("JPEGS not saved. zms is not capable of streaming jpegs from mp4 yet");
     return false;
@@ -801,7 +802,6 @@ void EventStream::runStream() {
   uint64_t start_usec = start.tv_sec * 1000000 + start.tv_usec;
   uint64_t last_frame_offset = 0;
 
-  bool in_event = true;
   double time_to_event = 0;
 
   while ( !zm_terminate ) {
@@ -913,50 +913,55 @@ void EventStream::runStream() {
       uint64_t now_usec = (now.tv_sec * 1000000 + now.tv_usec);
 
       // we incremented by replay_rate, so might have jumped past frame_count
-      if ( (mode == MODE_SINGLE) && (
-            (curr_frame_id < 1 )
-            ||
-            ((unsigned int)curr_frame_id >= event_data->frame_count) 
-            )
+      if (
+          (curr_frame_id < 1 )
+          ||
+          ((unsigned int)curr_frame_id >= event_data->frame_count) 
          ) {
-        Debug(2, "Have mode==MODE_SINGLE and at end of event, looping back to start");
-        curr_frame_id = 1;
-        // Have to reset start_usec to now when replaying
-        start_usec = now_usec;
-      }
-      frame_data = &event_data->frames[curr_frame_id-1];
-
-      // frame_data->delta is the time since last frame as a float in seconds
-      // but what if we are skipping frames? We need the distance from the last frame sent
-      // Also, what about reverse? needs to be absolute value
-
-      // There are two ways to go about this, not sure which is correct.
-      // you can calculate the relationship between now and the start
-      // or calc the relationship from the last frame.  I think from the start is better as it self-corrects
-      //
-      if ( last_frame_offset ) {
-        // We assume that we are going forward and the next frame is in the future.
-        delta_us = frame_data->offset * 1000000 - (now_usec-start_usec);
-       // - (now_usec - start_usec);
-        Debug(2, "New delta_us now %" PRIu64 " - start %" PRIu64 " = %d offset %" PRId64 " - elapsed = %dusec",
-            now_usec, start_usec, now_usec-start_usec, frame_data->offset * 1000000, delta_us);
-      } else {
-        Debug(2, "No last frame_offset, no sleep");
-        delta_us = 0;
-      }
-      last_frame_offset = frame_data->offset * 1000000;
-
-      if ( send_frame && (type != STREAM_MPEG) ) {
-        if ( delta_us > 0 ) {
-          if ( delta_us > MAX_SLEEP_USEC ) {
-            Debug(1, "Limiting sleep to %d because calculated sleep is too long %d", MAX_SLEEP_USEC, delta_us);
-            delta_us = MAX_SLEEP_USEC;
-          }
-          usleep(delta_us);
-          Debug(3, "Done sleeping: %d usec", delta_us);
+        if ( mode == MODE_SINGLE) {
+          Debug(2, "Have mode==MODE_SINGLE and at end of event, looping back to start");
+          curr_frame_id = 1;
+          // Have to reset start_usec to now when replaying
+          start_usec = now_usec;
         }
       }
+
+      if ((unsigned int)curr_frame_id <= event_data->frame_count) {
+        frame_data = &event_data->frames[curr_frame_id-1];
+
+        // frame_data->delta is the time since last frame as a float in seconds
+        // but what if we are skipping frames? We need the distance from the last frame sent
+        // Also, what about reverse? needs to be absolute value
+
+        // There are two ways to go about this, not sure which is correct.
+        // you can calculate the relationship between now and the start
+        // or calc the relationship from the last frame.  I think from the start is better as it self-corrects
+        //
+        if ( last_frame_offset ) {
+          // We assume that we are going forward and the next frame is in the future.
+          delta_us = frame_data->offset * 1000000 - (now_usec-start_usec);
+         // - (now_usec - start_usec);
+          Debug(2, "New delta_us now %" PRIu64 " - start %" PRIu64 " = %d offset %" PRId64 " - elapsed = %dusec",
+              now_usec, start_usec, now_usec-start_usec, frame_data->offset * 1000000, delta_us);
+        } else {
+          Debug(2, "No last frame_offset, no sleep");
+          delta_us = 0;
+        }
+        last_frame_offset = frame_data->offset * 1000000;
+
+        if ( send_frame && (type != STREAM_MPEG) ) {
+          if ( delta_us > 0 ) {
+            if ( delta_us > MAX_SLEEP_USEC ) {
+              Debug(1, "Limiting sleep to %d because calculated sleep is too long %d", MAX_SLEEP_USEC, delta_us);
+              delta_us = MAX_SLEEP_USEC;
+            }
+            usleep(delta_us);
+            Debug(3, "Done sleeping: %d usec", delta_us);
+          }
+        }
+      }  // end if not at end of event
     } else {
+      // Paused
       delta_us = ((1000000 * ZM_RATE_BASE)/((base_fps?base_fps:1)*(replay_rate?abs(replay_rate*2):2)));
 
       Debug(2, "Sleeping %d because 1000000 * ZM_RATE_BASE(%d) / ( base_fps (%f), replay_rate(%d)",
@@ -976,6 +981,7 @@ void EventStream::runStream() {
       //if ( step != 0 )// Adding 0 is cheaper than an if 0
       // curr_frame_id starts at 1 though, so we might skip the first frame?
       curr_frame_id += step;
+    }  // end if !paused
 
       // Detects when we hit end of event and will load the next event or previous event
       if ( checkEventLoaded() ) {
@@ -998,7 +1004,6 @@ void EventStream::runStream() {
         }  // end if forward or reverse
 
       }  // end if checkEventLoaded
-    }  // end if !paused
   }  // end while ! zm_terminate
 #if HAVE_LIBAVCODEC
   if ( type == STREAM_MPEG )
@@ -1009,10 +1014,6 @@ void EventStream::runStream() {
 } // end void EventStream::runStream()
 
 bool EventStream::send_file(const char * filepath) {
-  static unsigned char temp_img_buffer[ZM_MAX_IMAGE_SIZE];
-
-  int img_buffer_size = 0;
-  uint8_t *img_buffer = temp_img_buffer;
 
   FILE *fdj = NULL;
   fdj = fopen(filepath, "rb");
@@ -1035,11 +1036,19 @@ bool EventStream::send_file(const char * filepath) {
   }
   size_sent = true;
 
-  if ( zm_sendfile(fileno(stdout), fileno(fdj), 0, (int)filestat.st_size) != (int)filestat.st_size ) {
+  int rc = zm_sendfile(fileno(stdout), fileno(fdj), 0, (int)filestat.st_size);
+  if ( rc == (int)filestat.st_size ) {
     fclose(fdj); /* Close the file handle */
     return true;
+  } else {
+    Debug(1, "Failed to sendfile?");
   }
 #endif
+
+  static unsigned char temp_img_buffer[ZM_MAX_IMAGE_SIZE];
+
+  int img_buffer_size = 0;
+  uint8_t *img_buffer = temp_img_buffer;
   img_buffer_size = fread(img_buffer, 1, sizeof(temp_img_buffer), fdj);
   if ( !size_sent ) {
     if ( 0 > fprintf(stdout, "Content-Length: %d\r\n\r\n", img_buffer_size) ) {
@@ -1049,7 +1058,7 @@ bool EventStream::send_file(const char * filepath) {
     }
   }
   if ( fwrite(img_buffer, img_buffer_size, 1, stdout) != 1 ) {
-    Error("Unable to send raw frame %u: %s", curr_frame_id, strerror(errno));
+    Error("Unable to send raw frame %u %u bytes %u: %s", curr_frame_id, img_buffer_size, strerror(errno));
     return false;
   }
 
