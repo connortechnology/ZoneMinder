@@ -77,6 +77,7 @@ bool MonitorStream::checkSwapPath(const char *path, bool create_path) {
 
 void MonitorStream::processCommand(const CmdMsg *msg) {
   Debug(2, "Got message, type %d, msg %d", msg->msg_type, msg->msg_data[0]);
+  Debug(2, "CMD_ANALYZE_ON %d", CMD_ANALYZE_ON);
   // Check for incoming command
   switch ( (MsgCommand)msg->msg_data[0] ) {
     case CMD_PAUSE :
@@ -133,21 +134,21 @@ void MonitorStream::processCommand(const CmdMsg *msg) {
       }
       break;
     case CMD_SLOWFWD :
-      Debug( 1, "Got SLOW FWD command" );
+      Debug(1, "Got SLOW FWD command");
       paused = true;
       delayed = true;
       replay_rate = ZM_RATE_BASE;
       step = 1;
       break;
     case CMD_SLOWREV :
-      Debug( 1, "Got SLOW REV command" );
+      Debug(1, "Got SLOW REV command");
       paused = true;
       delayed = true;
       replay_rate = ZM_RATE_BASE;
       step = -1;
       break;
     case CMD_FASTREV :
-      Debug( 1, "Got FAST REV command" );
+      Debug(1, "Got FAST REV command");
       if ( paused ) {
         paused = false;
         delayed = true;
@@ -227,6 +228,14 @@ void MonitorStream::processCommand(const CmdMsg *msg) {
       break;
     case CMD_QUIT :
       Info("User initiated exit - CMD_QUIT");
+      break;
+    case CMD_ANALYZE_ON : 
+      frame_type = FRAME_ANALYSIS;
+      Debug(1, "ANALYSIS on");
+      break;
+    case CMD_ANALYZE_OFF : 
+      frame_type = FRAME_NORMAL;
+      Debug(1, "ANALYSIS off");
       break;
     case CMD_QUERY :
       Debug(1, "Got QUERY command, sending STATUS");
@@ -605,6 +614,7 @@ void MonitorStream::runStream() {
           // Debug( 3, "tri: %d, ti: %d", temp_read_index, temp_index );
           SwapImage *swap_image = &temp_image_buffer[temp_index];
 
+
           if ( !swap_image->valid ) {
             paused = true;
             delayed = true;
@@ -678,6 +688,7 @@ void MonitorStream::runStream() {
     }  // end if ( buffered_playback && delayed )
 
     if ( last_read_index != monitor->shared_data->last_write_index ) {
+
       // have a new image to send
       int index = monitor->shared_data->last_write_index % monitor->image_buffer_count;  // % shouldn't be neccessary
       if ( (frame_mod == 1) || ((frame_count%frame_mod) == 0) ) {
@@ -686,12 +697,23 @@ void MonitorStream::runStream() {
           Debug(2, "Sending frame index: %d: frame_mod: %d frame count: %d paused(%d) delayed(%d)",
               index, frame_mod, frame_count, paused, delayed);
           // Send the next frame
-          Monitor::Snapshot *snap = &monitor->image_buffer[index];
+          Image *send_image = nullptr;
 
-          if ( !sendFrame(snap->image, snap->timestamp) ) {
+          Monitor::Snapshot *snap = &monitor->image_buffer[index];
+          if ( ( frame_type == FRAME_ANALYSIS ) && ( monitor->GetOptSaveJPEGs() & 2 ) ) {
+            send_image = monitor->GetAlarmImage();
+            if ( !send_image ) {
+              Debug(1, "Falling back");
+              send_image = snap->image;
+            }
+          } else {
+            send_image = snap->image;
+          }
+
+          if ( !sendFrame(send_image, snap->timestamp) ) {
             Debug(2, "sendFrame failed, quiting.");
             zm_terminate = true;
-          }
+          } 
           if ( frame_count == 0 ) {
             // Chrome will not display the first frame until it receives another.
             // Firefox is fine.  So just send the first frame twice.

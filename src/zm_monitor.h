@@ -311,7 +311,7 @@ protected:
   
   Image        delta_image;
   Image        ref_image;
-  Image        alarm_image;  // Used in creating analysis images, will be initialized in Analysis
+  Image        *alarm_image;  // Used in creating analysis images, will be initialized in Analysis
   Image        write_image;    // Used when creating snapshot images
   std::string diag_path_r;
   std::string diag_path_d;
@@ -485,6 +485,7 @@ public:
   struct timeval GetVideoBufferDuration() const { return video_buffer_duration; };
   int GetImageBufferCount() const { return image_buffer_count; };
   State GetState() const;
+  Image *GetAlarmImage();
   int GetImage( int index=-1, int scale=100 );
   Snapshot *getSnapshot() const;
   struct timeval GetTimestamp( int index=-1 ) const;

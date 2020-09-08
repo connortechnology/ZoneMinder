@@ -209,7 +209,7 @@ bool Monitor::MonitorLink::connect() {
     return true;
   }
   return false;
-}
+}  // end bool Monitor::MonitorLink::connect()
 
 bool Monitor::MonitorLink::disconnect() {
   if ( connected ) {
@@ -361,6 +361,7 @@ Monitor::Monitor(
   signal_check_points(p_signal_check_points),
   signal_check_colour( p_signal_check_colour ),
   embed_exif( p_embed_exif ),
+  alarm_image(nullptr),
   delta_image( width, height, ZM_COLOUR_GRAY8, ZM_SUBPIX_ORDER_NONE ),
   ref_image( width, height, p_camera->Colours(), p_camera->SubpixelOrder() ),
   purpose( p_purpose ),
@@ -373,7 +374,7 @@ Monitor::Monitor(
   privacy_bitmask( nullptr ),
   event_delete_thread(nullptr)
 {
-  if (analysis_fps > 0.0) {
+  if ( analysis_fps > 0.0 ) {
       uint64_t usec = round(1000000*pre_event_count/analysis_fps);
       video_buffer_duration.tv_sec = usec/1000000;
       video_buffer_duration.tv_usec = usec % 1000000;
@@ -432,6 +433,7 @@ Monitor::Monitor(
        + sizeof(VideoStoreData) //Information to pass back to the capture process
        + (image_buffer_count*sizeof(struct timeval))
        + (image_buffer_count*camera->ImageSize())
+       + camera->ImageSize() // alarm_image
        + 64; /* Padding used to permit aligning the images buffer to 64 byte boundary */
 
   Debug(1, "mem.size(%d) SharedData=%d TriggerData=%d VideoStoreData=%d timestamps=%d images=%dx%d = %" PRId64 " total=%" PRId64,
@@ -636,6 +638,9 @@ bool Monitor::connect() {
     image_buffer[i].image = new Image(width, height, camera->Colours(), camera->SubpixelOrder(), &(shared_images[i*camera->ImageSize()]));
     image_buffer[i].image->HoldBuffer(true); /* Don't release the internal buffer or replace it with another */
   }
+  alarm_image = new Image(width, height, camera->Colours(), camera->SubpixelOrder(), &(shared_images[image_buffer_count*camera->ImageSize()]));
+  alarm_image->HoldBuffer(true); /* Don't release the internal buffer or replace it with another */
+
   if ( (deinterlacing & 0xff) == 4 ) {
     /* Four field motion adaptive deinterlacing in use */
     /* Allocate a buffer for the next image */
@@ -798,6 +803,10 @@ Monitor::State Monitor::GetState() const {
   return (State)shared_data->state;
 }
 
+Image *Monitor::GetAlarmImage() {
+  return alarm_image;
+}
+
 int Monitor::GetImage( int index, int scale ) {
   if ( index < 0 || index > image_buffer_count ) {
     index = shared_data->last_write_index;
@@ -810,19 +819,19 @@ int Monitor::GetImage( int index, int scale ) {
       Snapshot *snap = &image_buffer[index];
       Image *snap_image = snap->image;
 
-      alarm_image.Assign(*snap_image);
+      alarm_image->Assign(*snap_image);
 
 
       //write_image.Assign( *snap_image );
 
       if ( scale != ZM_SCALE_BASE ) {
-        alarm_image.Scale(scale);
+        alarm_image->Scale(scale);
       }
 
       if ( !config.timestamp_on_capture ) {
-        TimestampImage(&alarm_image, snap->timestamp);
+        TimestampImage(alarm_image, snap->timestamp);
       }
-      image = &alarm_image;
+      image = alarm_image;
     } else {
       image = image_buffer[index].image;
     }
@@ -1687,11 +1696,12 @@ bool Monitor::Analyse() {
           if ( state == PREALARM || state == ALARM ) {
             if ( savejpegs > 1 ) {
               bool got_anal_image = false;
-              alarm_image.Assign(*snap_image);
+              Debug(1, "Assigning alarm image");
+              alarm_image->Assign(*snap_image);
               for ( int i = 0; i < n_zones; i++ ) {
                 if ( zones[i]->Alarmed() ) {
                   if ( zones[i]->AlarmImage() ) {
-                    alarm_image.Overlay(*(zones[i]->AlarmImage()));
+                    alarm_image->Overlay(*(zones[i]->AlarmImage()));
                     got_anal_image = true;
                   }
                   if ( config.record_event_stats && (state == ALARM) )
@@ -1700,9 +1710,9 @@ bool Monitor::Analyse() {
               } // end foreach zone
 
               if ( state == PREALARM ) {
-                Event::AddPreAlarmFrame(snap_image, *timestamp, score, (got_anal_image?&alarm_image:nullptr));
+                Event::AddPreAlarmFrame(snap_image, *timestamp, score, (got_anal_image?alarm_image:nullptr));
               } else {
-								event->AddFrame(snap_image, *timestamp, score, (got_anal_image?&alarm_image:nullptr));
+								event->AddFrame(snap_image, *timestamp, score, (got_anal_image?alarm_image:nullptr));
 							}
             } else {
               // Not doing alarm frame storage
