@@ -196,7 +196,7 @@ function toPercent(field, maxValue) {
       field.value = 100;
     }
   }
-  field.setAttribute('step', 0.01);
+  field.setAttribute('step', 'any');
   field.setAttribute('max', 100);
 }
 
@@ -562,6 +562,7 @@ function watchdogOk(type) {
 }
 
 var monitors = new Array();
+var analyze_frames = true;
 
 function initPage() {
   var form = document.zoneForm;
@@ -651,6 +652,21 @@ function initPage() {
       refreshParentWindow();
       closeWindow();
     };
+  }
+
+  if ( el = $('analyzeBtn') ) {
+    $('analyzeBtn').onclick = function() {
+      console.log(analyze_frames);
+      analyze_frames = !analyze_frames;
+      if ( analyze_frames ) {
+        $('analyzeBtn').classList.add('disabled');
+      } else {
+        $('analyzeBtn').classList.remove('disabled');
+      }
+      for ( var i = 0, length = monitors.length; i < length; i++ ) {
+        monitors[i].show_analyze_frames(analyze_frames);
+      }
+    }
   }
 
   for ( var i = 0, length = monitorData.length; i < length; i++ ) {
