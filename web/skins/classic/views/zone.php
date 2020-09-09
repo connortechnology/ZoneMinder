@@ -167,6 +167,9 @@ if ( count($other_zones) ) {
               <button type="button" id="playBtn" title="<?php echo translate('Play') ?>">
                 <i class="material-icons md-18">play_arrow</i>
               </button>
+              <button type="button" id="analyzeBtn" title="<?php echo translate('AnalysisFrames') ?>">
+                <i class="material-icons md-18">image_search</i>
+              </button>
             </div>
           </div><!--imagePanel-->
 
@@ -198,7 +201,7 @@ if ( count($other_zones) ) {
                         array('data-on-change'=>'applyZoneUnits')
                         );
                         # Used later for number inputs
-                        $step = $newZone['Units'] == 'Percent' ? ' step="0.01" max="100"' : '';
+                        $step = $newZone['Units'] == 'Percent' ? ' step="any" max="100"' : '';
 ?>
                   </td>
 								</tr>
