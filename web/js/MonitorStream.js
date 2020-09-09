@@ -268,4 +268,10 @@ function MonitorStream(monitorData) {
       link: 'cancel'
     } );
   }
+  this.analyze_frames = true;
+  this.show_analyze_frames = function(toggle) {
+    this.analyze_frames = toggle;
+    console.log("Sending command " + (this.analyze_frames?CMD_ANALYZE_ON:CMD_ANALYZE_OFF));
+    this.streamCmdReq.send(this.streamCmdParms+"&command="+(this.analyze_frames?CMD_ANALYZE_ON:CMD_ANALYZE_OFF));
+  }
 } // end function MonitorStream
