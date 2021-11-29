@@ -24,6 +24,8 @@
 #include "zm_monitorstream.h"
 #include "zm_eventstream.h"
 #include "zm_fifo_stream.h"
+#include <fmt/format.h>
+
 #include <string>
 #include <unistd.h>
 
@@ -82,8 +84,7 @@ int main(int argc, const char *argv[], char **envp) {
     nph = true;
   }
 
-  char log_id_string[32] = "zms";
-  logInit(log_id_string);
+  logInit("zms");
   zmLoadStaticConfig();
   zmDbConnect();
   zmLoadDBConfig();
@@ -183,12 +184,13 @@ int main(int argc, const char *argv[], char **envp) {
     }  // end if possible parameter names
   }  // end foreach parm
 
+  std::string logId;
   if ( monitor_id ) {
-    snprintf(log_id_string, sizeof(log_id_string), "zms_m%d", monitor_id);
+    logId = fmt::format("zms_m{}", monitor_id);
   } else {
-    snprintf(log_id_string, sizeof(log_id_string), "zms_e%" PRIu64, event_id);
+    logId = fmt::format("zms_e{}", event_id);
   }
-  logInit(log_id_string);
+  logInit(logId);
 
   if ( config.opt_use_auth ) {
     User *user = nullptr;

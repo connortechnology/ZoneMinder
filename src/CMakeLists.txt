@@ -113,6 +113,7 @@ target_link_libraries(zmc
   PRIVATE
     zm-core-interface
     zm
+    fmt::fmt
     ${ZM_EXTRA_LIBS}
     ${CMAKE_DL_LIBS})
 
@@ -134,6 +135,7 @@ target_link_libraries(zmbenchmark
   PRIVATE
     zm-core-interface
     zm
+    fmt::fmt
     ${ZM_EXTRA_LIBS}
     ${CMAKE_DL_LIBS})
 
