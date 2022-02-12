@@ -56,6 +56,14 @@ $serial = $primary_key = 'Id';
   Enabled
   LinkedMonitors
   Triggers
+  EventStartCommand
+  EventEndCommand
+  ONVIF_URL
+  ONVIF_Username
+  ONVIF_Password
+  ONVIF_Options
+  ONVIF_Event_Listener
+  use_Amcrest_API
   Device
   Channel
   Format
@@ -133,6 +141,9 @@ $serial = $primary_key = 'Id';
   DefaultCodec
   Latitude
   Longitude
+  RTSPServer
+  RTSPStreamName
+  Importance
   );
 
 %defaults = (
@@ -241,20 +252,26 @@ sub control {
   my $command = shift;
   my $process = shift;
 
-  if ( $command eq 'stop' or $command eq 'restart' ) {
-    if ( $process ) {
-      `/usr/bin/zmdc.pl stop $process -m $$monitor{Id}`;
+  if ($command eq 'stop' or $command eq 'restart') {
+    if ($process) {
+      ZoneMinder::General::runCommand("zmdc.pl stop $process -m $$monitor{Id}");
     } else {
-      `/usr/bin/zmdc.pl stop zma -m $$monitor{Id}`;
-      `/usr/bin/zmdc.pl stop zmc -m $$monitor{Id}`;
+      if ($monitor->{Type} eq 'Local') {
+        ZoneMinder::General::runCommand('zmdc.pl stop zmc -d '.$monitor->{Device});
+      } else {
+        ZoneMinder::General::runCommand('zmdc.pl stop zmc -m '.$monitor->{Id});
+      }
     }
   }
   if ( $command eq 'start' or $command eq 'restart' ) {
     if ( $process ) {
-      `/usr/bin/zmdc.pl start $process -m $$monitor{Id}`;
+      ZoneMinder::General::runCommand("zmdc.pl start $process -m $$monitor{Id}");
     } else {
-      `/usr/bin/zmdc.pl start zmc -m $$monitor{Id}`;
-      `/usr/bin/zmdc.pl start zma -m $$monitor{Id}`;
+      if ($monitor->{Type} eq 'Local') {
+        ZoneMinder::General::runCommand('zmdc.pl start zmc -d '.$monitor->{Device});
+      } else {
+        ZoneMinder::General::runCommand('zmdc.pl start zmc -m '.$monitor->{Id});
+      }
     } # end if
   }
 } # end sub control

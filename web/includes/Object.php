@@ -11,19 +11,24 @@ class ZM_Object {
     $class = get_class($this);
 
     $row = NULL;
-    if ( $IdOrRow ) {
+    if ($IdOrRow) {
 
-      if ( is_integer($IdOrRow) or ctype_digit($IdOrRow) ) {
+      if (is_integer($IdOrRow) or ctype_digit($IdOrRow)) {
         $table = $class::$table;
         $row = dbFetchOne("SELECT * FROM `$table` WHERE `Id`=?", NULL, array($IdOrRow));
-        if ( !$row ) {
+        if (!$row) {
           Error("Unable to load $class record for Id=$IdOrRow");
+          return;
         }
-      } else if ( is_array($IdOrRow) ) {
+      } else if (is_array($IdOrRow)) {
         $row = $IdOrRow;
       }
 
       if ( $row ) {
+        if (!isset($row['Id'])) {
+          Error("No Id in " . print_r($row, true));
+          return;
+        }
         foreach ($row as $k => $v) {
           $this->{$k} = $v;
         }
@@ -232,10 +237,13 @@ class ZM_Object {
     $changes = array();
 
     if ($defaults) {
+      // FIXME: This code basically means that the new_values must be a full object, not a subset
+      // Perhaps if it only concerned itself with the keys of new_values
       foreach ($defaults as $field => $type) {
         if (isset($new_values[$field])) continue;
 
         if (isset($this->defaults[$field])) {
+          //Debug("Setting default for $field");
           if (is_array($this->defaults[$field])) {
             $new_values[$field] = $this->defaults[$field]['default'];
           } else {
@@ -250,9 +258,11 @@ class ZM_Object {
         if (array_key_exists($field, $this->defaults) && is_array($this->defaults[$field]) && isset($this->defaults[$field]['filter_regexp'])) {
           if (is_array($this->defaults[$field]['filter_regexp'])) {
             foreach ($this->defaults[$field]['filter_regexp'] as $regexp) {
+              //Debug("regexping array $field $value to " . preg_replace($regexp, '', trim($value)));
               $value = preg_replace($regexp, '', trim($value));
             }
           } else {
+            //Debug("regexping $field $value to " . preg_replace($this->defaults[$field]['filter_regexp'], '', trim($value)));
             $value = preg_replace($this->defaults[$field]['filter_regexp'], '', trim($value));
           }
         }
@@ -260,10 +270,12 @@ class ZM_Object {
         $old_value = $this->$field();
         if (is_array($old_value)) {
           $diff = array_recursive_diff($old_value, $value);
+          //Debug("$field array old: " .print_r($old_value, true) . " new: " . print_r($value, true). ' diff: '. print_r($diff, true));
           if ( count($diff) ) {
             $changes[$field] = $value;
           }
         } else if ( $this->$field() != $value ) {
+          //Debug("$field != $value");
           $changes[$field] = $value;
         }
       } else if (property_exists($this, $field)) {

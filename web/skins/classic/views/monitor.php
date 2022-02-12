@@ -577,6 +577,26 @@ if (count($available_monitor_ids)) {
 ?>
           </td>
         </tr>
+  <tr id="FunctionJanusEnabled">
+          <td class="text-right pr-3"><?php echo translate('Janus Live Stream') ?></td>
+          <td><input type="checkbox" name="newMonitor[JanusEnabled]" value="1"<?php echo $monitor->JanusEnabled() ? ' checked="checked"' : '' ?>/>
+<?php
+  if ( isset($OLANG['FUNCTION_JANUS_ENABLED']) ) {
+    echo '<div class="form-text">'.$OLANG['FUNCTION_JANUS_ENABLED']['Help'].'</div>';
+  }
+?>
+          </td>
+        </tr>
+  <tr id="FunctionJanusAudioEnabled">
+          <td class="text-right pr-3"><?php echo translate('Janus Live Stream Audio') ?></td>
+          <td><input type="checkbox" name="newMonitor[JanusAudioEnabled]" value="1"<?php echo $monitor->JanusAudioEnabled() ? ' checked="checked"' : '' ?>/>
+<?php
+  if ( isset($OLANG['FUNCTION_JANUS_AUDIO_ENABLED']) ) {
+    echo '<div class="form-text">'.$OLANG['FUNCTION_JANUS_AUDIO_ENABLED']['Help'].'</div>';
+  }
+?>
+          </td>
+        </tr>
         <tr>
           <td class="text-right pr-3"><?php echo translate('LinkedMonitors'); echo makeHelpLink('OPTIONS_LINKED_MONITORS') ?></td>
           <td>
@@ -705,6 +725,14 @@ if (count($available_monitor_ids)) {
             <tr>
               <td class="text-right pr-3"><?php echo translate('ONVIF_Options') ?></td>
               <td><input type="text" name="newMonitor[ONVIF_Options]" value="<?php echo validHtmlStr($monitor->ONVIF_Options()) ?>"/></td>
+            </tr>
+            <tr>
+              <td class="text-right pr-3"><?php echo translate('ONVIF_Event_Listener') ?></td>
+              <td><?php echo html_radio('newMonitor[ONVIF_Event_Listener]', array('1'=>translate('Enabled'), '0'=>'Disabled'), $monitor->ONVIF_Event_Listener()); ?></td>
+            </tr>
+            <tr id="function_use_Amcrest_API">
+              <td class="text-right pr-3"><?php echo translate('use_Amcrest_API') ?></td>
+              <td><?php echo html_radio('newMonitor[use_Amcrest_API]', array('1'=>translate('Enabled'), '0'=>'Disabled'), $monitor->use_Amcrest_API()); ?></td>
             </tr>
 <?php
         break;
@@ -1286,9 +1314,9 @@ echo htmlSelect('newMonitor[ReturnLocation]', $return_options, $monitor->ReturnL
 <?php
       echo htmlselect('newMonitor[Importance]',
               array(
-                'Not'=>translate('Not important'),
+                'Normal'=>translate('Normal'),
                 'Less'=>translate('Less important'),
-                'Normal'=>translate('Normal')
+                'Not'=>translate('Not important')
               ), $monitor->Importance());
 ?>
           </td>

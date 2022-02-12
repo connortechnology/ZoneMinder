@@ -83,6 +83,7 @@ mark_as_advanced(
   ZM_TARGET_DISTRO
   ZM_PATH_MAP
   ZM_PATH_ARP
+  ZM_PATH_ARP_SCAN
   ZM_CONFIG_DIR
   ZM_CONFIG_SUBDIR
   ZM_SYSTEMD
@@ -145,6 +146,8 @@ set(ZM_PATH_MAP "/dev/shm" CACHE PATH
   "Location to save mapped memory files, default: /dev/shm")
 set(ZM_PATH_ARP "" CACHE PATH
   "Full path to compatible arp binary. Leave empty for automatic detection.")
+set(ZM_PATH_ARP_SCAN "" CACHE PATH
+  "Full path to compatible scan_arp binary. Leave empty for automatic detection.")
 set(ZM_CONFIG_DIR "/${CMAKE_INSTALL_SYSCONFDIR}" CACHE PATH
   "Location of ZoneMinder configuration, default system config directory")
 set(ZM_CONFIG_SUBDIR "${ZM_CONFIG_DIR}/conf.d" CACHE PATH
@@ -318,10 +321,10 @@ endif()
 # Do not check for cURL if ZM_NO_CURL is on
 if(NOT ZM_NO_CURL)
   # cURL
-  find_package(CURL)
+  find_package(CURL REQUIRED)
   if(CURL_FOUND)
     set(HAVE_LIBCURL 1)
-    #list(APPEND ZM_BIN_LIBS ${CURL_LIBRARIES})
+    list(APPEND ZM_BIN_LIBS ${CURL_LIBRARIES})
     include_directories(${CURL_INCLUDE_DIRS})
     set(CMAKE_REQUIRED_INCLUDES ${CURL_INCLUDE_DIRS})
     check_include_file("curl/curl.h" HAVE_CURL_CURL_H)
@@ -518,6 +521,15 @@ endif()
 #list(APPEND ZM_BIN_LIBS "${Boost_LIBRARIES}")
 #endif()
 
+
+find_package(GSOAP 2.0.0)
+if (GSOAP_FOUND)
+  set(optlibsfound "${optlibsfound} gsoap")
+  add_compile_definitions(WITH_GSOAP)
+else()
+  set(optlibsnotfound "${optlibsnotfound} gsoap")
+endif()
+
 if(NOT ZM_NO_RTSPSERVER)
   set(HAVE_RTSP_SERVER 1)
 else()
@@ -631,6 +643,18 @@ if(ZM_PATH_ARP STREQUAL "")
   endif()
   if(ARP_EXECUTABLE-NOTFOUND)
     message(WARNING "Unable to find a compatible arp binary. Monitor probe will not function.")
+  endif()
+endif()
+
+# Find the path to an arp-scan compatible executable
+if(ZM_PATH_ARP_SCAN STREQUAL "")
+  find_program(ARP_SCAN_EXECUTABLE arp-scan)
+  if(ARP_SCAN_EXECUTABLE)
+    set(ZM_PATH_ARP_SCAN "${ARP_SCAN_EXECUTABLE}")
+    mark_as_advanced(ARP_SCAN_EXECUTABLE)
+  endif()
+  if(ARP_SCAN_EXECUTABLE-NOTFOUND)
+    message(WARNING "Unable to find a compatible arp-scan binary. Monitor probe will be less powerful.")
   endif()
 endif()
 

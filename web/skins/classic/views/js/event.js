@@ -88,9 +88,15 @@ function initialAlarmCues(eventId) {
 }
 
 function setAlarmCues(data) {
-  cueFrames = data.frames;
-  alarmSpans = renderAlarmCues(vid ? $j("#videoobj") : $j("#evtStream"));//use videojs width or zms width
-  $j(".alarmCue").html(alarmSpans);
+  if (!data) {
+    Error('No data in setAlarmCues for event ' + eventData.Id);
+  } else if (!data.frames) {
+    Error('No data.frames in setAlarmCues for event ' + eventData.Id);
+  } else {
+    cueFrames = data.frames;
+    alarmSpans = renderAlarmCues(vid ? $j("#videoobj") : $j("#evtStream"));//use videojs width or zms width
+    $j(".alarmCue").html(alarmSpans);
+  }
 }
 
 function renderAlarmCues(containerEl) {
@@ -177,7 +183,7 @@ function changeScale() {
   var newWidth;
   var newHeight;
   var autoScale;
-  var eventViewer= $j(vid ? '#videoobj' : '#evtStream');
+  var eventViewer= $j(vid ? '#videoobj' : '#videoFeed');
   var alarmCue = $j('div.alarmCue');
   var bottomEl = $j('#replayStatus');
 
@@ -197,7 +203,10 @@ function changeScale() {
     streamScale(scale == '0' ? autoScale : scale);
     drawProgressBar();
   }
-  alarmCue.html(renderAlarmCues(eventViewer));//just re-render alarmCues.  skip ajax call
+  if (cueFrames) {
+    //just re-render alarmCues.  skip ajax call
+    alarmCue.html(renderAlarmCues(eventViewer));
+  }
   setCookie('zmEventScale'+eventData.MonitorId, scale, 3600);
 
   // After a resize, check if we still have room to display the event stats table
@@ -446,8 +455,10 @@ function streamFastRev(action) {
 function streamPrev(action) {
   if (action) {
     $j(".vjsMessage").remove();
-    location.replace(thisUrl + '?view=event&eid=' + prevEventId + filterQuery + sortQuery);
-    return;
+    if (prevEventId != 0) {
+      location.replace(thisUrl + '?view=event&eid=' + prevEventId + filterQuery + sortQuery);
+      return;
+    }
 
     /* Ideally I'd like to get back to this style
     if ( vid && PrevEventDefVideoPath.indexOf("view_video") > 0 ) {
@@ -619,8 +630,8 @@ function getNearEventsResponse(respObj, respText) {
   if (checkStreamForErrors('getNearEventsResponse', respObj)) {
     return;
   }
-  prevEventId = respObj.nearevents.PrevEventId;
-  nextEventId = respObj.nearevents.NextEventId;
+  prevEventId = parseInt(respObj.nearevents.PrevEventId);
+  nextEventId = parseInt(respObj.nearevents.NextEventId);
   prevEventStartTime = Date.parse(respObj.nearevents.PrevEventStartTime);
   nextEventStartTime = Date.parse(respObj.nearevents.NextEventStartTime);
   PrevEventDefVideoPath = respObj.nearevents.PrevEventDefVideoPath;
@@ -706,10 +717,6 @@ function actQuery(action, parms) {
 function renameEvent() {
   var newName = $j('input').val();
   actQuery('rename', {eventName: newName});
-}
-
-function exportEvent() {
-  window.location.assign('?view=export&eids[]='+eventData.Id);
 }
 
 function showEventFrames() {
@@ -910,12 +917,12 @@ function initPage() {
     progressBarNav();
     streamCmdTimer = setTimeout(streamQuery, 500);
     if (canStreamNative) {
-      if (!$j('#imageFeed')) {
-        console.log('No element with id tag imageFeed found.');
+      if (!$j('#videoFeed')) {
+        console.log('No element with id tag videoFeed found.');
       } else {
-        var streamImg = $j('#imageFeed img');
+        var streamImg = $j('#videoFeed img');
         if (!streamImg) {
-          streamImg = $j('#imageFeed object');
+          streamImg = $j('#videoFeed object');
         }
         $j(streamImg).click(function(event) {
           handleClick(event);
@@ -1018,11 +1025,11 @@ function initPage() {
   // Manage the EXPORT button
   bindButton('#exportBtn', 'click', null, function onExportClick(evt) {
     evt.preventDefault();
-    exportEvent();
+    window.location.assign('?view=export&eids[]='+eventData.Id);
   });
 
   // Manage the generateVideo button
-  bindButton('#videoBtn', 'click', null, function onExportClick(evt) {
+  bindButton('#videoBtn', 'click', null, function onVideoClick(evt) {
     evt.preventDefault();
     videoEvent();
   });
@@ -1070,6 +1077,28 @@ function initPage() {
     $j('#deleteConfirm').modal('show');
   });
 } // end initPage
+
+document.getElementById('toggleZonesButton').addEventListener('click', toggleZones);
+
+function toggleZones(e) {
+  const zones = $j('#zones'+eventData.MonitorId);
+  const button = document.getElementById('toggleZonesButton');
+  if (zones.length) {
+    if (zones.is(":visible")) {
+      zones.hide();
+      button.setAttribute('title', showZonesString);
+      button.innerHTML = '<span class="material-icons">layers</span>';
+      setCookie('zmEventShowZones'+eventData.MonitorId, '0', 3600);
+    } else {
+      zones.show();
+      button.setAttribute('title', hideZonesString);
+      button.innerHTML = '<span class="material-icons">layers_clear</span>';
+      setCookie('zmEventShowZones'+eventData.MonitorId, '1', 3600);
+    }
+  } else {
+    console.error("Zones svg not found");
+  }
+}
 
 // Kick everything off
 $j(document).ready(initPage);

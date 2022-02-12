@@ -87,11 +87,7 @@ else
 fi;
 
 if [ "$DISTROS" == "" ]; then
-  if [ "$RELEASE" != "" ]; then
-    DISTROS="bionic,focal,hirsute,impish"
-  else
-    DISTROS=`lsb_release -a 2>/dev/null | grep Codename | awk '{print $2}'`;
-  fi;
+  DISTROS=`lsb_release -a 2>/dev/null | grep Codename | awk '{print $2}'`;
   echo "Defaulting to $DISTROS for distribution";
 else
   echo "Building for $DISTROS";
@@ -123,8 +119,8 @@ if [ ! -d "${GITHUB_FORK}_zoneminder_release" ]; then
   if [ -d "${GITHUB_FORK}_ZoneMinder.git" ]; then
     echo "Using local clone ${GITHUB_FORK}_ZoneMinder.git to pull from."
     cd "${GITHUB_FORK}_ZoneMinder.git"
-    echo "git fetch..."
-    git fetch
+    echo "git pull..."
+    git pull
     cd ../
 
     echo "git clone ${GITHUB_FORK}_ZoneMinder.git ${GITHUB_FORK}_zoneminder_release"
@@ -222,11 +218,13 @@ rm .gitignore
 cd ../
 
 
-if [ ! -e "$DIRECTORY.orig.tar.gz" ]; then
-  read -p "$DIRECTORY.orig.tar.gz does not exist, create it? [Y/n]"
+if [ -e "$DIRECTORY.orig.tar.gz" ]; then
+  read -p "$DIRECTORY.orig.tar.gz exists, overwrite it? [Y/n]"
   if [[ "$REPLY" == "" || "$REPLY" == [yY] ]]; then
     tar zcf $DIRECTORY.orig.tar.gz $DIRECTORY.orig
   fi;
+else
+  tar zcf $DIRECTORY.orig.tar.gz $DIRECTORY.orig
 fi;
 
 IFS=',' ;for DISTRO in `echo "$DISTROS"`; do 

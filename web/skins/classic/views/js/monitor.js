@@ -260,6 +260,38 @@ function initPage() {
     window.location.assign('?view=console');
   });
 
+  //manage the Janus audio check
+  if (document.getElementsByName("newMonitor[JanusEnabled]")[0].checked) {
+    document.getElementById("FunctionJanusAudioEnabled").hidden = false;
+  } else {
+    document.getElementById("FunctionJanusAudioEnabled").hidden = true;
+  }
+
+  document.getElementsByName("newMonitor[JanusEnabled]")[0].addEventListener('change', function() {
+    if (this.checked) {
+      document.getElementById("FunctionJanusAudioEnabled").hidden = false;
+    } else {
+      document.getElementById("FunctionJanusAudioEnabled").hidden = true;
+    }
+  });
+
+  // Amcrest API controller
+  if (document.getElementsByName("newMonitor[ONVIF_Event_Listener]")[0].checked) {
+    document.getElementById("function_use_Amcrest_API").hidden = false;
+  } else {
+    document.getElementById("function_use_Amcrest_API").hidden = true;
+  }
+  document.getElementsByName("newMonitor[ONVIF_Event_Listener]")[0].addEventListener('change', function() {
+    if (this.checked) {
+      document.getElementById("function_use_Amcrest_API").hidden = false;
+    }
+  });
+  document.getElementsByName("newMonitor[ONVIF_Event_Listener]")[1].addEventListener('change', function() {
+    if (this.checked) {
+      document.getElementById("function_use_Amcrest_API").hidden = true;
+    }
+  });
+
   if ( ZM_OPT_USE_GEOLOCATION ) {
     if ( window.L ) {
       var form = document.getElementById('contentForm');
