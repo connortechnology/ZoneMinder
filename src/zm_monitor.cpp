@@ -1747,7 +1747,7 @@ bool Monitor::Analyse() {
       Event::StringSetMap noteSetMap;
 
 #ifdef WITH_GSOAP
-      if (onvif_event_listener  && Event_Poller_Healthy) {
+      if (onvif_event_listener && Event_Poller_Healthy) {
         if (Poll_Trigger_State) {
           score += 9;
           Debug(1, "Triggered on ONVIF");
@@ -1822,8 +1822,8 @@ bool Monitor::Analyse() {
                 Debug(1, "Linked monitor %d %s is connected",
                     linked_monitors[i]->Id(), linked_monitors[i]->Name());
                 if (linked_monitors[i]->hasAlarmed()) {
-                  Debug(1, "Linked monitor %d %s is alarmed",
-                      linked_monitors[i]->Id(), linked_monitors[i]->Name());
+                  Debug(1, "Linked monitor %d %s is alarmed score will be %d",
+                      linked_monitors[i]->Id(), linked_monitors[i]->Name(), linked_monitors[i]->lastFrameScore());
                   if (!event) {
                     if (first_link) {
                       if (cause.length())
@@ -1856,9 +1856,6 @@ bool Monitor::Analyse() {
               // So... 
               Debug(1, "Waiting for decode");
               packet_lock->wait();
-              //packetqueue.unlock(packet_lock); // This will delete packet_lock and notify_all
-              //packetqueue.wait();
-              ////packet_lock->lock();
             }  // end while ! decoded
             if (zm_terminate or analysis_thread->Stopped()) {
               delete packet_lock;
@@ -1890,7 +1887,7 @@ bool Monitor::Analyse() {
                   Image v_image(snap->in_frame->width, snap->in_frame->height, 1, ZM_SUBPIX_ORDER_NONE, snap->in_frame->data[0], 0);
                   ref_image.Assign(v_image);
                 } else {
-            Debug(1, "assigning refimage from snap->image");
+                  Debug(1, "assigning refimage from snap->image");
                   ref_image.Assign(*(snap->image));
                 }
                 alarm_image.Assign(*(snap->image));
@@ -1951,12 +1948,15 @@ bool Monitor::Analyse() {
           } // end if active and doing motion detection
 
 
+          // Set this before any state changes so that it's value is picked up immediately by linked monitors
+          shared_data->last_frame_score = score;
+
           // If motion detecting, score will be > 0 on motion, but if skipping frames, might not be. So also test snap->score
           if ((score > 0) or ((snap->score > 0) and (function != MONITOR))) {
             if ((state == IDLE) || (state == TAPE) || (state == PREALARM)) {
               // If we should end then previous continuous event and start a new non-continuous event
               if (event && event->Frames()
-                  && !event->AlarmFrames()
+                  && (event->AlarmFrames() < alarm_frame_count)
                   && (event_close_mode == CLOSE_ALARM)
                   // FIXME since we won't be including this snap in the event if we close it, we should be looking at event->duration() instead
                   && (event->Duration() >= min_section_length)
@@ -2016,7 +2016,7 @@ bool Monitor::Analyse() {
               if (
                   ((analysis_image_count - last_alarm_count) > post_event_count)
                   &&
-                 (event->Duration() >= min_section_length)) {
+                  (event->Duration() >= min_section_length)) {
                 Info("%s: %03d - Left alarm state (%" PRIu64 ") - %d(%d) images",
                     name.c_str(), analysis_image_count, event->Id(), event->Frames(), event->AlarmFrames());
                 if (
@@ -2051,6 +2051,7 @@ bool Monitor::Analyse() {
               Event::EmptyPreAlarmFrames();
           } // end if score or not
 
+          // At this point, snap ONLY has motion score, so this adds other sources
           if (score > snap->score)
             snap->score = score;
 
@@ -2150,7 +2151,7 @@ bool Monitor::Analyse() {
                 ref_image.Blend(v_image, ( state==ALARM ? alarm_ref_blend_perc : ref_blend_perc ));
               } else if (snap->image) {
                 Debug(1, "Blending because %p and format %d != %d, %d", snap->in_frame,
-                    snap->in_frame->format,
+                    (snap->in_frame ? snap->in_frame->format : -1),
                     AV_PIX_FMT_YUV420P,
                     AV_PIX_FMT_YUVJ420P
                     );
@@ -2162,7 +2163,6 @@ bool Monitor::Analyse() {
           last_signal = signal;
         } // end if videostream
       } // end if signal
-      shared_data->last_frame_score = score;
     } else {
       Debug(3, "trigger == off");
       if (event) {
@@ -2674,7 +2674,7 @@ bool Monitor::Decode() {
 
     if (config.timestamp_on_capture) {
       Debug(3, "Timestamping");
-      TimestampImage(packet->image, packet->timestamp);
+      TimestampImage(capture_image, packet->timestamp);
     }
 
     image_buffer[index]->Assign(*(packet->image));
@@ -2768,7 +2768,11 @@ Event * Monitor::openEvent(
 
   if (!event_start_command.empty()) {
     if (fork() == 0) {
-      execlp(event_start_command.c_str(), event_start_command.c_str(), std::to_string(event->Id()).c_str(), nullptr);
+      execlp(event_start_command.c_str(),
+		      event_start_command.c_str(),
+		      std::to_string(event->Id()).c_str(),
+		      std::to_string(event->MonitorId()).c_str(),
+		      nullptr);
       Error("Error execing %s", event_start_command.c_str());
     }
   }
@@ -2808,11 +2812,15 @@ void Monitor::closeEvent() {
   Debug(1, "Starting thread to close event");
   close_event_thread = std::thread([](Event *e, const std::string &command){
         int64_t event_id = e->Id();
+	int monitor_id = e->MonitorId();
         delete e;
 
         if (!command.empty()) {
           if (fork() == 0) {
-            execlp(command.c_str(), command.c_str(), std::to_string(event_id).c_str(), nullptr);
+            execlp(command.c_str(), command.c_str(),
+			    std::to_string(event_id).c_str(),
+			    std::to_string(monitor_id).c_str(), // monitor id
+			    nullptr);
             Error("Error execing %s", command.c_str());
           }
         }

@@ -84,8 +84,11 @@ static ZmFont font;
 std::mutex              jpeg_mutex;
 
 void Image::update_function_pointers() {
-  /* Because many loops are unrolled and work on 16 colours/time or 4 pixels/time, we have to meet requirements */
-  if ( pixels % 16 || pixels % 12 ) {
+  /* Because many loops are unrolled and work on 16 colours/time or 4 pixels/time, we have to meet requirements
+   * previous tests were %16 or %12 but that is incorrect.  Should just be %4
+   */
+
+  if (pixels %4) {
     // have to use non-loop unrolled functions
     delta8_rgb = &std_delta8_rgb;
     delta8_bgr = &std_delta8_bgr;
@@ -95,7 +98,7 @@ void Image::update_function_pointers() {
     delta8_abgr = &std_delta8_abgr;
     delta8_gray8 = &std_delta8_gray8;
     blend = &std_blend;
-    Warning("Using slow std functions");
+    Debug(1, "Using slow std functions because pixels %d mod 4=%d", pixels, pixels%4);
   } else {
     // Use either sse or neon, or loop unrolled version
     delta8_rgb = fptr_delta8_rgb;
@@ -1087,14 +1090,16 @@ bool Image::WriteJpeg(const std::string &filename,
                       const int &quality_override,
                       SystemTimePoint timestamp,
                       bool on_blocking_abort) const {
-  // jpeg libs are not thread safe
-  std::unique_lock<std::mutex> lck(jpeg_mutex);
 
   if (config.colour_jpeg_files && (colours == ZM_COLOUR_GRAY8)) {
     Image temp_image(*this);
     temp_image.Colourise(ZM_COLOUR_RGB24, ZM_SUBPIX_ORDER_RGB);
     return temp_image.WriteJpeg(filename, quality_override, timestamp, on_blocking_abort);
   }
+
+  // jpeg libs are not thread safe
+  std::unique_lock<std::mutex> lck(jpeg_mutex);
+
   int quality = quality_override ? quality_override : config.jpeg_file_quality;
 
   jpeg_compress_struct *cinfo = writejpg_ccinfo[quality];
@@ -1164,7 +1169,7 @@ bool Image::WriteJpeg(const std::string &filename,
       } else if (subpixelorder == ZM_SUBPIX_ORDER_ABGR) {
         cinfo->in_color_space = JCS_EXT_XBGR;
       } else {
-        Warning("Unknwon subpixelorder %d", subpixelorder);
+        Warning("Unknown subpixelorder %d", subpixelorder);
         /* Assume RGBA */
         cinfo->in_color_space = JCS_EXT_RGBX;
       }
