@@ -363,6 +363,7 @@ if (ZM_OPT_USE_AUTH) {
         } // end if success==false
       } // end if using reCaptcha
 
+      # When we have a successful login, we must clear and regenerate the session
       if (is_session_started()) session_write_close();
       zm_session_clear();
       zm_session_regenerate_id(); # starts session
@@ -394,7 +395,6 @@ if (ZM_OPT_USE_AUTH) {
       } else {
         $sql = 'SELECT * FROM Users WHERE Enabled=1 AND Username=?';
       }
-      // local user, shouldn't affect the global user
       $user = dbFetchOne($sql, NULL, array($_SERVER['REMOTE_USER']));
     } else {
       $user = userFromSession();
