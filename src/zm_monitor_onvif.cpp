@@ -19,8 +19,10 @@
 
 #include "zm_monitor.h"
 
+#include <chrono>
 #include <cstring>
 #include <sstream>
+#include <thread>
 #include "url.hpp"
 
 std::string SOAP_STRINGS[] = {
@@ -101,41 +103,88 @@ void Monitor::ONVIF::start() {
   std::string full_url = url.str() + parent->onvif_events_path;
   proxyEvent.soap_endpoint = full_url.c_str();
   set_credentials(soap);
+  
+  // Add initial delay to allow any previous subscription to expire
+  Debug(2, "ONVIF: Waiting 2 seconds before creating subscription to allow stale subscriptions to expire");
+  std::this_thread::sleep_for(std::chrono::seconds(2));
+  
   const char *RequestMessageID = parent->soap_wsa_compl ? soap_wsa_rand_uuid(soap) : "RequestMessageID";
 
   if ((!parent->soap_wsa_compl) || (soap_wsa_request(soap, RequestMessageID,  proxyEvent.soap_endpoint, "CreatePullPointSubscriptionRequest") == SOAP_OK)) {
     Debug(1, "ONVIF Endpoint: %s", proxyEvent.soap_endpoint);
-    int rc = proxyEvent.CreatePullPointSubscription(&request, response);
-#if 0
-    std::stringstream ss;
-    soap->os = &ss; // assign a stringstream to write output to
-    soap_write__tev__CreatePullPointSubscriptionResponse(soap, &response);
-    soap->os = NULL; // no longer writing to the stream
-    Debug(1, "Response was %s", ss.str().c_str());
-#endif
-
-    if (rc != SOAP_OK) {
-      const char *detail = soap_fault_detail(soap);
-      if (rc > 8) {
-        Error("ONVIF Couldn't create subscription at %s! %d, fault:%s, detail:%s", full_url.c_str(),
-            rc, soap_fault_string(soap), detail ? detail : "null");
-      } else {
-        Error("ONVIF Couldn't create subscription at %s! %d %s, fault:%s, detail:%s", full_url.c_str(),
-            rc, SOAP_STRINGS[rc].c_str(),
-            soap_fault_string(soap), detail ? detail : "null");
+    
+    // Retry logic for CreatePullPointSubscription
+    const int max_retries = 3;
+    const int retry_delay_seconds = 3;
+    int rc = SOAP_OK;
+    bool subscription_successful = false;
+    
+    for (int attempt = 1; attempt <= max_retries && !subscription_successful; attempt++) {
+      if (attempt > 1) {
+        Debug(1, "ONVIF: Retry attempt %d/%d after %d second delay", attempt, max_retries, retry_delay_seconds);
+        std::this_thread::sleep_for(std::chrono::seconds(retry_delay_seconds));
+        // Reset soap context for retry
+        soap_destroy(soap);
+        soap_end(soap);
+        set_credentials(soap);
+        RequestMessageID = parent->soap_wsa_compl ? soap_wsa_rand_uuid(soap) : "RequestMessageID";
+        if (parent->soap_wsa_compl) {
+          if (soap_wsa_request(soap, RequestMessageID, proxyEvent.soap_endpoint, "CreatePullPointSubscriptionRequest") != SOAP_OK) {
+            Error("ONVIF: Failed to set WSA headers on retry attempt %d", attempt);
+            continue;
+          }
+        }
       }
-
-      std::stringstream ss;
-      std::ostream *old_stream = soap->os;
-      soap->os = &ss; // assign a stringstream to write output to
-      proxyEvent.CreatePullPointSubscription(&request, response);
-      soap_write__tev__CreatePullPointSubscriptionResponse(soap, &response);
-      soap->os = old_stream; // no longer writing to the stream
-      Debug(1, "Response was %s", ss.str().c_str());
-
-      _wsnt__Unsubscribe wsnt__Unsubscribe;
-      _wsnt__UnsubscribeResponse wsnt__UnsubscribeResponse;
-      proxyEvent.Unsubscribe(response.SubscriptionReference.Address, nullptr, &wsnt__Unsubscribe, wsnt__UnsubscribeResponse);
+      
+      rc = proxyEvent.CreatePullPointSubscription(&request, response);
+      
+      if (rc == SOAP_OK) {
+        subscription_successful = true;
+        Debug(1, "ONVIF: Successfully created pull point subscription on attempt %d", attempt);
+      } else {
+        // Check for specific fault types
+        const char *detail = soap_fault_detail(soap);
+        const char *fault_string = soap_fault_string(soap);
+        bool is_subscribe_creation_failed = (detail && std::strstr(detail, "SubscribeCreationFailedFault")) ||
+                                           (fault_string && std::strstr(fault_string, "SubscribeCreationFailedFault"));
+        
+        if (rc > 8) {
+          Error("ONVIF Couldn't create subscription at %s (attempt %d/%d)! error_code=%d, fault:%s, detail:%s", 
+                full_url.c_str(), attempt, max_retries, rc, 
+                fault_string ? fault_string : "null", 
+                detail ? detail : "null");
+        } else {
+          Error("ONVIF Couldn't create subscription at %s (attempt %d/%d)! error_code=%d (%s), fault:%s, detail:%s", 
+                full_url.c_str(), attempt, max_retries, rc, SOAP_STRINGS[rc].c_str(),
+                fault_string ? fault_string : "null", 
+                detail ? detail : "null");
+        }
+        
+        if (is_subscribe_creation_failed) {
+          Warning("ONVIF: SubscribeCreationFailedFault detected. This typically means:");
+          Warning("  - Camera has reached max concurrent subscriptions");
+          Warning("  - Stale subscriptions from previous sessions exist");
+          Warning("  - Camera doesn't automatically expire old subscriptions");
+          if (attempt < max_retries) {
+            Info("ONVIF: Will retry after %d seconds to allow subscriptions to expire...", retry_delay_seconds);
+          }
+        }
+        
+        // Only log detailed response on last attempt
+        if (attempt == max_retries) {
+          std::stringstream ss;
+          std::ostream *old_stream = soap->os;
+          soap->os = &ss;
+          soap_write__tev__CreatePullPointSubscriptionResponse(soap, &response);
+          soap->os = old_stream;
+          Debug(1, "Response was %s", ss.str().c_str());
+        }
+      }
+    }  // end retry loop
+    
+    if (!subscription_successful) {
+      // Clean up and exit after all retries failed
+      Error("ONVIF: Failed to create subscription after %d attempts", max_retries);
       soap_destroy(soap);
       soap_end(soap);
       soap_free(soap);
