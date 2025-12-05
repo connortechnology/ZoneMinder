@@ -114,8 +114,9 @@ void Monitor::ONVIF::start() {
     Debug(1, "ONVIF Endpoint: %s", proxyEvent.soap_endpoint);
     
     // Retry logic for CreatePullPointSubscription
-    const int max_retries = 3;
-    const int retry_delay_seconds = 3;
+    // These values can be tuned for different camera behaviors
+    constexpr int max_retries = 3;
+    constexpr int retry_delay_seconds = 3;
     int rc = SOAP_OK;
     bool subscription_successful = false;
     
@@ -145,10 +146,13 @@ void Monitor::ONVIF::start() {
         // Check for specific fault types
         const char *detail = soap_fault_detail(soap);
         const char *fault_string = soap_fault_string(soap);
-        bool is_subscribe_creation_failed = (detail && std::strstr(detail, "SubscribeCreationFailedFault")) ||
-                                           (fault_string && std::strstr(fault_string, "SubscribeCreationFailedFault"));
+        const char *subscribe_creation_failed_in_detail = detail ? std::strstr(detail, "SubscribeCreationFailedFault") : nullptr;
+        const char *subscribe_creation_failed_in_fault = fault_string ? std::strstr(fault_string, "SubscribeCreationFailedFault") : nullptr;
+        bool is_subscribe_creation_failed = subscribe_creation_failed_in_detail || subscribe_creation_failed_in_fault;
         
-        if (rc > 8) {
+        // Safely access SOAP_STRINGS array (has 13 elements, indices 0-12)
+        constexpr int SOAP_STRINGS_SIZE = 13;
+        if (rc >= SOAP_STRINGS_SIZE || rc < 0) {
           Error("ONVIF Couldn't create subscription at %s (attempt %d/%d)! error_code=%d, fault:%s, detail:%s", 
                 full_url.c_str(), attempt, max_retries, rc, 
                 fault_string ? fault_string : "null", 
