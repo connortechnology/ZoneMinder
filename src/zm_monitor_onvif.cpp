@@ -22,6 +22,7 @@
 #include "zm_signal.h"
 #include "zm_utils.h"
 
+#include <cstdint>
 #include <cstring>
 #include "url.hpp"
 
@@ -871,15 +872,15 @@ void ONVIF::log_subscription_timing(const char* context) {
   auto seconds_until_renewal = std::chrono::duration_cast<std::chrono::seconds>(
     next_renewal_time - now).count();
   
-  Debug(1, "ONVIF [%s]: Subscription terminates at %s (in %lds), renewal at %s (in %lds)",
+  Debug(1, "ONVIF [%s]: Subscription terminates at %s (in %jds), renewal at %s (in %jds)",
        context, SystemTimePointToString(subscription_termination_time).c_str(),
-       seconds_until_termination,
+       static_cast<intmax_t>(seconds_until_termination),
        SystemTimePointToString(next_renewal_time).c_str(),
-       seconds_until_renewal);
+       static_cast<intmax_t>(seconds_until_renewal));
   
   // Warn if we're getting close to termination
   if (seconds_until_termination < ONVIF_RENEWAL_ADVANCE_SECONDS && seconds_until_termination > 0) {
-    Warning("ONVIF: Subscription terminating soon! Only %ld seconds remaining", seconds_until_termination);
+    Warning("ONVIF: Subscription terminating soon! Only %jd seconds remaining", static_cast<intmax_t>(seconds_until_termination));
   }
 #endif
 }
@@ -993,7 +994,7 @@ bool ONVIF::IsRenewalNeeded() {
     // Time to renew
     auto seconds_overdue = std::chrono::duration_cast<std::chrono::seconds>(
       now - next_renewal_time).count();
-    Debug(1, "ONVIF: Subscription renewal needed (overdue by %ld seconds)", seconds_overdue);
+    Debug(1, "ONVIF: Subscription renewal needed (overdue by %jd seconds)", static_cast<intmax_t>(seconds_overdue));
     return true;
   }
   
