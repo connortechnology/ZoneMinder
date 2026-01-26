@@ -2050,9 +2050,10 @@ int Monitor::Analyse() {
             event->addNote(SIGNAL_CAUSE, "Reacquired");
           }
           if (analysis_image == ANALYSISIMAGE_YCHANNEL) {
-            if (packet->y_image) {
+            Image *y_image = packet->get_y_image();
+            if (y_image) {
               Debug(1, "assigning refimage from y-channel");
-              ref_image.Assign(*(packet->y_image));
+              ref_image.Assign(*y_image);
             }
           } else if (packet->image) {
             Debug(1, "assigning refimage from packet->image");
@@ -2138,6 +2139,7 @@ int Monitor::Analyse() {
                 if (motion_frame_skip < 0) motion_frame_skip = 0;
               }
 
+<<<<<<< HEAD
               if (objectdetection != OBJECT_DETECTION_NONE) {
                 if (
                     ((objectdetection == OBJECT_DETECTION_SPEEDAI)
@@ -2172,6 +2174,63 @@ int Monitor::Analyse() {
                   std::pair<int, std::string> results = Analyse_UVICORN(packet);
                   int motion_score = results.first;
                   std::string motion_cause = results.second;
+=======
+            Event::StringSet zoneSet;
+
+            if (packet->image) {
+              // decoder may not have been able to provide an image
+              if (!ref_image.Buffer()) {
+                Debug(1, "Assigning instead of Detecting");
+                if (analysis_image == ANALYSISIMAGE_YCHANNEL) {
+                  // If not decoding, y_image can be null
+                  Image *y_image = packet->get_y_image();
+                  if (y_image) ref_image.Assign(*y_image);
+                } else if (packet->image) {
+                  ref_image.Assign(*(packet->image));
+                } else {
+                  Debug(1, "No image to ref yet");
+                }
+                alarm_image.Assign(*(packet->image));
+              } else {
+                // didn't assign, do motion detection maybe and blending definitely
+                if (!(analysis_image_count % (motion_frame_skip+1))) {
+                  motion_score = 0;
+                  Image *y_image = packet->get_y_image();
+                  Debug(1, "Detecting motion on image %d, image %p, y_image %p", packet->image_index, packet->image, y_image);
+                  // Get new score.
+                  if ((analysis_image == ANALYSISIMAGE_YCHANNEL) && y_image) {
+                    motion_score += DetectMotion(*y_image, zoneSet);
+                  } else {
+                    motion_score += DetectMotion(*(packet->image), zoneSet);
+                  }
+
+                  // Instead of showing a greyscale image, let's use the full colour
+                  if (!packet->analysis_image)
+                    packet->analysis_image = new Image(*(packet->image));
+
+                  // lets construct alarm cause. It will contain cause + names of zones alarmed
+                  packet->zone_stats.reserve(zones.size());
+                  int zone_index = 0;
+                  for (const Zone &zone : zones) {
+                    const ZoneStats &stats = zone.GetStats();
+                    stats.DumpToLog("After detect motion");
+                    packet->zone_stats.push_back(stats);
+                    if (zone.Alarmed()) {
+                      if (!packet->alarm_cause.empty()) packet->alarm_cause += ",";
+                      packet->alarm_cause += std::string(zone.Label());
+                      if (zone.AlarmImage())
+                        packet->analysis_image->Overlay(*(zone.AlarmImage()));
+                    }
+                    Debug(4, "Setting score for zone %d to %d", zone_index, zone.Score());
+                    zone_scores[zone_index] = zone.Score();
+                    zone_index ++;
+                  }
+                  Debug(3, "After motion detection, score:%d last_motion_score(%d), new motion score(%d)",
+                        score, last_motion_score, motion_score);
+                  motion_frame_count += 1;
+                  last_motion_score = motion_score;
+
+>>>>>>> upstream/master
                   if (motion_score) {
                     score += motion_score;
                   } 
@@ -2183,6 +2242,7 @@ int Monitor::Analyse() {
             if (shared_data->analysing > ANALYSING_NONE) {
               Debug(3, "signal and capturing and doing motion detection %d", shared_data->analysing);
 
+<<<<<<< HEAD
               std::pair<int, std::string> results = Analyse_MotionDetection(packet);
               int motion_score = results.first;
               std::string motion_cause = results.second;
@@ -2192,6 +2252,26 @@ int Monitor::Analyse() {
                 //noteSetMap[MOTION_CAUSE] = zoneSet;
                 score += motion_score;
               } // end if motion_score
+=======
+                if (analysis_image == ANALYSISIMAGE_YCHANNEL) {
+                  Debug(1, "Blending from y-channel");
+                  Image *y_image = packet->get_y_image();
+                  if (y_image)
+                    ref_image.Blend(*y_image, ( state==ALARM ? alarm_ref_blend_perc : ref_blend_perc ));
+                } else if (packet->image) {
+                  Debug(1, "Blending full colour image because analysis_image = %d, in_frame=%p and format %d != %d, %d",
+                        analysis_image, packet->in_frame.get(),
+                        (packet->in_frame ? packet->in_frame->format : -1),
+                        AV_PIX_FMT_YUV420P,
+                        AV_PIX_FMT_YUVJ420P
+                       );
+                  ref_image.Blend(*(packet->image), ( state==ALARM ? alarm_ref_blend_perc : ref_blend_perc ));
+                  Debug(1, "Done Blending");
+                } else {
+                  Debug(1, "Not able to blend");
+                }
+              } // end if had ref_image_buffer or not
+>>>>>>> upstream/master
             } else {
               Debug(1, "Not analysing %d", shared_data->analysing);
             } // end if doing motion detection
@@ -3260,6 +3340,7 @@ bool Monitor::setupConvertContext(const AVFrame *input_frame,
   return (convert_context != nullptr);
 }
 
+<<<<<<< HEAD
 int Monitor::CloseDecoder() {
 #if HAVE_QUADRA
   std::lock_guard<std::mutex> lck(quadra_mutex);
@@ -3268,6 +3349,68 @@ int Monitor::CloseDecoder() {
     quadra_yolo = nullptr;
   }
 #endif
+=======
+bool Monitor::Decode() {
+
+  ZMPacketLock packet_lock;
+  std::shared_ptr<ZMPacket> packet;
+  AVCodecContext *mVideoCodecContext = camera->getVideoCodecContext();
+
+  if (decoder_queue.size()) {
+    Debug(1, "Have queued packets %zu, send them to be filled by decoder", decoder_queue.size());
+    // Try to decode, without feeding the decoder.
+    ZMPacketLock *delayed_packet_lock = &decoder_queue.front();
+    auto delayed_packet = delayed_packet_lock->packet_;
+
+    int ret = delayed_packet->receive_frame(mVideoCodecContext);
+    if (ret > 0) {
+      //Debug(1, "Success");
+      // Success, pop and assign
+      packet_lock = std::move(decoder_queue.front());
+      decoder_queue.pop_front();
+      packet = delayed_packet;
+    } else if (ret < 0) {
+      Debug(1, "decoder Failed to get frame %d", ret);
+      if (ret == AVERROR_EOF) {
+        //CloseDecoder();
+      }
+      return 0; // re-opening will take long enough
+    } else {
+      Debug(1, "EAGAIN, fall through and send a packet to decoder, packet was %d", delayed_packet->image_index);
+    } // else 0, EAGAIN, fall through and send a packet
+  } else if (mVideoCodecContext) {
+    Debug(1, "Dont Have queued packets %zu", decoder_queue.size());
+    av_frame_ptr receive_frame{av_frame_alloc()};
+    if (!receive_frame) {
+      Error("Error allocating frame");
+      return 0;
+    }
+    int ret = avcodec_receive_frame(mVideoCodecContext, receive_frame.get());
+    Debug(1, "Ret from receive_frame ret: %d %s", ret, av_make_error_string(ret).c_str());
+  }
+
+  // Might have to be keyframe interval
+  if (!packet and (packetqueue.get_max_keyframe_interval()>0) and (decoder_queue.size() > 2*static_cast<unsigned int>(packetqueue.get_max_keyframe_interval()))) {
+    Debug(1, "Too many packets (%d) in queue. Sleeping", packetqueue.get_max_keyframe_interval());
+    return -1;
+  }
+
+  // Didn't receive a frame, get a packet from packetqueue and send it.
+  if (!packet) {
+    packet_lock = packetqueue.get_packet(decoder_it);
+    packet = packet_lock.packet_;
+    if (!packet) {
+      Debug(1, "No packet from get_packet");
+      return -1;
+    }
+    if (packet->codec_type != AVMEDIA_TYPE_VIDEO) {
+      packet->decoded = true;
+      Debug(3, "Not video, probably audio packet %d", packet->image_index);
+      packetqueue.increment_it(decoder_it);
+      return 1; // Don't need decode
+    }
+  }
+>>>>>>> upstream/master
 
   if (mVideoCodecContext) {
     avcodec_free_context(&mVideoCodecContext);
@@ -3570,17 +3713,31 @@ int Monitor::Decode() {
       ZM_DUMP_PACKET(packet->packet.get(), "Not decoding");
     }  // end if doing decoding
   }  // end if need_decoding
+     
+  if (packet->in_frame) {
+    packet->transfer_hwframe(mVideoCodecContext);
+
+    if (!packet->image) {
+      packet->image = new Image(camera_width, camera_height, camera->Colours(), camera->SubpixelOrder());
+
+      if (convert_context || this->setupConvertContext(packet->in_frame.get(), packet->image)) {
+        if (!packet->image->Assign(packet->in_frame.get(), convert_context)) {
+          delete packet->image;
+          packet->image = nullptr;
+        }
+      } else {
+        delete packet->image;
+        packet->image = nullptr;
+      }  // end if have convert_context
+    }  // end if need transfer to image
+  } // end if in_frame
 
 #if 0
   if (analysis_image == ANALYSISIMAGE_YCHANNEL) {
-    if (packet->in_frame && (
-          ((AVPixelFormat)packet->in_frame->format == AV_PIX_FMT_YUV420P)
-          ||
-          ((AVPixelFormat)packet->in_frame->format == AV_PIX_FMT_YUVJ420P)
-          ) ) {
-      packet->y_image = new Image(packet->in_frame->width, packet->in_frame->height, 1, ZM_SUBPIX_ORDER_NONE, packet->in_frame->data[0], 0, 0);
+    Image *y_image = packet->get_y_image();
+    if (y_image) {
       if (packet->in_frame->width != camera_width || packet->in_frame->height != camera_height)
-        packet->y_image->Scale(camera_width, camera_height);
+        y_image->Scale(camera_width, camera_height);
 
       if (orientation != ROTATE_0) {
         switch (orientation) {
@@ -3590,11 +3747,11 @@ int Monitor::Decode() {
           case ROTATE_90 :
           case ROTATE_180 :
           case ROTATE_270 :
-            packet->y_image->Rotate((orientation-1)*90);
+            y_image->Rotate((orientation-1)*90);
             break;
           case FLIP_HORI :
           case FLIP_VERT :
-            packet->y_image->Flip(orientation==FLIP_HORI);
+            y_image->Flip(orientation==FLIP_HORI);
             break;
         }
       } // end if have rotation
@@ -4320,7 +4477,10 @@ int Monitor::Play() {
 int Monitor::Close() {
   Pause();
 
+<<<<<<< HEAD
   // ONVIF Teardown
+=======
+>>>>>>> upstream/master
   if (Poller) {
     Poller->Stop();
     Debug(1, "Poller stopped");
