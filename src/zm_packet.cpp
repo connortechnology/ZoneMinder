@@ -197,7 +197,7 @@ bool ZMPacket::needs_hw_transfer(AVCodecContext *ctx) {
 
 int ZMPacket::transfer_hwframe(AVCodecContext *ctx) {
   if (hw_frame) {
-    Error("Already have hw_frame in get_hwframe");
+    Error("Already have hw_frame in transfer_hwframe");
     return 0;
   }
 #if HAVE_LIBAVUTIL_HWCONTEXT_H
@@ -240,7 +240,7 @@ int ZMPacket::transfer_hwframe(AVCodecContext *ctx) {
 #endif
 #endif
   return 1;
-} // end ZMPacket::get_hwframe
+} // end ZMPacket::transfer_hwframe
 
 Image *ZMPacket::get_ai_image() {
   if (!ai_frame) {

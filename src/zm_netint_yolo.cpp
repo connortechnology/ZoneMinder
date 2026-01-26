@@ -608,7 +608,7 @@ int Quadra_Yolo::draw_last_roi(std::shared_ptr<ZMPacket> packet) {
 
 #if SOFTWARE_DRAWBOX
   if (packet->needs_hw_transfer(dec_ctx)) {
-    if (!packet->get_hwframe(dec_ctx)) {
+    if (!packet->transfer_hwframe(dec_ctx)) {
       return -1;
     }
   }; // Just in case it hasn't been done yet
