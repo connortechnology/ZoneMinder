@@ -260,10 +260,11 @@ int Quadra_Yolo::ni_recreate_ai_frame(ni_frame_t *ni_frame, AVFrame *avframe) {
       avframe->height);
 
   if (avframe->format == AV_PIX_FMT_RGB24) {
-    /* RGB24 -> BGRP */
-    uint8_t *r_data = p_data + avframe->width * avframe->height * 2;
-    uint8_t *g_data = p_data + avframe->width * avframe->height * 1;
-    uint8_t *b_data = p_data + avframe->width * avframe->height * 0;
+    /* RGB24 -> RGB888_PLANAR (matches model_format GC620_RGB888_PLANAR) */
+    const int plane_size = avframe->width * avframe->height;
+    uint8_t *r_data = p_data;
+    uint8_t *g_data = p_data + plane_size;
+    uint8_t *b_data = p_data + plane_size * 2;
     uint8_t *fdata  = avframe->data[0];
     int x, y;
 
