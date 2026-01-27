@@ -3566,13 +3566,15 @@ int Monitor::Decode() {
       decoder_queue.push_back(std::move(packet_lock));
       return 0;
     } else {
-      Debug(1, "Not Decoding packet %d? %s", packet->image_index, Decoding_Strings[decoding].c_str());
+      Debug(1, "Not Decoding frame %d? %s", packet->image_index, Decoding_Strings[decoding].c_str());
       packetqueue.increment_it(decoder_it);
-      ZM_DUMP_PACKET(packet->packet.get(), "Not decoding");
-    }  // end if doing decoding
+    } // end if doing decoding
+  } else {
+    Debug(1, "No packet.size(%d) or packet->in_frame(%p). Not decoding", packet->packet->size, packet->in_frame.get());
+    packetqueue.increment_it(decoder_it);
   }  // end if need_decoding
      
-  if (packet->in_frame) {
+  if (packet->in_frame and !packet->image) {
     packet->transfer_hwframe(mVideoCodecContext);
 
     if (!packet->image) {

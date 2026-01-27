@@ -449,6 +449,10 @@ sub dPrint {
 
 sub start {
   my $daemon = shift;
+  if ( $daemon !~ /^$daemon_patt$/ ) {
+    Error("Invalid daemon '$daemon' specified");
+    return;
+  }
   my @args = @_;
 
   my $command = join(' ', $daemon, @args);
@@ -510,7 +514,7 @@ sub start {
         ."\n"
         );
 
-    if ( $daemon =~ /^${main::daemon_patt}$/ ) {
+    if ( $daemon =~ /^$daemon_patt$/ ) {
       $daemon = $Config{ZM_PATH_BIN}.'/'.$1;
     } else {
       Fatal("Invalid daemon '$daemon' specified");
