@@ -857,9 +857,20 @@ int Quadra_Yolo::ni_read_roi(AVFrame *out, int frame_count) {
   struct roi_box *roi_box = nullptr;
   int roi_num = 0;
 
-  int ret = model->ni_get_boxes(model_ctx, out->width, out->height, &roi_box, &roi_num);
+  // For software letterboxing, pass model dimensions to get model-space coordinates.
+  // The letterbox transformation will then correctly map them to original image space.
+  // For hwframe mode (no letterboxing), pass original frame dimensions for direct scaling.
+  int box_width = (!use_hwframe && letterbox_scale > 0.0f) ? model_width : out->width;
+  int box_height = (!use_hwframe && letterbox_scale > 0.0f) ? model_height : out->height;
+
+  Debug(2, "ni_get_boxes: using %dx%d for coordinate space (letterbox=%s, hwframe=%s)",
+      box_width, box_height,
+      (letterbox_scale > 0.0f) ? "yes" : "no",
+      use_hwframe ? "yes" : "no");
+
+  int ret = model->ni_get_boxes(model_ctx, box_width, box_height, &roi_box, &roi_num);
   if (ret < 0) {
-    Error( "failed to get roi.");
+    Error("failed to get roi.");
     if (roi_box) free(roi_box);
     return ret;
   }
@@ -902,34 +913,39 @@ int Quadra_Yolo::ni_read_roi(AVFrame *out, int frame_count) {
   AVRegionOfInterestNetintExtra *roi_extra = (AVRegionOfInterestNetintExtra *)sd_roi_extra->data;
   int i, j;
 
-  // Lambda to transform coordinates from letterboxed model space to original image space
+  // Coordinate transformation from model space to original image space:
+  // 1. ni_get_boxes returns coordinates in model space (0 to model_width/height)
+  // 2. With letterboxing, the actual image occupies only part of the model input
+  //    (centered with black padding)
+  // 3. We need to: subtract the letterbox offset, then divide by the scale factor
+  // Formula: original_coord = (model_coord - letterbox_offset) / letterbox_scale
   auto transform_coord = [this, out](int coord, int offset, bool is_vertical) -> int {
     if (letterbox_scale <= 0.0f || use_hwframe) {
-      return coord;  // No letterbox transformation needed
+      return coord;  // No letterbox transformation needed (hwframe or no letterbox)
     }
+    // Convert from model space to original image space
     int transformed = static_cast<int>((coord - offset) / letterbox_scale);
     int max_val = is_vertical ? out->height - 1 : out->width - 1;
     return std::clamp(transformed, 0, max_val);
   };
 
   for (i = 0, j = 0; i < roi_num; i++) {
-    //if (roi_box[i].ai_class == 0 || roi_box[i].ai_class == 7) {
-      roi[j].self_size = sizeof(*roi);
-      // Transform coordinates from letterboxed model space to original image space
-      roi[j].left      = transform_coord(roi_box[i].left, letterbox_offset_x, false);
-      roi[j].right     = transform_coord(roi_box[i].right, letterbox_offset_x, false);
-      roi[j].top       = transform_coord(roi_box[i].top, letterbox_offset_y, true);
-      roi[j].bottom    = transform_coord(roi_box[i].bottom, letterbox_offset_y, true);
-      roi[j].qoffset   = { 0 , 0 };
-      roi_extra[j].self_size = sizeof(*roi_extra);
-      roi_extra[j].cls       = roi_box[i].ai_class;
-      roi_extra[j].prob      = roi_box[i].prob;
-      Debug(4, "roi %d: model(%d,%d,%d,%d) -> image(%d,%d,%d,%d), class %d prob %f",
-          j, roi_box[i].left, roi_box[i].top, roi_box[i].right, roi_box[i].bottom,
-          roi[j].left, roi[j].top, roi[j].right, roi[j].bottom,
-          roi_extra[j].cls, roi_extra[j].prob);
-      j++;
-    //}
+    roi[j].self_size = sizeof(*roi);
+    // Transform coordinates from model space to original image space
+    roi[j].left      = transform_coord(roi_box[i].left, letterbox_offset_x, false);
+    roi[j].right     = transform_coord(roi_box[i].right, letterbox_offset_x, false);
+    roi[j].top       = transform_coord(roi_box[i].top, letterbox_offset_y, true);
+    roi[j].bottom    = transform_coord(roi_box[i].bottom, letterbox_offset_y, true);
+    roi[j].qoffset   = { 0 , 0 };
+    roi_extra[j].self_size = sizeof(*roi_extra);
+    roi_extra[j].cls       = roi_box[i].ai_class;
+    roi_extra[j].prob      = roi_box[i].prob;
+    Debug(3, "roi %d: model(%d,%d,%d,%d) -> image(%d,%d,%d,%d) [offset(%d,%d) scale=%.3f], class %d prob %.2f",
+        j, roi_box[i].left, roi_box[i].top, roi_box[i].right, roi_box[i].bottom,
+        roi[j].left, roi[j].top, roi[j].right, roi[j].bottom,
+        letterbox_offset_x, letterbox_offset_y, letterbox_scale,
+        roi_extra[j].cls, roi_extra[j].prob);
+    j++;
   }
   if (roi_box) free(roi_box);
   return roi_num;
