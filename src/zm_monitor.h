@@ -1087,7 +1087,9 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   std::pair<int, std::string> Analyse_MotionDetection(std::shared_ptr<ZMPacket> packet);
 
   bool setupConvertContext(const AVFrame *input_frame, const Image *image);
-  int Decode();
+  void applyOrientation(Image *image);
+  bool applyDeinterlacing(std::shared_ptr<ZMPacket> &packet, Image *capture_image);
+  bool Decode();
   bool Poll();
   void DumpImage(Image *dump_image) const;
   std::string Substitute(const std::string &format,
