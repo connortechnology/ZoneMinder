@@ -9,6 +9,7 @@
 
 #include "zm_netint_yolo.h"
 
+#include <algorithm>
 #include <cstring>
 #include <fstream>
 
@@ -33,6 +34,30 @@ static const std::vector<std::string> coco_class_names = {
 };
 
 static const std::string unknown_class = "unknown";
+
+// Helper functions for consistent detection box colors based on class
+// Person (class 0) = Blue, Vehicles (1-8) = Green, Animals (14-23) = Orange, Others = Red
+static Rgb get_detection_box_color(int class_id) {
+  if (class_id == 0) {
+    return kRGBBlue;    // Person
+  } else if (class_id >= 1 && class_id <= 8) {
+    return kRGBGreen;   // Vehicles: bicycle, car, motorcycle, airplane, bus, train, truck, boat
+  } else if (class_id >= 14 && class_id <= 23) {
+    return kRGBOrange;  // Animals: bird, cat, dog, horse, sheep, cow, elephant, bear, zebra, giraffe
+  }
+  return kRGBRed;       // Everything else
+}
+
+static const char* get_detection_color_string(int class_id) {
+  if (class_id == 0) {
+    return "blue";
+  } else if (class_id >= 1 && class_id <= 8) {
+    return "green";
+  } else if (class_id >= 14 && class_id <= 23) {
+    return "orange";
+  }
+  return "red";
+}
 
 #define SOFTWARE_DRAWBOX 1
 
@@ -330,9 +355,26 @@ int Quadra_Yolo::send_packet(std::shared_ptr<ZMPacket> in_packet) {
   }
 
   if (!use_hwframe && !sw_scale_ctx) {
+    // Calculate letterbox parameters to preserve aspect ratio
+    float scale_x = static_cast<float>(model_width) / avframe->width;
+    float scale_y = static_cast<float>(model_height) / avframe->height;
+    letterbox_scale = std::min(scale_x, scale_y);
+
+    letterbox_width = static_cast<int>(avframe->width * letterbox_scale);
+    letterbox_height = static_cast<int>(avframe->height * letterbox_scale);
+
+    // Center the scaled image within the model frame
+    letterbox_offset_x = (model_width - letterbox_width) / 2;
+    letterbox_offset_y = (model_height - letterbox_height) / 2;
+
+    Debug(1, "Letterbox: source %dx%d -> scaled %dx%d, offset (%d,%d), scale %.3f",
+        avframe->width, avframe->height, letterbox_width, letterbox_height,
+        letterbox_offset_x, letterbox_offset_y, letterbox_scale);
+
+    // Scale to letterbox size (not full model size)
     sw_scale_ctx = sws_getContext(
         avframe->width, avframe->height, static_cast<AVPixelFormat>(avframe->format),
-        scaled_frame->width, scaled_frame->height, static_cast<AVPixelFormat>(scaled_frame->format),
+        letterbox_width, letterbox_height, static_cast<AVPixelFormat>(scaled_frame->format),
         SWS_BICUBIC, nullptr, nullptr, nullptr);
     if (!sw_scale_ctx) {
       Error("cannot create sw scale context for scaling hwframe: %d", use_hwframe);
@@ -408,35 +450,52 @@ int Quadra_Yolo::ni_recreate_ai_frame(ni_frame_t *ni_frame, AVFrame *avframe) {
       avframe->height);
 
   if (avframe->format == AV_PIX_FMT_RGB24) {
-    /* RGB24 -> planar format (BGR or RGB depending on model) */
-    const int plane_size = avframe->width * avframe->height;
+    /* RGB24 -> planar format (BGR or RGB depending on model) with letterboxing */
+    const int model_plane_size = model_width * model_height;
     uint8_t *first_data  = p_data;
-    uint8_t *second_data = p_data + plane_size;
-    uint8_t *third_data  = p_data + plane_size * 2;
+    uint8_t *second_data = p_data + model_plane_size;
+    uint8_t *third_data  = p_data + model_plane_size * 2;
     uint8_t *fdata  = avframe->data[0];
-    int x, y;
 
-    Debug(1, "%s(): rgb24 to %s planar, pix %dx%d, linesize %d", __func__,
-        model_bgr ? "bgr" : "rgb", avframe->width, avframe->height, avframe->linesize[0]);
+    // Use letterbox dimensions if set, otherwise fall back to model dimensions (no letterboxing)
+    int copy_width = (letterbox_width > 0) ? letterbox_width : model_width;
+    int copy_height = (letterbox_height > 0) ? letterbox_height : model_height;
+    int offset_x = (letterbox_width > 0) ? letterbox_offset_x : 0;
+    int offset_y = (letterbox_height > 0) ? letterbox_offset_y : 0;
 
-    for (y = 0; y < avframe->height; y++) {
-      for (x = 0; x < avframe->width; x++) {
-        int fpos  = y * avframe->linesize[0];
-        int ppos  = y * avframe->width;
+    Debug(1, "%s(): rgb24 to %s planar with letterbox, scaled %dx%d -> model %dx%d, offset (%d,%d)",
+        __func__, model_bgr ? "bgr" : "rgb", copy_width, copy_height,
+        model_width, model_height, offset_x, offset_y);
+
+    // Fill entire buffer with black (padding)
+    std::memset(first_data, 0, model_plane_size);
+    std::memset(second_data, 0, model_plane_size);
+    std::memset(third_data, 0, model_plane_size);
+
+    // Copy scaled image into center position with letterbox offset
+    // Use copy dimensions which account for letterbox or fallback to model size
+    for (int y = 0; y < copy_height; y++) {
+      for (int x = 0; x < copy_width; x++) {
+        int fpos = y * avframe->linesize[0];
+        // Position in model buffer includes letterbox offset
+        int out_x = x + offset_x;
+        int out_y = y + offset_y;
+        int ppos = out_y * model_width + out_x;
+
         uint8_t r = fdata[fpos + x * 3 + 0];
         uint8_t g = fdata[fpos + x * 3 + 1];
         uint8_t b = fdata[fpos + x * 3 + 2];
 
         if (model_bgr) {
           // BGR planar: B first, G second, R third
-          first_data[ppos + x] = b;
-          second_data[ppos + x] = g;
-          third_data[ppos + x] = r;
+          first_data[ppos] = b;
+          second_data[ppos] = g;
+          third_data[ppos] = r;
         } else {
           // RGB planar: R first, G second, B third
-          first_data[ppos + x] = r;
-          second_data[ppos + x] = g;
-          third_data[ppos + x] = b;
+          first_data[ppos] = r;
+          second_data[ppos] = g;
+          third_data[ppos] = b;
         }
       }
     }
@@ -483,30 +542,12 @@ int Quadra_Yolo::draw_roi_box_in_place(
     AVRegionOfInterestNetintExtra roi_extra,
     int line_width=1) {
 
-  int cls = roi_extra.cls;
-  std::string color;
-  if (cls == 0) {
-    color = "blue";
-  } else {
-    color = "red";
-    //color = "#FF000000";
-  }
+  Rgb box_color = get_detection_box_color(roi_extra.cls);
   Image in_image(inframe);
 
   for (int i=0; i<line_width; i++) {
-#if 0
-    std::vector<Vector2> coords;
-    coords.push_back(Vector2(roi.left + i, roi.top + i));
-    coords.push_back(Vector2(roi.right - i, roi.top + i));
-    coords.push_back(Vector2(roi.right - i, roi.bottom - i));
-    coords.push_back(Vector2(roi.left + i, roi.bottom - i));
-
-    Polygon poly(coords);
-    in_image.Outline(kRGBGreen, poly);
-#else
-    in_image.DrawBox(roi.left+i, roi.top+i, roi.right-2*i, roi.bottom-2*i, kRGBGreen);
-#endif
-  }  // end while
+    in_image.DrawBox(roi.left+i, roi.top+i, roi.right-2*i, roi.bottom-2*i, box_color);
+  }
   return 1;
 } // end draw_roi_box_in_place
  
@@ -517,39 +558,23 @@ int Quadra_Yolo::draw_roi_box(
     AVRegionOfInterestNetintExtra roi_extra,
     int line_width=1) {
 
- SystemTimePoint starttime = std::chrono::system_clock::now();
+  SystemTimePoint starttime = std::chrono::system_clock::now();
 
-  int cls = roi_extra.cls;
-  std::string color;
-  if (cls == 0) {
-    color = "blue";
-  } else {
-    color = "red";
-    //color = "#FF000000";
-  }
+  const char *color = get_detection_color_string(roi_extra.cls);
 
   for (int i=0; i<line_width; i++) {
-    int x = roi.left + i; // line
+    int x = roi.left + i;
     int y = roi.top + i;
     int w = (roi.right - roi.left) - 2*i;
     int h = (roi.bottom - roi.top) - 2*i;
 
-    Debug(1, "draw_roi_box: x %d, y %d, w %d, h %d color %s %d line width %d", x, y, w, h, color.c_str(), i, line_width);
-#if 0
-  drawbox_filter.send_command("ni_quadra_drawbox", (i ? stringtf("x%d", i).c_str() : "x"), std::to_string(x).c_str());
-  drawbox_filter.send_command("ni_quadra_drawbox", (i ? stringtf("y%d", i).c_str() : "y"), std::to_string(y).c_str());
-  drawbox_filter.send_command("ni_quadra_drawbox", (i ? stringtf("w%d", i).c_str() : "w"), std::to_string(w).c_str());
-  drawbox_filter.send_command("ni_quadra_drawbox", (i ? stringtf("h%d", i).c_str() : "h"), std::to_string(h).c_str());
-  
-#else
-  drawbox_filter.opt_set("x", x);
-  drawbox_filter.opt_set("y", y);
-  drawbox_filter.opt_set("w", w);
-  drawbox_filter.opt_set("h", h);
-#endif
-      //drawbox_filter.opt_set("color", color.c_str()); Doesn't work
-  } // end foreach line
-  drawbox_filter.send_command("ni_quadra_drawbox", "color", color.c_str());
+    Debug(1, "draw_roi_box: x %d, y %d, w %d, h %d color %s line_width %d", x, y, w, h, color, line_width);
+    drawbox_filter.opt_set("x", x);
+    drawbox_filter.opt_set("y", y);
+    drawbox_filter.opt_set("w", w);
+    drawbox_filter.opt_set("h", h);
+  }
+  drawbox_filter.send_command("ni_quadra_drawbox", "color", color);
 
   int ret = drawbox_filter.execute(inframe, outframe);
   SystemTimePoint endtime = std::chrono::system_clock::now();
@@ -695,13 +720,6 @@ int Quadra_Yolo::annotate(
     const AVRegionOfInterestNetintExtra &roi_extra
     ) {
   AVFrame *input = in_frame;
-  int cls = roi_extra.cls;
-  std::string color;
-  if (cls == 0) {
-    color = "Blue";
-  } else {
-    color = "Red";
-  }
   if (drawbox) {
 #if SOFTWARE_DRAWBOX
     int ret = draw_roi_box_in_place(input, roi, roi_extra, monitor->LabelSize());
@@ -728,7 +746,7 @@ int Quadra_Yolo::annotate(
 
   if (drawtext) {
     SystemTimePoint starttime = std::chrono::system_clock::now();
-    std::string text = stringtf("%s %.1f%%", get_class_name(cls).c_str(), 100*roi_extra.prob);
+    std::string text = stringtf("%s %.1f%%", get_class_name(roi_extra.cls).c_str(), 100*roi_extra.prob);
 #if SOFTWARE_DRAWBOX
     Image img(input);
     img.Annotate(text.c_str(), Vector2(roi.left, roi.top), monitor->LabelSize(), kRGBWhite, kRGBTransparent);
@@ -736,10 +754,9 @@ int Quadra_Yolo::annotate(
     Debug(1, "Drawing text %s", text.c_str());
     AVFrame *drawtext_output = nullptr;
 
-    color = "white";
     zm_dump_video_frame(input, "Quadra: drawtext input");
     int ret = draw_text(input, &drawtext_output, text,
-        roi.left+1+monitor->LabelSize(), roi.top+1+monitor->LabelSize(), color.c_str());
+        roi.left+1+monitor->LabelSize(), roi.top+1+monitor->LabelSize(), "white");
     if (ret < 0) {
       Error("cannot drawtext %d %s", ret, av_make_error_string(ret).c_str());
     } else {
@@ -884,20 +901,33 @@ int Quadra_Yolo::ni_read_roi(AVFrame *out, int frame_count) {
   AVRegionOfInterest * roi = (AVRegionOfInterest *)sd->data;
   AVRegionOfInterestNetintExtra *roi_extra = (AVRegionOfInterestNetintExtra *)sd_roi_extra->data;
   int i, j;
+
+  // Lambda to transform coordinates from letterboxed model space to original image space
+  auto transform_coord = [this, out](int coord, int offset, bool is_vertical) -> int {
+    if (letterbox_scale <= 0.0f || use_hwframe) {
+      return coord;  // No letterbox transformation needed
+    }
+    int transformed = static_cast<int>((coord - offset) / letterbox_scale);
+    int max_val = is_vertical ? out->height - 1 : out->width - 1;
+    return std::clamp(transformed, 0, max_val);
+  };
+
   for (i = 0, j = 0; i < roi_num; i++) {
     //if (roi_box[i].ai_class == 0 || roi_box[i].ai_class == 7) {
       roi[j].self_size = sizeof(*roi);
-      roi[j].top       = roi_box[i].top;
-      roi[j].bottom    = roi_box[i].bottom;
-      roi[j].left      = roi_box[i].left;
-      roi[j].right     = roi_box[i].right;
+      // Transform coordinates from letterboxed model space to original image space
+      roi[j].left      = transform_coord(roi_box[i].left, letterbox_offset_x, false);
+      roi[j].right     = transform_coord(roi_box[i].right, letterbox_offset_x, false);
+      roi[j].top       = transform_coord(roi_box[i].top, letterbox_offset_y, true);
+      roi[j].bottom    = transform_coord(roi_box[i].bottom, letterbox_offset_y, true);
       roi[j].qoffset   = { 0 , 0 };
       roi_extra[j].self_size = sizeof(*roi_extra);
       roi_extra[j].cls       = roi_box[i].ai_class;
       roi_extra[j].prob      = roi_box[i].prob;
-      Debug(4, "roi %d: top %d, bottom %d, left %d, right %d, class %d prob %f qpo %d/%d",
-          j, roi[j].top, roi[j].bottom, roi[j].left, roi[j].right,
-          roi_extra[j].cls, roi_extra[j].prob, roi[j].qoffset.num, roi[j].qoffset.den);
+      Debug(4, "roi %d: model(%d,%d,%d,%d) -> image(%d,%d,%d,%d), class %d prob %f",
+          j, roi_box[i].left, roi_box[i].top, roi_box[i].right, roi_box[i].bottom,
+          roi[j].left, roi[j].top, roi[j].right, roi[j].bottom,
+          roi_extra[j].cls, roi_extra[j].prob);
       j++;
     //}
   }

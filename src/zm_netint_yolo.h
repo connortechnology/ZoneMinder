@@ -44,6 +44,13 @@ class Quadra_Yolo {
     //SWScale swscale;
     SwsContext *sw_scale_ctx;
 
+    // Letterbox parameters for aspect ratio preservation
+    int letterbox_offset_x = 0;  // X offset of scaled image within model frame
+    int letterbox_offset_y = 0;  // Y offset of scaled image within model frame
+    int letterbox_width = 0;     // Width of scaled image (without padding)
+    int letterbox_height = 0;    // Height of scaled image (without padding)
+    float letterbox_scale = 1.0f; // Scale factor applied to original image
+
     filter_worker hwdl_filter;
 
     bool drawbox;
