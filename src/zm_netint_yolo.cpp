@@ -9,6 +9,15 @@
 
 #include "zm_netint_yolo.h"
 
+#include <cstring>
+#include <fstream>
+
+// NetInt .nb model file format offsets
+constexpr size_t NB_MODEL_NAME_OFFSET = 0x0C;
+constexpr size_t NB_MODEL_NAME_MAX_LEN = 64;
+constexpr size_t NB_WIDTH_OFFSET = 0x208;
+constexpr size_t NB_HEIGHT_OFFSET = 0x20C;
+
 static const char *roi_class[] = {"person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
   "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat",
   "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "backpack",
@@ -79,6 +88,68 @@ Quadra_Yolo::~Quadra_Yolo() {
   }
 }
 
+bool Quadra_Yolo::parse_model_file(const std::string &nbg_file) {
+  std::ifstream file(nbg_file, std::ios::binary);
+  if (!file.is_open()) {
+    Warning("Cannot open model file %s to parse header", nbg_file.c_str());
+    return false;
+  }
+
+  // Verify magic number "VPMN"
+  char magic[4];
+  file.read(magic, 4);
+  if (!file || std::strncmp(magic, "VPMN", 4) != 0) {
+    Warning("Model file %s does not have VPMN magic header", nbg_file.c_str());
+    return false;
+  }
+
+  // Read model name string at offset 0x0C (contains dimensions and color info)
+  char model_name_buf[NB_MODEL_NAME_MAX_LEN + 1] = {0};
+  file.seekg(NB_MODEL_NAME_OFFSET);
+  file.read(model_name_buf, NB_MODEL_NAME_MAX_LEN);
+  if (!file) {
+    Warning("Cannot read model name from %s", nbg_file.c_str());
+    return false;
+  }
+  std::string model_name_str(model_name_buf);
+  Debug(1, "Model name from file header: %s", model_name_str.c_str());
+
+  // Detect color order from model name
+  if (model_name_str.find("bgr") != std::string::npos ||
+      model_name_str.find("BGR") != std::string::npos) {
+    model_bgr = true;
+    Debug(1, "Detected BGR color order from model header");
+  } else if (model_name_str.find("rgb") != std::string::npos ||
+             model_name_str.find("RGB") != std::string::npos) {
+    model_bgr = false;
+    Debug(1, "Detected RGB color order from model header");
+  }
+
+  // Read width and height from fixed offsets
+  uint32_t width = 0, height = 0;
+  file.seekg(NB_WIDTH_OFFSET);
+  file.read(reinterpret_cast<char*>(&width), sizeof(width));
+  file.seekg(NB_HEIGHT_OFFSET);
+  file.read(reinterpret_cast<char*>(&height), sizeof(height));
+
+  if (!file) {
+    Warning("Cannot read dimensions from %s", nbg_file.c_str());
+    return false;
+  }
+
+  // Sanity check dimensions (reasonable range for YOLO models)
+  if (width >= 128 && width <= 1920 && height >= 128 && height <= 1920) {
+    model_width = static_cast<int>(width);
+    model_height = static_cast<int>(height);
+    Debug(1, "Detected model dimensions from file: %dx%d", model_width, model_height);
+  } else {
+    Warning("Model dimensions %ux%u from file seem invalid, using defaults", width, height);
+    return false;
+  }
+
+  return true;
+}
+
 bool Quadra_Yolo::setup(
     AVStream *p_dec_stream,
     AVCodecContext *decoder_ctx,
@@ -90,6 +161,7 @@ bool Quadra_Yolo::setup(
   dec_stream = p_dec_stream;
   dec_ctx = decoder_ctx;
 
+  // Detect model type from filename
   if (std::string::npos != nbg_file.find("yolov4")) {
     model_name = std::string("yolov4");
   } else if (std::string::npos != nbg_file.find("yolov5")) {
@@ -98,29 +170,35 @@ bool Quadra_Yolo::setup(
     model_name = std::string("yolov8");
   }
 
-  // Detect color channel order from model filename
-  if (std::string::npos != nbg_file.find("bgr")) {
-    model_bgr = true;
-  } else if (std::string::npos != nbg_file.find("rgb")) {
-    model_bgr = false;
-  }
-  Debug(1, "Model %s color order: %s", nbg_file.c_str(), model_bgr ? "BGR" : "RGB");
+  // Try to parse model file header for dimensions and color order
+  bool parsed_from_file = parse_model_file(nbg_file);
 
+  // Set model interface based on detected type
   if (model_name == "yolov4") {
     model = &yolov4;
-    model_width = 416;
-    model_height = 416;
+    if (!parsed_from_file) {
+      model_width = model_height = 416;
+      Debug(1, "Using default yolov4 dimensions: %dx%d", model_width, model_height);
+    }
   } else if (model_name == "yolov5") {
     model = &yolov5;
-    model_width = model_height = 640;
+    if (!parsed_from_file) {
+      model_width = model_height = 640;
+      Debug(1, "Using default yolov5 dimensions: %dx%d", model_width, model_height);
+    }
   } else if (model_name == "yolov8") {
     model = &yolov8;
-    model_width = 640;
-    model_height = 352;
+    if (!parsed_from_file) {
+      model_width = model_height = 640;
+      Debug(1, "Using default yolov8 dimensions: %dx%d", model_width, model_height);
+    }
   } else {
     Error("Unsupported yolo model");
     return false;
   }
+
+  Debug(1, "Model %s: %dx%d, color order: %s",
+      nbg_file.c_str(), model_width, model_height, model_bgr ? "BGR" : "RGB");
 
   //std::string device = monitor->DecoderHWAccelDevice();
   //int devid = device.empty() ? -1 : std::stoi(device);

@@ -84,6 +84,7 @@ class Quadra_Yolo {
     int process_roi(AVFrame *frame, AVFrame **filt_frame);
     int check_movement( AVRegionOfInterest cur_roi, AVRegionOfInterestNetintExtra cur_roi_extra);
     int ni_read_roi(AVFrame *out, int frame_count);
+    bool parse_model_file(const std::string &nbg_file);
 };
 
 #endif
