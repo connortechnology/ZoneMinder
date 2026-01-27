@@ -2049,16 +2049,18 @@ int Monitor::Analyse() {
           } else {
             event->addNote(SIGNAL_CAUSE, "Reacquired");
           }
-          if (analysis_image == ANALYSISIMAGE_YCHANNEL) {
-            Image *y_image = packet->get_y_image();
-            if (y_image) {
-              Debug(1, "assigning refimage from y-channel");
-              ref_image.Assign(*y_image);
-            }
-          } else if (packet->image) {
-            Debug(1, "assigning refimage from packet->image");
-            ref_image.Assign(*(packet->image));
-          }
+          if (shared_data->analysing != ANALYSING_NONE) {
+            if  (analysis_image == ANALYSISIMAGE_YCHANNEL) {
+              Image *y_image = packet->get_y_image();
+              if (y_image) {
+                Debug(1, "assigning refimage from y-channel");
+                ref_image.Assign(*y_image);
+              }
+            } else if (packet->image) {
+              Debug(1, "assigning refimage from packet->image");
+              ref_image.Assign(*(packet->image));
+            }  // end if y-image or full image
+          }  // end if doing analysing
         }
         shared_data->state = state = IDLE;
       }  // end if signal change
@@ -3487,25 +3489,16 @@ int Monitor::Decode() {
       if (ret == AVERROR_EOF) {
         CloseDecoder();
       }
-      return 0; // re-opening will take long enough
+      return false; // re-opening will take long enough
     } else {
       Debug(1, "EAGAIN, fall through and send a packet to decoder, packet was %d", delayed_packet->image_index);
     } // else 0, EAGAIN, fall through and send a packet
-  } else if (mVideoCodecContext) {
-    Debug(1, "Dont Have queued packets %zu", decoder_queue.size());
-    av_frame_ptr receive_frame{av_frame_alloc()};
-    if (!receive_frame) {
-      Error("Error allocating frame");
-      return 0;
-    }
-    int ret = avcodec_receive_frame(mVideoCodecContext, receive_frame.get());
-    Debug(1, "Ret from receive_frame ret: %d %s", ret, av_make_error_string(ret).c_str());
-  } 
+  }
 
   // Might have to be keyframe interval
   if (!packet and (packetqueue.get_max_keyframe_interval()>0) and (decoder_queue.size() > 2*static_cast<unsigned int>(packetqueue.get_max_keyframe_interval()))) {
-    Debug(1, "Too many packets (%d) in queue. Sleeping", packetqueue.get_max_keyframe_interval());
-    return -1;
+    Debug(1, "Too many packets (%zu) in queue. Sleeping", decoder_queue.size());
+    return false;
   }
 
   // Didn't receive a frame, get a packet from packetqueue and send it.
@@ -3514,13 +3507,13 @@ int Monitor::Decode() {
     packet = packet_lock.packet_;
     if (!packet) {
       Debug(1, "No packet from get_packet");
-      return -1;
+      return false;
     }
     if (packet->codec_type != AVMEDIA_TYPE_VIDEO) {
       packet->decoded = true;
       Debug(3, "Not video, probably audio packet %d", packet->image_index);
       packetqueue.increment_it(decoder_it);
-      return 1; // Don't need decode
+      return true; // Don't need decode
     }
   }
 
@@ -3557,14 +3550,14 @@ int Monitor::Decode() {
 #endif
 
       if (0 == ret) { // EAGAIN
-        return 0; //make it sleep? No
+        return true; // Decoder needs draining, come back soon
       } else if (ret < 0) {
         CloseDecoder();
-        return -1;
+        return false;
       }  // end if ret from send_packet
       packetqueue.increment_it(decoder_it);
       decoder_queue.push_back(std::move(packet_lock));
-      return 0;
+      return true;  // Successfully sent packet to decoder
     } else {
       Debug(1, "Not Decoding frame %d? %s", packet->image_index, Decoding_Strings[decoding].c_str());
       packetqueue.increment_it(decoder_it);
@@ -3591,35 +3584,24 @@ int Monitor::Decode() {
       }  // end if have convert_context
     }  // end if need transfer to image
   } // end if in_frame
-
-#if 0
-  if (analysis_image == ANALYSISIMAGE_YCHANNEL) {
+ 
+  if ((shared_data->analysing != ANALYSING_NONE) && (analysis_image == ANALYSISIMAGE_YCHANNEL)) {
     Image *y_image = packet->get_y_image();
     if (y_image) {
       if (packet->in_frame->width != camera_width || packet->in_frame->height != camera_height)
         y_image->Scale(camera_width, camera_height);
 
       if (orientation != ROTATE_0) {
-        switch (orientation) {
-          case ROTATE_0 :
-            // No action required
-            break;
-          case ROTATE_90 :
-          case ROTATE_180 :
-          case ROTATE_270 :
-            y_image->Rotate((orientation-1)*90);
-            break;
-          case FLIP_HORI :
-          case FLIP_VERT :
-            y_image->Flip(orientation==FLIP_HORI);
-            break;
+        if (orientation == ROTATE_90 || orientation == ROTATE_180 || orientation == ROTATE_270) {
+          y_image->Rotate((orientation-1)*90);
+        } else if (orientation == FLIP_HORI || orientation == FLIP_VERT) {
+          y_image->Flip(orientation == FLIP_HORI);
         }
       } // end if have rotation
     } else if (decoding == DECODING_ALWAYS) {
       Error("Want to use y-channel, but no in_frame or wrong format");
     }
   }
-#endif
 
   if (packet->image) {
     Image *capture_image = packet->image;
@@ -3663,19 +3645,10 @@ int Monitor::Decode() {
 
     if (orientation != ROTATE_0) {
       Debug(3, "Doing rotation");
-      switch (orientation) {
-        case ROTATE_0:
-          // No action required
-          break;
-        case ROTATE_90:
-        case ROTATE_180:
-        case ROTATE_270:
-          capture_image->Rotate((orientation - 1) * 90);
-          break;
-        case FLIP_HORI:
-        case FLIP_VERT:
-          capture_image->Flip(orientation == FLIP_HORI);
-          break;
+      if (orientation == ROTATE_90 || orientation == ROTATE_180 || orientation == ROTATE_270) {
+        capture_image->Rotate((orientation-1)*90);
+      } else if (orientation == FLIP_HORI || orientation == FLIP_VERT) {
+        capture_image->Flip(orientation == FLIP_HORI);
       }
     }  // end if have rotation
 
