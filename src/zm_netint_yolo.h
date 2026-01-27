@@ -28,6 +28,7 @@ class Quadra_Yolo {
     int model_width;
     int model_height;
     int model_format;
+    bool model_bgr;  // true if model expects BGR channel order, false for RGB
     float obj_thresh = 0.25;
     float nms_thresh = 0.45;
     NiNetworkContext *network_ctx;

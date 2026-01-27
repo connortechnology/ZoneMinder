@@ -27,6 +27,7 @@ Quadra_Yolo::Quadra_Yolo(Monitor *p_monitor, bool p_use_hwframe) :
   model_width(640),
   model_height(640),
   model_format(GC620_RGB888_PLANAR),
+  model_bgr(true),  // Default to BGR as most NetInt models use BGR
   obj_thresh(0.25),
   nms_thresh(0.45),
   network_ctx(nullptr),
@@ -96,6 +97,14 @@ bool Quadra_Yolo::setup(
   } else if (std::string::npos != nbg_file.find("yolov8")) {
     model_name = std::string("yolov8");
   }
+
+  // Detect color channel order from model filename
+  if (std::string::npos != nbg_file.find("bgr")) {
+    model_bgr = true;
+  } else if (std::string::npos != nbg_file.find("rgb")) {
+    model_bgr = false;
+  }
+  Debug(1, "Model %s color order: %s", nbg_file.c_str(), model_bgr ? "BGR" : "RGB");
 
   if (model_name == "yolov4") {
     model = &yolov4;
@@ -260,16 +269,16 @@ int Quadra_Yolo::ni_recreate_ai_frame(ni_frame_t *ni_frame, AVFrame *avframe) {
       avframe->height);
 
   if (avframe->format == AV_PIX_FMT_RGB24) {
-    /* RGB24 -> RGB888_PLANAR (matches model_format GC620_RGB888_PLANAR) */
+    /* RGB24 -> planar format (BGR or RGB depending on model) */
     const int plane_size = avframe->width * avframe->height;
-    uint8_t *r_data = p_data;
-    uint8_t *g_data = p_data + plane_size;
-    uint8_t *b_data = p_data + plane_size * 2;
+    uint8_t *first_data  = p_data;
+    uint8_t *second_data = p_data + plane_size;
+    uint8_t *third_data  = p_data + plane_size * 2;
     uint8_t *fdata  = avframe->data[0];
     int x, y;
 
-    Debug(1, "%s(): rgb24 to bgrp, pix %dx%d, linesize %d", __func__,
-        avframe->width, avframe->height, avframe->linesize[0]);
+    Debug(1, "%s(): rgb24 to %s planar, pix %dx%d, linesize %d", __func__,
+        model_bgr ? "bgr" : "rgb", avframe->width, avframe->height, avframe->linesize[0]);
 
     for (y = 0; y < avframe->height; y++) {
       for (x = 0; x < avframe->width; x++) {
@@ -279,9 +288,17 @@ int Quadra_Yolo::ni_recreate_ai_frame(ni_frame_t *ni_frame, AVFrame *avframe) {
         uint8_t g = fdata[fpos + x * 3 + 1];
         uint8_t b = fdata[fpos + x * 3 + 2];
 
-        r_data[ppos + x] = r;
-        g_data[ppos + x] = g;
-        b_data[ppos + x] = b;
+        if (model_bgr) {
+          // BGR planar: B first, G second, R third
+          first_data[ppos + x] = b;
+          second_data[ppos + x] = g;
+          third_data[ppos + x] = r;
+        } else {
+          // RGB planar: R first, G second, B third
+          first_data[ppos + x] = r;
+          second_data[ppos + x] = g;
+          third_data[ppos + x] = b;
+        }
       }
     }
   } else {
