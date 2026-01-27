@@ -15,6 +15,8 @@ extern "C" {
 #include "netint_network.h"
 
 #include <nlohmann/json.hpp>
+#include <string>
+#include <vector>
 
 #define NI_TRANSCODE_FRAME_NUM 3
 #define NI_SAME_CENTER_THRESH 2
@@ -29,6 +31,7 @@ class Quadra_Yolo {
     int model_height;
     int model_format;
     bool model_bgr;  // true if model expects BGR channel order, false for RGB
+    std::vector<std::string> class_names;  // Class labels loaded from .names file
     float obj_thresh = 0.25;
     float nms_thresh = 0.45;
     NiNetworkContext *network_ctx;
@@ -85,6 +88,8 @@ class Quadra_Yolo {
     int check_movement( AVRegionOfInterest cur_roi, AVRegionOfInterestNetintExtra cur_roi_extra);
     int ni_read_roi(AVFrame *out, int frame_count);
     bool parse_model_file(const std::string &nbg_file);
+    bool load_class_names(const std::string &nbg_file);
+    const std::string& get_class_name(int class_id) const;
 };
 
 #endif
