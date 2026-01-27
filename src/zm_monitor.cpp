@@ -410,16 +410,12 @@ void Monitor::Load(MYSQL_ROW dbrow, bool load_zones = true, Purpose p = QUERY) {
   std::string od = dbrow[col]; col++;
   if (od == "none") {
     objectdetection = OBJECT_DETECTION_NONE;
-  } else if (od == "memx") {
-    objectdetection = OBJECT_DETECTION_MEMX;
   } else if (od == "mx_accl") {
     objectdetection = OBJECT_DETECTION_MX_ACCL;
   } else if (od == "quadra") {
     objectdetection = OBJECT_DETECTION_QUADRA;
   } else if (od == "uvicorn") {
     objectdetection = OBJECT_DETECTION_UVICORN;
-  } else if (od == "speedai") {
-    objectdetection = OBJECT_DETECTION_SPEEDAI;
   } else {
     Warning("Unsupported value for ObjectDetection: %s", od.c_str());
     objectdetection = OBJECT_DETECTION_NONE;
@@ -2142,26 +2138,9 @@ int Monitor::Analyse() {
               }
 
               if (objectdetection != OBJECT_DETECTION_NONE) {
-                if (
-                    ((objectdetection == OBJECT_DETECTION_SPEEDAI)
-                    or
-                    (objectdetection == OBJECT_DETECTION_MEMX))
-                    and (shared_data->last_analysis_index != image_buffer_count)) {
-                  int count = 5; // 30000 usecs.  Which means 30fps. But untether might be slow, but should catch up
-                  while (shared_data->analysis_image_count < packet->image_index and !zm_terminate and count) {
-                    Debug(1, "Waiting for speedai analysis_image_count, %d packet index %d", shared_data->analysis_image_count, packet->image_index);
-                    std::this_thread::sleep_for(Microseconds(10000));
-                    count--;
-                  }
-                  // In order to make it available to event writing
-                  if (shared_data->analysis_image_count >= packet->image_index) {
-                    Debug(1, "Assigning image at index %d for ai_image", packet->image_index % image_buffer_count);
-                    packet->ai_image = new Image(*analysis_image_buffer[packet->image_index % image_buffer_count]);
-                  }
-                }
 #if !AI_IN_DECODE
 #if HAVE_QUADRA
-                else if (objectdetection == OBJECT_DETECTION_QUADRA) {
+                if (objectdetection == OBJECT_DETECTION_QUADRA) {
                   std::pair<int, std::string> results = Analyse_Quadra(packet);
                 }
 #endif
@@ -3757,9 +3736,6 @@ bool Monitor::Decode() {
        
       //if (packet->detections.size())
         //zm_terminate = true;
-      if (objectdetection == OBJECT_DETECTION_SPEEDAI) {
-        // Won't be using hwframe
-      }
       if (packet->needs_hw_transfer(mVideoCodecContext))
           packet->transfer_hwframe(mVideoCodecContext);
   //    packet->hw_frame = nullptr;
