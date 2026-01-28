@@ -56,6 +56,7 @@ Event::Event(
 ) :
   id(0),
   monitor(p_monitor),
+  storage(nullptr),
   packetqueue_it(p_packetqueue_it),
   start_time(p_start_time),
   end_time(p_start_time),
@@ -122,7 +123,7 @@ Event::Event(
 
   // Copy it in case opening the mp4 doesn't work we can set it to another value
   save_jpegs = monitor->GetOptSaveJPEGs();
-  Storage *storage = monitor->getStorage();
+  storage = monitor->getStorage();
   if (monitor->GetOptVideoWriter() != 0) {
     container = monitor->OutputContainer();
     if (container == "auto" || container == "") {
@@ -392,6 +393,11 @@ Event::~Event() {
         id);
     zmDbDoUpdate(sql);
   }  // end if no changed rows due to Name change during recording
+ 
+  if (storage && storage->Id()) {
+    sql = stringtf("UPDATE Storage SET DiskSpace = DiskSpace + %" PRIu64 " WHERE Id=%u", video_size, storage->Id());
+    zmDbDoUpdate(sql);
+  }
 
   if (mJpegCodecContext) {
     avcodec_free_context(&mJpegCodecContext);
@@ -402,6 +408,7 @@ Event::~Event() {
     sws_freeContext(mJpegSwsContext);
   }
   av_buffer_unref(&hw_device_ctx);
+
 }  // Event::~Event()
 
 void Event::createNotes(std::string &notes) {
