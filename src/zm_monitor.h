@@ -70,6 +70,7 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   friend class MonitorStream;
   friend class MonitorLinkExpression;
   friend class ONVIF;
+  friend class DecoderThread;
 
  public:
   typedef enum { QUERY = 0, CAPTURE, ANALYSIS } Purpose;
@@ -1087,7 +1088,6 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   bool setupConvertContext(const AVFrame *input_frame, const Image *image);
   void applyOrientation(Image *image);
   bool applyDeinterlacing(std::shared_ptr<ZMPacket> &packet, Image *capture_image);
-  bool Decode();
   bool Poll();
   void DumpImage(Image *dump_image) const;
   std::string Substitute(const std::string &format,
