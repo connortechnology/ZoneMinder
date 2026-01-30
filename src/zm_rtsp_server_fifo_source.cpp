@@ -56,8 +56,8 @@ void ZoneMinderFifoSource::ReadRun() {
   if (stop_) Warning("bad value for stop_ in ReadRun");
   while (!stop_ and !zm_terminate) {
     if (getNextFrame() < 0) {
-      if (!stop_ and !zm_terminate) return;
-      Debug(1, "Sleeping because couldn't getNextFrame");
+      if (stop_ or zm_terminate) return;  // Only exit if we should stop
+      Debug(1, "FIFO read failed or EOF, sleeping before retry");
       sleep(1);
     }
   }
