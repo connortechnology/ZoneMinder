@@ -897,8 +897,7 @@ void ONVIF::log_subscription_timing(const char* context) {
        context, SystemTimePointToString(subscription_termination_time).c_str(),
        static_cast<intmax_t>(seconds_until_termination),
        SystemTimePointToString(next_renewal_time).c_str(),
-       static_cast<intmax_t>(seconds_until_renewal),
-       seconds_until_renewal);
+       static_cast<intmax_t>(seconds_until_renewal));
   // Warn if we're getting close to termination and renewal is enabled
   // If renewal is disabled, this is expected behavior - just log at debug level
   if (seconds_until_termination < ONVIF_RENEWAL_ADVANCE_SECONDS && seconds_until_termination > 0) {
