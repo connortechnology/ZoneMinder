@@ -203,6 +203,7 @@ class Monitor extends ZM_Object {
       $RTSP2WebStreamOptions = array(
         'Primary' => translate('Primary'),
         'Secondary' => translate('Secondary'),
+        'CameraDirectPrimary' => translate('Camera Direct Primary'),
         'Restream' => translate('Restream')
       );
     }

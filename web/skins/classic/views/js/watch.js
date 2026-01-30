@@ -924,7 +924,7 @@ function setChannelStream() {
     if (streamChannel.options[streamChannel.selectedIndex] && streamChannel.options[streamChannel.selectedIndex].disabled) {
       streamChannelValue = 'Primary';
     }
-    monitorStream.currentChannelStream = (streamChannelValue == 'Secondary') ? 1 : 0;
+    monitorStream.currentChannelStream = streamChannelValue;
     streamChannel.value = streamChannelValue;
   }
 }

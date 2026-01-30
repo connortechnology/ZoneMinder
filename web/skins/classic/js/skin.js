@@ -1156,6 +1156,7 @@ function manageShutdownBtns(element) {
 /* Controls the availability of options for selection*/
 function manageChannelStream() {
   let select = null;
+  let primaryPath_ = null;
   let secondPath_ = null;
   let restream = null;
   if (currentView == 'watch') {
@@ -1164,6 +1165,7 @@ function manageChannelStream() {
         return parseInt(o["id"]) === monitorId;
       });
       if (monitor) {
+        primaryPath_ = monitor['Path'];
         secondPath_ = monitor['SecondPath'];
         restream = monitor['Restream'];
       }
@@ -1173,6 +1175,10 @@ function manageChannelStream() {
     }
   } else if (currentView == 'monitor') {
     // Local source doesn't have second path
+    const PathInput = document.querySelector('input[name="newMonitor[Path]"]');
+    if (PathInput) {
+      primaryPath_ = PathInput.value;
+    }
     const SecondPathInput = document.querySelector('input[name="newMonitor[SecondPath]"]');
     if (SecondPathInput) {
       secondPath_ = SecondPathInput.value;
@@ -1181,10 +1187,12 @@ function manageChannelStream() {
   }
   if (select) {
     select.querySelectorAll("option").forEach(function(el) {
-      if (el.value == 'Secondary') {
+      if (el.value == 'Secondary' || el.value == 'CameraDirectSecondary') {
         el.disabled = !secondPath_;
-      } else if (el.value == 'Restream') {
+      } else if (el.value == 'Restream' || el.value == 'ZoneMinderPrimary') {
         el.disabled = !restream;
+      } else if (el.value == 'CameraDirectPrimary') {
+        el.disabled = !primaryPath_;
       }
       applyChosen(select);
     });
