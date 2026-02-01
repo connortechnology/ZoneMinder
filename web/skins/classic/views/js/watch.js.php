@@ -44,7 +44,7 @@ monitorData[monitorData.length] = {
   'Restream':<?php echo $m->Janus_Use_RTSP_Restream() ?>,
   'RTSP2WebEnabled':<?php echo $m->RTSP2WebEnabled() ?>,
   'DefaultPlayer':'<?php echo $m->DefaultPlayer() ?>',
-  'RTSP2WebStream':'<?php echo $m->RTSP2WebStream() ?>',
+  'StreamChannel':'<?php echo $m->StreamChannel() ?>',
   'Go2RTCEnabled': <?php echo $m->Go2RTCEnabled() ?>,
   'SecondPath':'<?php echo $m->SecondPath() ?>',
   'janusEnabled':<?php echo $m->JanusEnabled() ?>,

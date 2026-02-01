@@ -18,7 +18,7 @@ function MonitorStream(monitorData) {
   this.height = monitorData.height;
   this.RTSP2WebEnabled = monitorData.RTSP2WebEnabled;
   this.RTSP2WebType = null;
-  this.RTSP2WebStream = monitorData.RTSP2WebStream;
+  this.StreamChannel = monitorData.StreamChannel;
   this.Go2RTCEnabled = monitorData.Go2RTCEnabled;
   this.Go2RTCMSEBufferCleared = true;
   this.currentChannelStream = null;
@@ -356,16 +356,16 @@ function MonitorStream(monitorData) {
   this.getStreamSuffix = function(channel) {
     // Map legacy numeric values and string names to go2rtc stream suffixes
     const channelMap = {
-      'default': '',                    // Just monitor ID
-      'Primary': '',                    // Just monitor ID (primary based on RTSPServer setting)
+      'default': '', // Just monitor ID
+      'Primary': '', // Just monitor ID (primary based on RTSPServer setting)
       'Secondary': '_CameraDirectSecondary',
       'CameraDirectSecondary': '_CameraDirectSecondary',
       'Restream': '_ZoneMinderPrimary',
       'ZoneMinderPrimary': '_ZoneMinderPrimary',
       'CameraDirectPrimary': '_CameraDirectPrimary',
-      0: '',                            // Legacy: Primary
-      1: '_CameraDirectSecondary',      // Legacy: Secondary
-      2: '_ZoneMinderPrimary'           // Legacy: Restream
+      '0': '', // Legacy: Primary
+      '1': '_CameraDirectSecondary', // Legacy: Secondary
+      '2': '_ZoneMinderPrimary' // Legacy: Restream
     };
     return channelMap[channel] !== undefined ? channelMap[channel] : '';
   };
@@ -380,9 +380,9 @@ function MonitorStream(monitorData) {
       'Restream': 2,
       'ZoneMinderPrimary': 2,
       'CameraDirectPrimary': 0,
-      0: 0,
-      1: 1,
-      2: 2
+      '0': 0,
+      '1': 1,
+      '2': 2
     };
     return channelMap[channel] !== undefined ? channelMap[channel] : 0;
   };
@@ -391,7 +391,7 @@ function MonitorStream(monitorData) {
     if (streamChannel === null || streamChannel === '' || currentView == 'montage') streamChannel = 'default';
     // Normalize channel name for internal tracking
     if (streamChannel == 'default') {
-      streamChannel = (this.RTSP2WebStream == 'Secondary') ? 'Secondary' : 'Primary';
+      streamChannel = (this.StreamChannel == 'CameraDirectSecondary') ? 'CameraDirectSecondary' : 'Restream';
     }
     console.log('streamChannel', streamChannel);
     this.streamListenerBind = streamListener.bind(null, this);

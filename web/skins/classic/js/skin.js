@@ -1159,6 +1159,7 @@ function manageChannelStream() {
   let primaryPath_ = null;
   let secondPath_ = null;
   let restream = null;
+
   if (currentView == 'watch') {
     if (typeof monitorData !== 'undefined') {
       const monitor = monitorData.find((o) => {
@@ -1183,7 +1184,11 @@ function manageChannelStream() {
     if (SecondPathInput) {
       secondPath_ = SecondPathInput.value;
     }
-    select = document.querySelector('select[name="newMonitor[RTSP2WebStream]"]');
+    const RestreamInput = document.querySelector('input[name="newMonitor[Restream]"]');
+    if (RestreamInput) {
+      restream = RestreamInput.checked;
+    }
+    select = document.querySelector('select[name="newMonitor[StreamChannel]"]');
   }
   if (select) {
     select.querySelectorAll("option").forEach(function(el) {
@@ -1194,8 +1199,23 @@ function manageChannelStream() {
       } else if (el.value == 'CameraDirectPrimary') {
         el.disabled = !primaryPath_;
       }
-      applyChosen(select);
     });
+
+    // If current selection is disabled, auto-select first available option
+    const selectedOption = select.options[select.selectedIndex];
+    if (selectedOption && selectedOption.disabled) {
+      // Prefer CameraDirectPrimary, then first enabled option
+      const cameraDirectPrimary = select.querySelector('option[value="CameraDirectPrimary"]:not([disabled])');
+      if (cameraDirectPrimary) {
+        select.value = 'CameraDirectPrimary';
+      } else {
+        const firstEnabled = select.querySelector('option:not([disabled])');
+        if (firstEnabled) {
+          select.value = firstEnabled.value;
+        }
+      }
+    }
+    applyChosen(select);
   }
 }
 
