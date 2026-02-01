@@ -44,7 +44,7 @@ class ZoneMinderFifoSource {
   void WriteRun();
 
   int getNextFrame();
-  virtual void PushFrame(const uint8_t *data, size_t size, int64_t pts) = 0;
+  virtual void PushFrame(const uint8_t *data, size_t size, int64_t pts, uint8_t last = 1) = 0;
   // split packet in frames
   virtual std::list< std::pair<unsigned char*, size_t> > splitFrames(unsigned char* frame, size_t &frameSize);
   virtual unsigned char *extractFrame(unsigned char *data, size_t& size, size_t& outsize);

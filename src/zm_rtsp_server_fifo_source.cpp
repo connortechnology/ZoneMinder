@@ -65,9 +65,8 @@ void ZoneMinderFifoSource::ReadRun() {
 }
 
 void ZoneMinderFifoSource::WriteRun() {
-  // Note: Do NOT do FU-A/FU fragmentation here - the xop library's
-  // H264Source::HandleFrame() and H265Source::HandleFrame() handle
-  // RTP packetization and fragmentation of large NAL units internally.
+  // Max payload size to match xop's MAX_RTP_PAYLOAD_SIZE
+  size_t maxNalSize = 1400;
 
   if (stop_) Warning("bad value for stop_ in WriteRun");
   while (!stop_) {
@@ -86,8 +85,59 @@ void ZoneMinderFifoSource::WriteRun() {
     }
 
     if (nal) {
-      Debug(3, "Pushing nal of size %zu at %" PRId64, nal->size(), nal->pts());
-      PushFrame(nal->buffer(), nal->size(), nal->pts());
+      if (nal->size() > maxNalSize) {
+        // FU-A fragmentation for large NALs
+        Debug(3, "Splitting NAL %zu", nal->size());
+        size_t nalRemaining = nal->size();
+        uint8_t *nalSrc = nal->buffer();
+
+        int fuNalSize = maxNalSize;
+        NAL_Frame fuNal(nullptr, fuNalSize, nal->pts());
+        memcpy(fuNal.buffer()+1, nalSrc, fuNalSize-1);
+
+        if (m_hType == 264) {
+          fuNal.buffer()[0] = (nalSrc[0] & 0xE0) | 28; // FU indicator
+          fuNal.buffer()[1] = 0x80 | (nalSrc[0] & 0x1F); // FU header (with S bit)
+        } else { // 265
+          uint8_t nalUnitType = (nalSrc[0]&0x7E)>>1;
+          fuNal.buffer()[0] = (nalSrc[0] & 0x81) | (49<<1); // Payload header (1st byte)
+          fuNal.buffer()[1] = nalSrc[1]; // Payload header (2nd byte)
+          fuNal.buffer()[2] = 0x80 | nalUnitType; // FU header (with S bit)
+        }
+        PushFrame(fuNal.buffer(), fuNal.size(), fuNal.pts(), 0); // Not last packet
+        nalRemaining -= maxNalSize-1;
+        nalSrc += maxNalSize-1;
+        int nal_count = 0;
+
+        int headerSize = 0;
+        if (m_hType == 264) {
+          fuNal.buffer()[1] = fuNal.buffer()[1]&~0x80; // FU header (no S bit)
+          headerSize = 2;
+        } else { // 265
+          fuNal.buffer()[2] = fuNal.buffer()[2]&~0x80; // FU header (no S bit)
+          headerSize = 3;
+        }
+        while (nalRemaining && !stop_) {
+          bool isLast = (static_cast<size_t>(fuNalSize) >= nalRemaining) ||
+                        (nalRemaining <= static_cast<size_t>(maxNalSize - headerSize));
+          fuNalSize = (nalRemaining < maxNalSize-headerSize) ? nalRemaining : maxNalSize-headerSize;
+          if (static_cast<size_t>(fuNalSize) == nalRemaining) {
+            // This is the last fragment - set E bit
+            fuNal.buffer()[headerSize-1] |= 0x40;
+          }
+          fuNal.size(fuNalSize+headerSize);
+          memcpy(fuNal.buffer()+headerSize, nalSrc, fuNalSize);
+
+          PushFrame(fuNal.buffer(), fuNal.size(), fuNal.pts(), isLast ? 1 : 0);
+          nalRemaining -= fuNalSize;
+          nalSrc += fuNalSize;
+          nal_count += 1;
+        }
+        Debug(3, "Sent %d FU-A fragments for NAL", nal_count + 1);
+      } else {
+        Debug(3, "Pushing nal of size %zu at %" PRId64, nal->size(), nal->pts());
+        PushFrame(nal->buffer(), nal->size(), nal->pts(), 1); // Single packet, is last
+      }
       delete nal;
       nal = nullptr;
       Debug(3, "Done Pushing nal");

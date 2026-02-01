@@ -41,6 +41,8 @@ std::list< std::pair<unsigned char*, size_t> > H264_ZoneMinderFifoSource::splitF
   size_t size = 0;
   unsigned char* buffer = this->extractFrame(frame, bufSize, size);
   while ( buffer != nullptr ) {
+    bool skip_nal = false;
+
     // Extract SPS/PPS from the stream and update xop source
     switch ( m_frameType & 0x1F ) {
     case 7:  // SPS
@@ -62,11 +64,18 @@ std::list< std::pair<unsigned char*, size_t> > H264_ZoneMinderFifoSource::splitF
     case 5:  // IDR
       Debug(4, "H264 IDR: size=%zu bufSize=%zu", size, bufSize);
       break;
+    case 6:  // SEI
+      Debug(3, "H264 SEI: size=%zu bufSize=%zu - SKIPPING to test",
+            size, bufSize);
+      skip_nal = true;
+      break;
     default:
       break;
     }
 
-    frameList.push_back(std::pair<unsigned char*,size_t>(buffer, size));
+    if (!skip_nal) {
+      frameList.push_back(std::pair<unsigned char*,size_t>(buffer, size));
+    }
     if (!bufSize) break;
 
     buffer = this->extractFrame(&buffer[size], bufSize, size);
@@ -141,21 +150,25 @@ H265_ZoneMinderFifoSource::splitFrames(unsigned char* frame, size_t &frameSize) 
 unsigned char * H26X_ZoneMinderFifoSource::findMarker(
   unsigned char *frame, size_t size, size_t &length
 ) {
-  //Debug(1, "findMarker %p %d", frame, size);
+  Debug(4, "findMarker %p size %zu", frame, size);
   unsigned char *start = nullptr;
   if (size < 3) return nullptr;
   for ( size_t i = 0; i < size - 2; i += 1 ) {
-    //Debug(1, "%d: %d %d %d", i, frame[i], frame[i+1], frame[i+2]);
     if ( (frame[i] == 0) and (frame[i+1]) == 0 and (frame[i+2] == 1) ) {
       if ( i and (frame[i-1] == 0) ) {
         start = frame + i - 1;
         length = sizeof(H264marker);
+        Debug(4, "findMarker: found 4-byte marker at offset %zu (prev=%02x)", i-1, i > 1 ? frame[i-2] : 0);
       } else {
         start = frame + i;
         length = sizeof(H264shortmarker);
+        Debug(4, "findMarker: found 3-byte marker at offset %zu", i);
       }
       break;
     }
+  }
+  if (!start) {
+    Debug(4, "findMarker: no marker found in %zu bytes", size);
   }
   return start;
 }
@@ -177,7 +190,7 @@ unsigned char*  H26X_ZoneMinderFifoSource::extractFrame(unsigned char* frame, si
 
     size_t remainingSize = size - (startFrame - frame + markerLength);
     unsigned char *endFrame = nullptr;
-    if ( remainingSize > 3 ) {
+    if ( remainingSize >= 3 ) {
       endFrame = this->findMarker(startFrame+markerLength, remainingSize, endMarkerLength);
     }
     Debug(4, "endFrame: %p marker Length %zu, remaining size %zu", endFrame, endMarkerLength, remainingSize);
@@ -192,6 +205,27 @@ unsigned char*  H26X_ZoneMinderFifoSource::extractFrame(unsigned char* frame, si
 
     if ( endFrame != nullptr ) {
       outsize = endFrame - outFrame;
+      // For SEI NALs (type 6), add detailed logging to debug truncation
+      if ((m_frameType & 0x1F) == 6) {
+        Debug(2, "SEI NAL boundary: outFrame=%p endFrame=%p outsize=%zu endMarkerLen=%zu",
+              outFrame, endFrame, outsize, endMarkerLength);
+        if (outsize >= 8) {
+          Debug(2, "SEI last 8 bytes: %02x %02x %02x %02x %02x %02x %02x %02x",
+                outFrame[outsize-8], outFrame[outsize-7], outFrame[outsize-6], outFrame[outsize-5],
+                outFrame[outsize-4], outFrame[outsize-3], outFrame[outsize-2], outFrame[outsize-1]);
+        } else if (outsize >= 4) {
+          Debug(2, "SEI last 4 bytes: %02x %02x %02x %02x",
+                outFrame[outsize-4], outFrame[outsize-3], outFrame[outsize-2], outFrame[outsize-1]);
+        }
+        // Show what comes after the SEI (the detected start code)
+        if (endMarkerLength >= 4) {
+          Debug(2, "SEI followed by: %02x %02x %02x %02x (4-byte marker)",
+                endFrame[0], endFrame[1], endFrame[2], endFrame[3]);
+        } else {
+          Debug(2, "SEI followed by: %02x %02x %02x (3-byte marker)",
+                endFrame[0], endFrame[1], endFrame[2]);
+        }
+      }
     } else {
       outsize = size;
     }

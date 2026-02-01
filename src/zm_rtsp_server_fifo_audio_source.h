@@ -43,7 +43,7 @@ class ZoneMinderFifoAudioSource : public ZoneMinderFifoSource {
   int getChannels() const { return channels; };
 
  protected:
-  void PushFrame(const uint8_t *data, size_t size, int64_t pts) override;
+  void PushFrame(const uint8_t *data, size_t size, int64_t pts, uint8_t last = 1) override;
 
  protected:
   std::string config;

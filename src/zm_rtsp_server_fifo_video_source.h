@@ -38,7 +38,7 @@ class ZoneMinderFifoVideoSource: public ZoneMinderFifoSource {
     const std::string &fifo
   );
  protected:
-  void PushFrame(const uint8_t *data, size_t size, int64_t pts) override;
+  void PushFrame(const uint8_t *data, size_t size, int64_t pts, uint8_t last = 1) override;
 
  protected:
   int m_width;
