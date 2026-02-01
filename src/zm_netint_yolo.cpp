@@ -191,21 +191,28 @@ bool Quadra_Yolo::setup(
     return false;
   }
 
-  Debug(1, "Model %s: %dx%d, color order: %s",
-      nbg_file.c_str(), model_width, model_height, model_bgr ? "BGR" : "RGB");
+  Debug(1, "Model %s: color order: %s, parsed dimensions: %dx%d",
+      nbg_file.c_str(), model_bgr ? "BGR" : "RGB", model_width, model_height);
 
   //std::string device = monitor->DecoderHWAccelDevice();
   //int devid = device.empty() ? -1 : std::stoi(device);
   int devid = deviceid;
 
-  Debug(1, "Setup NETint %s using %s on %d, use hwframe %d %dx%d", model_name.c_str(), nbg_file.c_str(), devid, use_hwframe, model_width, model_height);
+  // Pass 0,0 for dimensions initially - let ni_ai_config_network_binary determine
+  // the actual model dimensions, then we'll read them from network_data
+  Debug(1, "Setup NETint %s using %s on %d, use hwframe %d", model_name.c_str(), nbg_file.c_str(), devid, use_hwframe);
   int ret = ni_alloc_network_context(&network_ctx, use_hwframe,
-      devid /*dev_id*/, 30 /* keep alive */, model_format, model_width, model_height, nbg_file.c_str());
+      devid /*dev_id*/, 30 /* keep alive */, model_format, 0, 0, nbg_file.c_str());
   if (ret != 0) {
     Error("failed to allocate network context on card %d", devid);
     model = nullptr;
     return false;
   }
+
+  // Read actual model dimensions from the loaded network data
+  model_width = static_cast<int>(network_ctx->network_data.linfo.in_param[0].sizes[0]);
+  model_height = static_cast<int>(network_ctx->network_data.linfo.in_param[0].sizes[1]);
+  Debug(1, "Actual model dimensions from network_data: %dx%d", model_width, model_height);
 
   model_ctx = new YoloModelCtx();
   ret = model->create_model(model_ctx, &network_ctx->network_data, obj_thresh, nms_thresh, model_width, model_height);
