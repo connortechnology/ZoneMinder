@@ -178,7 +178,7 @@ bool VideoStore::open() {
         av_stream_add_side_data(video_out_stream,
             AV_PKT_DATA_DISPLAYMATRIX,
 					(uint8_t *)displaymatrix,
-					sizeof(*displaymatrix));
+					sizeof(int32_t)*9);
 #endif
 #endif
         if (orientation == Monitor::ROTATE_0) {
@@ -223,7 +223,6 @@ bool VideoStore::open() {
           video_out_ctx->max_b_frames = video_in_ctx->max_b_frames;
           video_out_ctx->qmin = video_in_ctx->qmin;
           video_out_ctx->qmax = video_in_ctx->qmax;
-          video_out_ctx->sw_pix_fmt = chosen_codec_data->sw_pix_fmt;
           //video_out_ctx->pix_fmt = chosen_codec_data->hw_pix_fmt, av_get_pix_fmt_name(chosen_codec_data->hw_pix_fmt),
 
           if (!av_dict_get(opts, "crf", nullptr, AV_DICT_MATCH_CASE)) {
@@ -498,14 +497,16 @@ bool VideoStore::open() {
       } // end if audio_out_stream
     } // end if is AAC
 
-    if (oc->oformat->flags & AVFMT_GLOBALHEADER) {
-      audio_out_ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-    }
+    if (audio_out_stream && audio_out_ctx) {
+      if (oc->oformat->flags & AVFMT_GLOBALHEADER) {
+        audio_out_ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+      }
 
-    // We will assume that subsequent stream allocations will increase the index
-    max_stream_index = audio_out_stream->index;
-    last_dts[audio_out_stream->index] = AV_NOPTS_VALUE;
-    reorder_queues[audio_out_stream->index] = {};
+      // We will assume that subsequent stream allocations will increase the index
+      max_stream_index = audio_out_stream->index;
+      last_dts[audio_out_stream->index] = AV_NOPTS_VALUE;
+      reorder_queues[audio_out_stream->index] = {};
+    }
   }  // end if audio_in_stream
 
   //max_stream_index is 0-based, so add 1
@@ -1040,7 +1041,7 @@ bool VideoStore::setup_resampler() {
   out_frame->nb_samples = audio_out_ctx->frame_size;
   out_frame->format = audio_out_ctx->sample_fmt;
 #if LIBAVUTIL_VERSION_CHECK(57, 28, 100, 28, 0)
-  out_frame->ch_layout = audio_out_ctx->ch_layout,
+  out_frame->ch_layout = audio_out_ctx->ch_layout;
 #else
   out_frame->channels = audio_out_ctx->channels;
   out_frame->channel_layout = audio_out_ctx->channel_layout;
