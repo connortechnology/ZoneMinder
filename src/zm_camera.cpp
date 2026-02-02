@@ -55,8 +55,8 @@ Camera::Camera(
   mAudioStream(nullptr),
   mFormatContext(nullptr),
   mSecondFormatContext(nullptr),
-  mFirstVideoPTS(0),
-  mFirstAudioPTS(0),
+  mFirstVideoPTS(AV_NOPTS_VALUE),
+  mFirstAudioPTS(AV_NOPTS_VALUE),
   mLastVideoPTS(0),
   mLastAudioPTS(0),
   bytes(0),
@@ -76,10 +76,8 @@ Camera::~Camera() {
     //avformat_free_context(mFormatContext);
     avformat_close_input(&mFormatContext);
   }
-  if ( mSecondFormatContext ) {
-    // Should also free streams
-    avformat_free_context(mSecondFormatContext);
-  }
+  // Note: mSecondFormatContext is owned by mSecondInput (FFmpeg_Input) in derived classes
+  // and will be freed when mSecondInput is destroyed. Do not free it here.
   mVideoStream = nullptr;
   mAudioStream = nullptr;
 }

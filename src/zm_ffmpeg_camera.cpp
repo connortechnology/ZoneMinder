@@ -110,7 +110,7 @@ FfmpegCamera::~FfmpegCamera() {
 }
 
 int FfmpegCamera::PrimeCapture() {
-  start_read_time = std::chrono::steady_clock::now();
+  mStartReadTime = std::chrono::steady_clock::now();
   Close();
   mVideoStreamId = -1;
   mAudioStreamId = -1;
@@ -288,14 +288,14 @@ int FfmpegCamera::PreCapture() {
 int FfmpegCamera::Capture(std::shared_ptr<ZMPacket> &zm_packet) {
   if (!mIsPrimed) return -1;
 
-  start_read_time = std::chrono::steady_clock::now();
+  mStartReadTime = std::chrono::steady_clock::now();
   int ret;
   AVFormatContext *formatContextPtr;
   int64_t lastPTS = -1;
   av_packet_ptr packet = av_packet_ptr{av_packet_alloc()};
   av_packet_guard pkt_guard{packet};
 
-  if ( mSecondFormatContext and
+  if ( mSecondFormatContext and mAudioStream and
        (
          av_rescale_q(mLastAudioPTS, mAudioStream->time_base, AV_TIME_BASE_Q)
          <
@@ -415,6 +415,7 @@ int FfmpegCamera::PostCapture() {
 
 int FfmpegCamera::Close() {
   mIsPrimed = false;
+  mFirstVideoPTS = mFirstAudioPTS = AV_NOPTS_VALUE;
   mLastAudioPTS = mLastVideoPTS = 0;
 
   if ( mFormatContext ) {
@@ -431,11 +432,12 @@ int FfmpegCamera::FfmpegInterruptCallback(void *ctx) {
     return zm_terminate;
   }
 
+  FfmpegCamera *camera = static_cast<FfmpegCamera *>(ctx);
   TimePoint now = std::chrono::steady_clock::now();
-  if (now - start_read_time > Seconds(10)) {
+  if (now - camera->mStartReadTime > Seconds(10)) {
     Debug(1, "timeout in ffmpeg camera now %" PRIi64 " - %" PRIi64 " > 10 s",
           static_cast<int64>(std::chrono::duration_cast<Seconds>(now.time_since_epoch()).count()),
-          static_cast<int64>(std::chrono::duration_cast<Seconds>(start_read_time.time_since_epoch()).count()));
+          static_cast<int64>(std::chrono::duration_cast<Seconds>(camera->mStartReadTime.time_since_epoch()).count()));
     return 1;
   }
   return 0;
