@@ -640,17 +640,23 @@ packetqueue_iterator *PacketQueue::get_event_start_packet_it(
   // Do not assume that snapshot_it is video
   // snapshot it might already point to the beginning
   while (pre_event_count and ((*it) != pktQueue.begin())) {
-    
+
     /*
     Debug(1, "Previous packet pre_event_count %d stream_index %d keyframe %d score %d",
         pre_event_count, packet->packet->stream_index, packet->keyframe, packet->score);
     ZM_DUMP_PACKET(packet->packet, "");
     */
-    
+
     if (packet->packet->stream_index == video_stream_id)
       pre_event_count --;
     (*it)--;
     packet = *(*it);
+  }
+
+  // Check the packet at begin() - the loop above exits before counting it
+  if (pre_event_count and ((*it) == pktQueue.begin()) and
+      (packet->packet->stream_index == video_stream_id)) {
+    pre_event_count--;
   }
 
   // it either points to beginning or we have seen pre_event_count video packets.
