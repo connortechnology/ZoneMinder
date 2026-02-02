@@ -160,6 +160,7 @@ int FfmpegCamera::PrimeCapture() {
       return -1;
     }
     mPath = mPath.substr(7);
+    mMaskedPath = mPath;  // Update masked path after stripping v4l2:// prefix
   }  // end if RTSP
 
   Debug(1, "Calling avformat_open_input for %s", mMaskedPath.c_str());
