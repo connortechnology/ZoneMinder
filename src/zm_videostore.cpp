@@ -296,6 +296,15 @@ bool VideoStore::open() {
 
         // When encoding, we are going to use the timestamp values instead of packet pts/dts
         video_out_ctx->time_base = AV_TIME_BASE_Q;
+        // Set framerate from input context or stream
+        if (video_in_ctx && video_in_ctx->framerate.num) {
+          video_out_ctx->framerate = video_in_ctx->framerate;
+        } else if (video_in_stream && video_in_stream->r_frame_rate.num) {
+          video_out_ctx->framerate = video_in_stream->r_frame_rate;
+        } else if (video_in_stream && video_in_stream->avg_frame_rate.num) {
+          video_out_ctx->framerate = video_in_stream->avg_frame_rate;
+        }
+        Debug(1, "Setting framerate to %d/%d", video_out_ctx->framerate.num, video_out_ctx->framerate.den);
         video_out_ctx->codec_id = chosen_codec_data->codec_id;
         video_out_ctx->pix_fmt = chosen_codec_data->hw_pix_fmt;
         video_out_ctx->sw_pix_fmt = chosen_codec_data->sw_pix_fmt;
@@ -422,6 +431,16 @@ bool VideoStore::open() {
   reorder_queues[video_out_stream->index] = {};
 
   video_out_stream->time_base = video_in_stream ? video_in_stream->time_base : AV_TIME_BASE_Q;
+  // Set avg_frame_rate on output stream if not already set (PASSTHROUGH sets it, ENCODE doesn't)
+  if (!video_out_stream->avg_frame_rate.num) {
+    if (video_out_ctx && video_out_ctx->framerate.num) {
+      video_out_stream->avg_frame_rate = video_out_ctx->framerate;
+    } else if (video_in_stream && video_in_stream->avg_frame_rate.num) {
+      video_out_stream->avg_frame_rate = video_in_stream->avg_frame_rate;
+    }
+    Debug(1, "Set video_out_stream avg_frame_rate to %d/%d",
+          video_out_stream->avg_frame_rate.num, video_out_stream->avg_frame_rate.den);
+  }
 
   if (audio_in_stream) {
     Debug(2, "Have audio_in_stream %p", audio_in_stream);
