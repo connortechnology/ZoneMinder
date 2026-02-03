@@ -132,7 +132,7 @@ Event::Event(
     video_incomplete_file = "incomplete."+container;
   }
 
-  std::string now_str = SystemTimePointToMysqlString(now);
+  std::string now_str = SystemTimePointToMysqlString(start_time);
 
   std::string sql = stringtf(
                       "INSERT INTO `Events` "
@@ -331,7 +331,7 @@ Event::~Event() {
     videoStore = nullptr;
     int result = rename(video_incomplete_path.c_str(), video_path.c_str());
     if (result != 0) {
-      Error("Failed renaming %s to %s, error: %d %s", video_incomplete_path.c_str(), video_path.c_str(), result, strerror(result));
+      Error("Failed renaming %s to %s, reason: %s", video_incomplete_path.c_str(), video_path.c_str(), strerror(errno));
       // So that we don't update the event record
       video_file = video_incomplete_file;
     }
@@ -355,10 +355,10 @@ Event::~Event() {
   uint64_t video_size = 0;
   DIR *video_dir;
   if ((video_dir = opendir(path.c_str())) != NULL) {
-    struct dirent *video_file;
-    while ((video_file = readdir(video_dir)) != NULL) {
+    struct dirent *dir_entry;
+    while ((dir_entry = readdir(video_dir)) != NULL) {
       struct stat vf_stat;
-      if (stat((path + "/" + video_file->d_name).c_str(), &vf_stat) == 0 &&
+      if (stat((path + "/" + dir_entry->d_name).c_str(), &vf_stat) == 0 &&
           S_ISREG(vf_stat.st_mode))
         video_size += vf_stat.st_size;
     }
@@ -651,13 +651,17 @@ void Event::AddPacket_(const std::shared_ptr<ZMPacket>packet) {
           tag->Name(cls);
           tag->save();
           Debug(1, "Created new Tag %s", cls.c_str());
-        } else {
-          Debug(1, "Found tag for %s", cls.c_str());
         }
-
         tags.emplace(std::make_pair(cls, *tag));
-        Event_Tag event_tag(tag->Id(), id, packet->timestamp);
-        event_tag.save();
+        int tag_id = tag->Id();
+        delete tag;  // Delete after copying into map
+        tag = nullptr;
+
+        if (tag_id) {
+          // Store
+          Event_Tag event_tag(tag_id, id, packet->timestamp);
+          event_tag.save();
+        }
       } else {
         Debug(1, "Already have tag %s", cls.c_str());
         tag = &(tag_it->second);

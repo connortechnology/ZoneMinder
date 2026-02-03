@@ -176,7 +176,6 @@ int FFmpeg_Input::Open(const char *filepath) {
 } // end int FFmpeg_Input::Open( const char * filepath )
 
 int FFmpeg_Input::Close( ) {
-  // Free codec contexts - only if we have input_format_context to know stream count
   if (streams && input_format_context) {
     for (unsigned int i = 0; i < input_format_context->nb_streams; i += 1) {
       avcodec_free_context(&streams[i].context);
