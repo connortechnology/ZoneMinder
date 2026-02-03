@@ -415,7 +415,15 @@ echo getNavBarHTML();
           </tr>
         </thead>
         <tbody>
-          <?php foreach ($quadraDetailed['decoders'] as $decoder): ?>
+          <?php
+          $totalDecoderFps = 0;
+          $totalDecoderInFrames = 0;
+          $totalDecoderOutFrames = 0;
+          foreach ($quadraDetailed['decoders'] as $decoder):
+            $totalDecoderFps += floatval($decoder['FrameRate'] ?? 0);
+            $totalDecoderInFrames += intval($decoder['InFrame'] ?? 0);
+            $totalDecoderOutFrames += intval($decoder['OutFrame'] ?? 0);
+          ?>
           <tr>
             <td><?php echo htmlspecialchars($decoder['INDEX']) ?></td>
             <td><?php echo htmlspecialchars($decoder['Width'] ?? '') ?>x<?php echo htmlspecialchars($decoder['Height'] ?? '') ?></td>
@@ -428,6 +436,17 @@ echo getNavBarHTML();
           </tr>
           <?php endforeach; ?>
         </tbody>
+        <tfoot class="table-secondary text-left">
+          <tr>
+            <th colspan="2">Total</th>
+            <th><?php echo number_format($totalDecoderFps, 1) ?> fps</th>
+            <th></th>
+            <th></th>
+            <th><?php echo number_format($totalDecoderInFrames) ?></th>
+            <th><?php echo number_format($totalDecoderOutFrames) ?></th>
+            <th></th>
+          </tr>
+        </tfoot>
       </table>
     </div>
   </div>
@@ -455,7 +474,19 @@ echo getNavBarHTML();
           </tr>
         </thead>
         <tbody>
-          <?php foreach ($quadraDetailed['encoders'] as $encoder): ?>
+          <?php
+          $totalEncoderFps = 0;
+          $totalEncoderBitrate = 0;
+          $totalEncoderAvgBitrate = 0;
+          $totalEncoderInFrames = 0;
+          $totalEncoderOutFrames = 0;
+          foreach ($quadraDetailed['encoders'] as $encoder):
+            $totalEncoderFps += floatval($encoder['FrameRate'] ?? 0);
+            $totalEncoderBitrate += intval($encoder['BR'] ?? 0);
+            $totalEncoderAvgBitrate += intval($encoder['AvgBR'] ?? 0);
+            $totalEncoderInFrames += intval($encoder['InFrame'] ?? 0);
+            $totalEncoderOutFrames += intval($encoder['OutFrame'] ?? 0);
+          ?>
           <tr>
             <td><?php echo htmlspecialchars($encoder['INDEX']) ?></td>
             <td><?php echo htmlspecialchars($encoder['Width'] ?? '') ?>x<?php echo htmlspecialchars($encoder['Height'] ?? '') ?></td>
@@ -470,6 +501,18 @@ echo getNavBarHTML();
           </tr>
           <?php endforeach; ?>
         </tbody>
+        <tfoot class="table-secondary text-left">
+          <tr>
+            <th colspan="3">Total</th>
+            <th><?php echo number_format($totalEncoderFps, 1) ?> fps</th>
+            <th><?php echo number_format($totalEncoderBitrate) ?> bps</th>
+            <th><?php echo number_format($totalEncoderAvgBitrate) ?> bps</th>
+            <th></th>
+            <th><?php echo number_format($totalEncoderInFrames) ?></th>
+            <th><?php echo number_format($totalEncoderOutFrames) ?></th>
+            <th></th>
+          </tr>
+        </tfoot>
       </table>
     </div>
   </div>
