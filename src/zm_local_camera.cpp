@@ -98,7 +98,10 @@ static _AVPIXELFORMAT getFfPixFormatFromV4lPalette(int v4l_version, unsigned int
     break;
   case V4L2_PIX_FMT_JPEG :
   case V4L2_PIX_FMT_MJPEG :
-    pixFormat = AV_PIX_FMT_YUVJ444P;
+    /* MJPEG is compressed data, not a raw pixel format.
+     * Return NONE - Capture() will handle MJPEG specially by
+     * passing raw data to the decoder thread. */
+    pixFormat = AV_PIX_FMT_NONE;
     break;
   case V4L2_PIX_FMT_UYVY :
     pixFormat = AV_PIX_FMT_UYVY422;
@@ -304,6 +307,9 @@ LocalCamera::LocalCamera(
     }
   }
 
+  /* Check if we're capturing MJPEG - this affects decoding flow */
+  is_mjpeg = (palette == V4L2_PIX_FMT_JPEG || palette == V4L2_PIX_FMT_MJPEG);
+
   if (capture) {
     if (last_camera) {
       if (standard != last_camera->standard)
@@ -366,7 +372,8 @@ LocalCamera::LocalCamera(
     } else {
       Panic("Unexpected colours: %u",colours);
     }
-    if (capture) {
+    if (capture && !is_mjpeg) {
+      /* Skip swscale check for MJPEG - it's compressed data handled separately */
       if (!sws_isSupportedInput(capturePixFormat)) {
         Error("swscale does not support the used capture format: %d", capturePixFormat);
         conversion_type = 2; /* Try ZM format conversions */
@@ -381,10 +388,10 @@ LocalCamera::LocalCamera(
       conversion_type = 2;
     }
 
-    /* JPEG */
-    if (palette == V4L2_PIX_FMT_JPEG || palette == V4L2_PIX_FMT_MJPEG) {
-      Debug(2,"Using JPEG image decoding");
-      conversion_type = 3;
+    /* JPEG/MJPEG - pass through raw data, let decoder thread handle it */
+    if (is_mjpeg) {
+      Debug(2, "Using MJPEG passthrough - decoder thread will decode");
+      conversion_type = 3;  /* Special handling in Capture() - raw MJPEG passthrough */
     }
 
     if (conversion_type == 2) {
@@ -1280,6 +1287,27 @@ int LocalCamera::Contrast(int p_contrast) {
 int LocalCamera::PrimeCapture() {
   getVideoStream();
 
+  /* Set up codec info for the video stream */
+  if (mVideoStream) {
+    if (is_mjpeg) {
+      /* For MJPEG, we pass raw compressed data to the decoder thread */
+      mVideoStream->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
+      mVideoStream->codecpar->codec_id = AV_CODEC_ID_MJPEG;
+      mVideoStream->codecpar->width = width;
+      mVideoStream->codecpar->height = height;
+      Debug(2, "Set up MJPEG codec for video stream");
+    } else {
+      /* For raw formats, set the pixel format */
+      mVideoStream->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
+      mVideoStream->codecpar->codec_id = AV_CODEC_ID_RAWVIDEO;
+      mVideoStream->codecpar->format = capturePixFormat;
+      mVideoStream->codecpar->width = width;
+      mVideoStream->codecpar->height = height;
+      Debug(2, "Set up raw video stream with pixel format %s",
+            av_get_pix_fmt_name(capturePixFormat));
+    }
+  }
+
   // Initialize the device if not already done
   Debug(1, "PrimeCapture: device_prime=%d, vid_fd=%d", device_prime, vid_fd);
   if (device_prime && vid_fd < 0) {
@@ -1447,61 +1475,72 @@ int LocalCamera::Capture(std::shared_ptr<ZMPacket> &zm_packet) {
     }
   } /* prime capture */
 
-  if (!zm_packet->image) {
-    Debug(4, "Allocating image");
-    zm_packet->image = new Image(width, height, colours, subpixelorder);
-  }
-  /* Request a writeable buffer of the target image */
-  uint8_t *directbuffer = zm_packet->image->WriteBuffer(width, height, colours, subpixelorder);
-  if (directbuffer == nullptr) {
-    Error("Failed requesting writeable buffer for the captured image.");
-    return -1;
-  }
+  /* Handle data based on conversion type:
+   * - MJPEG (type 3): Store raw compressed data in packet, decoder thread decodes
+   * - Raw formats: Store in in_frame with native pixel format, decoder thread converts if needed
+   */
 
-  zm_packet->in_frame = av_frame_ptr{av_frame_alloc()};
-  zm_packet->in_frame->width = width;
-  zm_packet->in_frame->height = height;
-  zm_packet->in_frame->format = imagePixFormat;
+  if (conversion_type == 3) {
+    /* MJPEG: Pass raw JPEG data to decoder thread */
+    Debug(3, "MJPEG passthrough: storing %d bytes of raw JPEG data", buffer_bytesused);
 
-  av_image_fill_arrays(zm_packet->in_frame->data,
-      zm_packet->in_frame->linesize, directbuffer,
-      imagePixFormat, width, height, 1);
-
-  if (conversion_type != 0) {
-    Debug(3, "Performing format conversion %d", conversion_type);
-
-
-    if (conversion_type == 1) {
-      Debug(4, "Calling sws_scale to perform the conversion");
-      sws_scale(
-        imgConversionContext,
-        capturePictures[capture_frame]->data,
-        capturePictures[capture_frame]->linesize,
-        0,
-        height,
-        zm_packet->in_frame->data,
-        zm_packet->in_frame->linesize
-      );
-    } else if (conversion_type == 2) {
-      Debug(9, "Calling the conversion function");
-      (*conversion_fptr)(buffer, directbuffer, pixels);
-    } else if ( conversion_type == 3 ) {
-      // Need to store the jpeg data too
-      Debug(9, "Decoding the JPEG image");
-      /* JPEG decoding */
-      zm_packet->image->DecodeJpeg(buffer, buffer_bytesused, colours, subpixelorder);
+    /* Allocate packet data and copy raw JPEG */
+    if (av_new_packet(zm_packet->packet.get(), buffer_bytesused) < 0) {
+      Error("Failed to allocate packet for MJPEG data");
+      return -1;
     }
-  } else {
-    Debug(3, "No format conversion performed. Assigning the image");
+    memcpy(zm_packet->packet->data, buffer, buffer_bytesused);
 
-    /* No conversion was performed, the image is in the V4L buffers and needs to be copied */
-    zm_packet->image->Assign(width, height, colours, subpixelorder, buffer, imagesize);
-  } // end if doing conversion or not
+    /* MJPEG frames are all keyframes */
+    zm_packet->packet->flags |= AV_PKT_FLAG_KEY;
+
+    /* Don't set in_frame or image - decoder thread will handle decoding */
+
+  } else {
+    /* Raw format: Store in in_frame with native pixel format */
+    Debug(3, "Raw format: storing in in_frame with format %s",
+          av_get_pix_fmt_name(capturePixFormat));
+
+    zm_packet->in_frame = av_frame_ptr{av_frame_alloc()};
+    if (!zm_packet->in_frame) {
+      Error("Failed to allocate in_frame");
+      return -1;
+    }
+
+    zm_packet->in_frame->width = width;
+    zm_packet->in_frame->height = height;
+    zm_packet->in_frame->format = capturePixFormat;
+
+    /* Allocate buffer for the frame data */
+    int frame_size = av_image_get_buffer_size(capturePixFormat, width, height, 1);
+    if (frame_size < 0) {
+      Error("Failed to get buffer size for format %s", av_get_pix_fmt_name(capturePixFormat));
+      return -1;
+    }
+
+    int ret = av_frame_get_buffer(zm_packet->in_frame.get(), 0);
+    if (ret < 0) {
+      Error("Failed to allocate frame buffer: %s", av_make_error_string(ret).c_str());
+      return -1;
+    }
+
+    /* Copy raw data from V4L2 buffer to in_frame */
+    Debug(4, "Copying frame data, format %s, size %d bytes",
+          av_get_pix_fmt_name(capturePixFormat), frame_size);
+    av_image_copy(
+      zm_packet->in_frame->data, zm_packet->in_frame->linesize,
+      (const uint8_t **)capturePictures[capture_frame]->data,
+      capturePictures[capture_frame]->linesize,
+      capturePixFormat, width, height);
+
+    /* Don't create image here - decoder thread will convert to RGB if needed */
+  }
 
   zm_packet->packet->stream_index = mVideoStreamId;
   zm_packet->stream = mVideoStream;
   zm_packet->codec_type = AVMEDIA_TYPE_VIDEO;
   zm_packet->keyframe = 1;
+  zm_packet->timestamp = std::chrono::system_clock::now();
   return 1;
 } // end int LocalCamera::Capture()
 
