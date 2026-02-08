@@ -989,12 +989,16 @@ function getOptionsHTML($forLeftBar = false) {
   $result = '';
 
   // Sorting order of the "Options" submenu items. If a submenu item is in the DB but is not here, it will be automatically added to the end of the list.
-  $zmMenu::buildSubMenuOptions($categoryDisplayOrder = [
+  $categoryDisplayOrder = [
     'display',
     'system',
     'auth',
     'config',
-    'dnsmasq',
+  ];
+  if (defined('ZM_PATH_DNSMASQ_CONF') and ZM_PATH_DNSMASQ_CONF) {
+    $categoryDisplayOrder[] = 'dnsmasq';
+  }
+  $categoryDisplayOrder = array_merge($categoryDisplayOrder, [
     'API',
     'servers',
     'storage',
@@ -1004,7 +1008,11 @@ function getOptionsHTML($forLeftBar = false) {
     'network',
     'mail',
     'upload',
-    'x10',
+  ]);
+  if (defined('ZM_OPT_X10') and ZM_OPT_X10) {
+    $categoryDisplayOrder[] = 'x10';
+  }
+  $categoryDisplayOrder = array_merge($categoryDisplayOrder, [
     'highband',
     'medband',
     'lowband',
@@ -1017,6 +1025,7 @@ function getOptionsHTML($forLeftBar = false) {
     'telemetry',
     'version'
   ]);
+  $zmMenu::buildSubMenuOptions($categoryDisplayOrder);
 
   if ( canView('System') ) {
     if ($forLeftBar) {

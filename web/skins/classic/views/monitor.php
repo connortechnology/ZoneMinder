@@ -870,6 +870,7 @@ $decoders = array(
   'h264_v4l2m2m' => 'h264_v4l2m2m',
   'libx265' => 'libx265',
   'h265_ni_quadra_dec' => 'h265_ni_quadra',
+  'hevc' => 'hevc',
   'hevc_cuvid' => 'hevc_cuvid',
   'hevc_nvmpi' => 'hevc_nvmpi',
   'hevc_qsv' => 'hevc_qsv',

@@ -799,3 +799,8 @@ void PacketQueue::wait() {
   std::unique_lock<std::mutex> lck(mutex);
   condition.wait(lck);
 }
+
+void PacketQueue::wait_for(Microseconds duration) {
+  std::unique_lock<std::mutex> lck(mutex);
+  condition.wait_for(lck, duration);
+}
