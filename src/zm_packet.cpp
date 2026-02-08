@@ -163,33 +163,7 @@ int ZMPacket::receive_frame(AVCodecContext *ctx) {
     }
   }
 
-  // For hardware frames, do the transfer immediately while the context is valid
-  // The nvidia-vaapi-driver can have issues if there's a delay between decode and transfer
-#if HAVE_LIBAVUTIL_HWCONTEXT_H
-#if LIBAVCODEC_VERSION_CHECK(57, 89, 0, 89, 0)
-  if (receive_frame->hw_frames_ctx) {
-    Debug(2, "Hardware frame received, transferring immediately");
-    av_frame_ptr sw_frame{av_frame_alloc()};
-    ret = av_hwframe_transfer_data(sw_frame.get(), receive_frame.get(), 0);
-    if (ret < 0) {
-      Error("Immediate hw transfer failed: %s, packet %d", av_make_error_string(ret).c_str(), image_index);
-      return ret;
-    }
-    ret = av_frame_copy_props(sw_frame.get(), receive_frame.get());
-    if (ret < 0) {
-      Warning("Failed to copy frame props: %s", av_make_error_string(ret).c_str());
-    }
-    // Release GPU surface immediately - we have the software frame now
-    // Keeping hw_frame would hold GPU memory and exhaust the surface pool
-    // receive_frame goes out of scope here and releases the surface
-    in_frame = std::move(sw_frame);
-    zm_dump_video_frame(in_frame.get(), "After immediate hwtransfer");
-  } else {
-    in_frame = std::move(receive_frame);
-  }
-#else
   in_frame = std::move(receive_frame);
-  //zm_dump_video_frame(in_frame.get(), "got frame");
 #if HAVE_QUADRA
   AVFrame * frame = in_frame.get();
   niFrameSurface1_t *pfs = (niFrameSurface1_t *) frame->data[3];
