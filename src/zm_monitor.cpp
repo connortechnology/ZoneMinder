@@ -2873,11 +2873,10 @@ std::pair<int, std::string> Monitor::Analyse_MotionDetection(std::shared_ptr<ZMP
       int zone_index = 0;
       for (const Zone &zone : zones) {
         const ZoneStats &stats = zone.GetStats();
-        stats.DumpToLog("After detect motion");
         packet->zone_stats.push_back(stats);
         if (zone.Alarmed()) {
           if (!packet->alarm_cause.empty()) packet->alarm_cause += ",";
-          packet->alarm_cause += std::string(zone.Label());
+          packet->alarm_cause += zone.Label();
           if (zone.AlarmImage()) packet->analysis_image->Overlay(*(zone.AlarmImage())); // should be a 1bit image
         }
         Debug(4, "Setting score for zone %d to %d", zone_index, zone.Score());

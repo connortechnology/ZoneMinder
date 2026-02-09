@@ -138,7 +138,9 @@ Image::Image() :
   u_buffer(nullptr),
   v_buffer(nullptr),
   buffertype(ZM_BUFTYPE_DONTFREE),
-  holdbuffer(0) {
+  holdbuffer(0),
+  blend_buffer_(nullptr),
+  blend_buffer_size_(0) {
   if (!initialised)
     Initialise();
   // Update blend to fast function determined by Initialise, I'm sure this can be improve.
@@ -165,12 +167,14 @@ Image::Image(const std::string &filename) :
   size = 0;
   allocation = 0;
   buffertype = ZM_BUFTYPE_DONTFREE;
+  holdbuffer = 0;
+  blend_buffer_ = nullptr;
+  blend_buffer_size_ = 0;
   ReadJpeg(filename, ZM_COLOUR_YUVJ420P, ZM_SUBPIX_ORDER_YUVJ420P);
   update_function_pointers();
 }
 
-Image::Image(int p_width, int p_height, int p_colours, int p_subpixelorder, uint8_t *p_buffer, 
-    unsigned long p_allocation, unsigned int p_padding) :
+Image::Image(int p_width, int p_height, int p_colours, int p_subpixelorder, uint8_t *p_buffer, unsigned long p_allocation, unsigned int p_padding) :
   sws_convert_context(nullptr),
   width(p_width),
   height(p_height),
@@ -181,38 +185,40 @@ Image::Image(int p_width, int p_height, int p_colours, int p_subpixelorder, uint
   buffer(p_buffer),
   u_buffer(nullptr),
   v_buffer(nullptr),
-  holdbuffer(0) {
+  holdbuffer(0),
+  blend_buffer_(nullptr),
+  blend_buffer_size_(0) {
 
-  if (!initialised)
-    Initialise();
-  pixels = width * height;
+    if (!initialised)
+      Initialise();
+    pixels = width * height;
 
-  if (!subpixelorder and (colours>1)) {
-    Debug(1, "Defaulting to RGBA Cuz %d %d", subpixelorder, colours);
-    // Default to RGBA when no subpixelorder is specified.
-    subpixelorder = ZM_SUBPIX_ORDER_RGBA;
-  }
+    if (!subpixelorder and (colours>1)) {
+      Debug(1, "Defaulting to RGBA Cuz %d %d", subpixelorder, colours);
+      // Default to RGBA when no subpixelorder is specified.
+      subpixelorder = ZM_SUBPIX_ORDER_RGBA;
+    }
 
-  imagePixFormat = AVPixFormat();
-  linesize = FFALIGN(av_image_get_linesize(imagePixFormat, width, 0), 32);
-  size = av_image_get_buffer_size(imagePixFormat, width, height, 32);
-//Debug(1, "Choosing pixformat %s size %d allocation %ld", toString().c_str(), size, allocation);
+    imagePixFormat = AVPixFormat();
+    linesize = FFALIGN(av_image_get_linesize(imagePixFormat, width, 0), 32);
+    size = av_image_get_buffer_size(imagePixFormat, width, height, 32);
+    Debug(1, "Choosing pixformat %s", toString().c_str());
 
-  if (p_buffer) {
-    if (!allocation) allocation = size;
-    buffertype = ZM_BUFTYPE_DONTFREE;
-    buffer = p_buffer;
-  } else {
+    if (p_buffer) {
+      if (!allocation) allocation = size;
+      buffertype = ZM_BUFTYPE_DONTFREE;
+      buffer = p_buffer;
+    } else {
 
-    Debug(3, "line size: %d =? %d width %d Size %d ?= %d", linesize,
+      Debug(3, "line size: %d =? %d width %d Size %d ?= %d", linesize,
           av_image_get_linesize(imagePixFormat, width, 0),
           width, linesize * height + padding, size);
 
-    AllocImgBuffer(size);
-  }
+      AllocImgBuffer(size);
+    }
 
-  update_function_pointers();
-}
+    update_function_pointers();
+  }
 
 Image::Image(int p_width, int p_height, int p_colours, int p_subpixelorder, uint8_t *p_buffer, unsigned int p_padding) :
   sws_convert_context(nullptr),
@@ -224,7 +230,9 @@ Image::Image(int p_width, int p_height, int p_colours, int p_subpixelorder, uint
   buffer(p_buffer),
   u_buffer(nullptr),
   v_buffer(nullptr),
-  holdbuffer(0) {
+  holdbuffer(0),
+  blend_buffer_(nullptr),
+  blend_buffer_size_(0) {
 
   if (!initialised)
     Initialise();
@@ -267,7 +275,9 @@ Image::Image(int p_width, int p_linesize, int p_height, int p_colours, int p_sub
   subpixelorder(p_subpixelorder),
   buffer(p_buffer),
   u_buffer(nullptr),
-  v_buffer(nullptr) {
+  v_buffer(nullptr),
+  blend_buffer_(nullptr),
+  blend_buffer_size_(0) {
   if ( !initialised )
     Initialise();
   pixels = width*height;
@@ -299,7 +309,9 @@ Image::Image(const AVFrame *frame, int p_width, int p_height) :
   buffer(0),
   u_buffer(nullptr),
   v_buffer(nullptr),
-  holdbuffer(0) {
+  holdbuffer(0),
+  blend_buffer_(nullptr),
+  blend_buffer_size_(0) {
   width = (p_width == -1 ? frame->width : p_width);
   height = (p_height == -1 ? frame->height : p_height);
   pixels = width * height;
@@ -323,6 +335,8 @@ Image::Image(const AVFrame *frame) :
   v_buffer(nullptr),
   holdbuffer(0)
 {
+  blend_buffer_ = nullptr;
+  blend_buffer_size_ = 0;
   AssignDirect(frame);
 }
 
@@ -445,6 +459,8 @@ Image::Image(const Image &p_image) :
   u_buffer = nullptr;
   v_buffer = nullptr;
   holdbuffer = 0;
+  blend_buffer_ = nullptr;
+  blend_buffer_size_ = 0;
   AllocImgBuffer(size);
   (*fptr_imgbufcpy)(buffer, p_image.buffer, size);
   annotation_ = p_image.annotation_;
@@ -457,6 +473,11 @@ Image::~Image() {
   if (sws_convert_context) {
     sws_freeContext(sws_convert_context);
     sws_convert_context = nullptr;
+  }
+  if (blend_buffer_) {
+    zm_freealigned(blend_buffer_);
+    blend_buffer_ = nullptr;
+    blend_buffer_size_ = 0;
   }
 }
 
@@ -2241,15 +2262,19 @@ void Image::Blend( const Image &image, int transparency ) {
     return;
   }
 
-  uint8_t* new_buffer = AllocBuffer(size);
+  // Reuse persistent blend buffer to avoid per-frame alloc/free
+  if (blend_buffer_size_ < size) {
+    if (blend_buffer_) zm_freealigned(blend_buffer_);
+    blend_buffer_ = AllocBuffer(size);
+    blend_buffer_size_ = size;
+  }
 
 #ifdef ZM_IMAGE_PROFILING
   TimePoint start = std::chrono::steady_clock::now();
 #endif
 
   /* Do the blending */
-  Debug(1, "Blending size %d", size);
-  (*blend)(buffer, image.buffer, new_buffer, size, transparency);
+  (*blend)(buffer, image.buffer, blend_buffer_, size, transparency);
 
 #ifdef ZM_IMAGE_PROFILING
   TimePoint end = std::chrono::steady_clock::now();
@@ -2262,7 +2287,12 @@ void Image::Blend( const Image &image, int transparency ) {
         mil_pixels);
 #endif
 
-  AssignDirect(width, height, colours, subpixelorder, new_buffer, size, ZM_BUFTYPE_ZM);
+  if (holdbuffer) {
+    (*fptr_imgbufcpy)(buffer, blend_buffer_, size);
+  } else {
+    std::swap(buffer, blend_buffer_);
+    buffertype = ZM_BUFTYPE_ZM;
+  }
 }
 
 Image *Image::Merge(unsigned int n_images, Image *images[]) {
@@ -2280,16 +2310,13 @@ Image *Image::Merge(unsigned int n_images, Image *images[]) {
 
   Image *result = new Image(width, height, images[0]->colours, images[0]->subpixelorder);
   unsigned int size = result->size;
+  uint8_t *pdest = result->buffer;
   for ( unsigned int i = 0; i < size; i++ ) {
     unsigned int total = 0;
-    uint8_t *pdest = result->buffer;
     for ( unsigned int j = 0; j < n_images; j++ ) {
-      uint8_t *psrc = images[j]->buffer;
-      total += *psrc;
-      psrc++;
+      total += images[j]->buffer[i];
     }
-    *pdest = total/n_images;
-    pdest++;
+    *pdest++ = total/n_images;
   }
   return result;
 }
@@ -2337,25 +2364,24 @@ Image *Image::Highlight( unsigned int n_images, Image *images[], const Rgb thres
   }
 
   Image *result = new Image(width, height, images[0]->colours, images[0]->subpixelorder);
-  unsigned int size = result->size;
+  unsigned int n_pixels = result->pixels;
   for ( unsigned int c = 0; c < colours; c++ ) {
     unsigned int ref_colour_rgb = RGB_VAL(ref_colour,c);
+    unsigned int threshold_val = RGB_VAL(threshold,c);
 
-    for ( unsigned int i = 0; i < size; i++ ) {
+    uint8_t *pdest = result->buffer + c;
+    for ( unsigned int i = 0; i < n_pixels; i++, pdest += colours ) {
       unsigned int count = 0;
-      uint8_t *pdest = result->buffer+c;
       for ( unsigned int j = 0; j < n_images; j++ ) {
-        uint8_t *psrc = images[j]->buffer+c;
+        uint8_t psrc_val = images[j]->buffer[i*colours + c];
 
-        unsigned int diff = ((*psrc)-ref_colour_rgb) > 0 ? (*psrc)-ref_colour_rgb : ref_colour_rgb - (*psrc);
+        unsigned int diff = (psrc_val > ref_colour_rgb) ? psrc_val - ref_colour_rgb : ref_colour_rgb - psrc_val;
 
-        if (diff >= RGB_VAL(threshold,c)) {
+        if (diff >= threshold_val) {
           count++;
         }
-        psrc += colours;
       }
       *pdest = (count*255)/n_images;
-      pdest += 3;
     }
   }
   return result;
@@ -2701,13 +2727,12 @@ void Image::Colourise(const unsigned int p_reqcolours, const unsigned int p_reqs
 
 /* RGB32 compatible: complete */
 void Image::DeColourise() {
-  colours = ZM_COLOUR_GRAY8;
-  subpixelorder = ZM_SUBPIX_ORDER_NONE;
-  size = width * height;
+  const unsigned int src_colours = colours;
+  const unsigned int src_subpixelorder = subpixelorder;
 
-  if ( colours == ZM_COLOUR_RGB32 && config.cpu_extensions && sse_version >= 35 ) {
+  if ( src_colours == ZM_COLOUR_RGB32 && config.cpu_extensions && sse_version >= 35 ) {
     /* Use SSSE3 functions */
-    switch (subpixelorder) {
+    switch (src_subpixelorder) {
     case ZM_SUBPIX_ORDER_BGRA:
       ssse3_convert_bgra_gray8(buffer,buffer,pixels);
       break;
@@ -2724,9 +2749,9 @@ void Image::DeColourise() {
     }
   } else {
     /* Use standard functions */
-    if ( colours == ZM_COLOUR_RGB32 ) {
+    if ( src_colours == ZM_COLOUR_RGB32 ) {
       if ( pixels % 16 ) {
-        switch (subpixelorder) {
+        switch (src_subpixelorder) {
         case ZM_SUBPIX_ORDER_BGRA:
           std_convert_bgra_gray8(buffer,buffer,pixels);
           break;
@@ -2742,7 +2767,7 @@ void Image::DeColourise() {
           break;
         }
       } else {
-        switch (subpixelorder) {
+        switch (src_subpixelorder) {
         case ZM_SUBPIX_ORDER_BGRA:
           fast_convert_bgra_gray8(buffer,buffer,pixels);
           break;
@@ -2761,7 +2786,7 @@ void Image::DeColourise() {
     } else {
       /* Assume RGB24 */
       if ( pixels % 12 ) {
-        switch (subpixelorder) {
+        switch (src_subpixelorder) {
         case ZM_SUBPIX_ORDER_BGR:
           std_convert_bgr_gray8(buffer,buffer,pixels);
           break;
@@ -2771,7 +2796,7 @@ void Image::DeColourise() {
           break;
         }
       } else {
-        switch (subpixelorder) {
+        switch (src_subpixelorder) {
         case ZM_SUBPIX_ORDER_BGR:
           fast_convert_bgr_gray8(buffer,buffer,pixels);
           break;
@@ -2783,6 +2808,10 @@ void Image::DeColourise() {
       } // end if pixels % 12 to use loop unrolled functions
     }
   }
+
+  colours = ZM_COLOUR_GRAY8;
+  subpixelorder = ZM_SUBPIX_ORDER_NONE;
+  size = width * height;
 }
 
 /* RGB32 compatible: complete */

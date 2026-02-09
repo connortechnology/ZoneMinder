@@ -273,9 +273,10 @@ bool DecoderThread::Decode() {
   // PHASE 3: Convert decoded frame to Image
   // ===========================================================================
 
+  packet->transfer_hwframe(monitor_->mVideoCodecContext);
   if (packet->in_frame && !packet->image) {
     // Handle hardware-accelerated frames
-    packet->transfer_hwframe(monitor_->mVideoCodecContext);
+    //`packet->transfer_hwframe(monitor_->mVideoCodecContext);
 
     if (!packet->image) {
       packet->image = new Image(monitor_->camera_width, monitor_->camera_height, monitor_->camera->Colours(), monitor_->camera->SubpixelOrder());
