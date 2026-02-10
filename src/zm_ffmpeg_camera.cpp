@@ -24,6 +24,7 @@
 #include "zm_packet.h"
 #include "zm_signal.h"
 #include "zm_utils.h"
+#include "url.hpp"
 
 extern "C" {
 #include <libavutil/time.h>
@@ -171,9 +172,16 @@ int FfmpegCamera::PrimeCapture() {
   mFormatContext->flags |= AVFMT_FLAG_NOBUFFER | AVFMT_FLAG_FLUSH_PACKETS;
 
   if (mUser.length() > 0) {
-    // build the actual uri string with encoded parameters (from the user and pass fields)
-    mPath = StringToLower(protocol) + "://" + mUser + ":" + UriEncode(mPass) + "@" + mMaskedPath.substr(7, std::string::npos);
-    Debug(1, "Rebuilt URI with encoded parameters: '%s'", mPath.c_str());
+    try {
+      Url url(mPath);
+      if (url.user_info().empty()) {
+        url.user_info(mUser + ":" + mPass);
+        mPath = url.str();
+        Debug(1, "Rebuilt URI with encoded parameters: '%s'", mMaskedPath.c_str());
+      }
+    } catch (const Url::parse_error &e) {
+      Debug(1, "Could not parse path as URL: %s", e.what());
+    }
   }
 
   ret = avformat_open_input(&mFormatContext, mPath.c_str(), input_format, &opts);
@@ -256,9 +264,24 @@ int FfmpegCamera::PrimeCapture() {
         mVideoStreamId, mAudioStreamId);
 
   if (!monitor->GetSecondPath().empty()) {
-    Debug(1, "Trying secondary stream at %s", monitor->GetSecondPath().c_str());
+    Debug(1, "Trying secondary stream at %s", mMaskedSecondPath.c_str());
+    std::string secondPath = mSecondPath;
+    if (mUser.length() > 0) {
+      try {
+        Url url(mSecondPath);
+        if (url.user_info().empty()) {
+          url.user_info(mUser + ":" + mPass);
+          secondPath = url.str();
+          Debug(1, "Rebuilt secondary URI with encoded parameters");
+        } else {
+          Debug(1, "Secondary path already has authentication, not overriding");
+        }
+      } catch (const Url::parse_error &e) {
+        Debug(1, "Could not parse secondary path as URL: %s", e.what());
+      }
+    }
     mSecondInput = zm::make_unique<FFmpeg_Input>();
-    if (mSecondInput->Open(monitor->GetSecondPath().c_str()) > 0) {
+    if (mSecondInput->Open(secondPath.c_str()) > 0) {
       mSecondFormatContext = mSecondInput->get_format_context();
       mAudioStreamId = mSecondInput->get_audio_stream_id();
       mAudioStream = mSecondInput->get_audio_stream();
@@ -413,6 +436,8 @@ int FfmpegCamera::PostCapture() {
   // Nothing to do here
   return 0;
 }
+
+// OpenFfmpeg functionality has been merged into PrimeCapture()
 
 int FfmpegCamera::Close() {
   mIsPrimed = false;
