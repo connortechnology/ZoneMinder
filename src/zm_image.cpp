@@ -2024,33 +2024,50 @@ void Image::Overlay( const Image &image ) {
           width, height, image.width, image.height);
   }
 
-  if ((colours != ZM_COLOUR_GRAY8) and (colours == image.colours && subpixelorder != image.subpixelorder)) {
-    Warning("Attempt to overlay images of same format %d but with different subpixel order ours, %d != overlay %d.",
-            colours, subpixelorder, image.subpixelorder);
-  } else {
-    Debug(1,"Attempt to overlay images of same format %d and same subpixel order ours, %d != overlay %d.",
-            colours, subpixelorder, image.subpixelorder);
-  }
+  Debug(1, "Overlay: dest colours=%d subpixelorder=%d, src colours=%d subpixelorder=%d",
+        colours, subpixelorder, image.colours, image.subpixelorder);
 
   if (!image.buffer) {
     Error("Empty image passed to Overlay!");
     return;
   }
 
-  /* Grayscale on top of grayscale - complete */
-  if ( colours == ZM_COLOUR_GRAY8 && image.colours == ZM_COLOUR_GRAY8 ) {
-int local_size = width * height;
-    const uint8_t* const max_ptr = buffer+local_size;
-    Debug(1, "Doing gray %dx%d buffer %p, size %d", width, height, buffer, local_size);
-    const uint8_t* psrc = image.buffer;
-    uint8_t* pdest = buffer;
-
-    while ( pdest < max_ptr ) {
-      if ( *psrc ) {
-        *pdest = *psrc;
+  /* Grayscale on top of YUV420P - overlay on Y plane only with linesize handling
+   * Note: ZM_COLOUR_YUV420P == ZM_COLOUR_GRAY8 == 1, so we must check subpixelorder
+   * to distinguish between actual grayscale and YUV420P formats.
+   */
+  if ((subpixelorder == ZM_SUBPIX_ORDER_YUV420P || subpixelorder == ZM_SUBPIX_ORDER_YUVJ420P)
+      && image.colours == ZM_COLOUR_GRAY8) {
+    Debug(1, "Overlaying GRAY8 on YUV420P Y-plane %dx%d, dest linesize %d, src linesize %d",
+          width, height, linesize, image.linesize);
+    // Overlay on Y plane only, respecting linesize for both images
+    for (unsigned int y = 0; y < height; y++) {
+      uint8_t* pdest = buffer + (y * linesize);
+      const uint8_t* psrc = image.buffer + (y * image.linesize);
+      for (unsigned int x = 0; x < width; x++) {
+        if (*psrc) {
+          *pdest = *psrc;
+        }
+        pdest++;
+        psrc++;
       }
-      pdest++;
-      psrc++;
+    }
+
+  /* Grayscale on top of grayscale - with linesize handling */
+  } else if ( colours == ZM_COLOUR_GRAY8 && image.colours == ZM_COLOUR_GRAY8 ) {
+    Debug(1, "Doing gray on gray %dx%d, dest linesize %d, src linesize %d",
+          width, height, linesize, image.linesize);
+    // Handle linesize differences between source and destination
+    for (unsigned int y = 0; y < height; y++) {
+      uint8_t* pdest = buffer + (y * linesize);
+      const uint8_t* psrc = image.buffer + (y * image.linesize);
+      for (unsigned int x = 0; x < width; x++) {
+        if (*psrc) {
+          *pdest = *psrc;
+        }
+        pdest++;
+        psrc++;
+      }
     }
 
     /* RGB24 on top of grayscale - convert to same format first - complete */
@@ -2191,6 +2208,10 @@ int local_size = width * height;
         prsrc++;
       }
     }
+
+  } else {
+    Error("Unsupported overlay combination: dest colours=%d subpixelorder=%d, src colours=%d subpixelorder=%d",
+          colours, subpixelorder, image.colours, image.subpixelorder);
   }
 
 }
