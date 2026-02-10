@@ -2877,7 +2877,22 @@ std::pair<int, std::string> Monitor::Analyse_MotionDetection(std::shared_ptr<ZMP
         if (zone.Alarmed()) {
           if (!packet->alarm_cause.empty()) packet->alarm_cause += ",";
           packet->alarm_cause += zone.Label();
-          if (zone.AlarmImage()) packet->analysis_image->Overlay(*(zone.AlarmImage())); // should be a 1bit image
+          if (zone.AlarmImage()) {
+            // Determine zone colour based on type
+            Rgb zone_colour;
+            if (zone.IsActive()) {
+              zone_colour = kRGBRed;
+            } else if (zone.IsInclusive()) {
+              zone_colour = kRGBOrange;
+            } else if (zone.IsExclusive()) {
+              zone_colour = kRGBPurple;
+            } else if (zone.IsPreclusive()) {
+              zone_colour = kRGBBlue;
+            } else {
+              zone_colour = kRGBWhite;
+            }
+            packet->analysis_image->Overlay(*(zone.AlarmImage()), zone_colour);
+          }
         }
         Debug(4, "Setting score for zone %d to %d", zone_index, zone.Score());
         zone_scores[zone_index] = zone.Score();

@@ -2216,6 +2216,126 @@ void Image::Overlay( const Image &image ) {
 
 }
 
+/* Overlay with colour - applies the specified colour where mask pixels are non-zero */
+void Image::Overlay(const Image &image, Rgb colour) {
+  if (!(width == image.width && height == image.height)) {
+    Panic("Attempt to overlay different sized images, expected %dx%d, got %dx%d",
+          width, height, image.width, image.height);
+  }
+
+  if (!image.buffer) {
+    Error("Empty image passed to Overlay!");
+    return;
+  }
+
+  // Extract RGB components (using RGBA byte order as per ZM convention)
+  uint8_t r = RED_VAL_RGBA(colour);
+  uint8_t g = GREEN_VAL_RGBA(colour);
+  uint8_t b = BLUE_VAL_RGBA(colour);
+
+  Debug(1, "Overlay with colour: R=%d G=%d B=%d on format colours=%d subpixelorder=%d",
+        r, g, b, colours, subpixelorder);
+
+  /* Coloured overlay on YUV420P - apply colour to Y, U, V planes */
+  if (subpixelorder == ZM_SUBPIX_ORDER_YUV420P || subpixelorder == ZM_SUBPIX_ORDER_YUVJ420P) {
+    // Convert RGB to YUV (BT.601 full range)
+    uint8_t y_val = static_cast<uint8_t>((66 * r + 129 * g + 25 * b + 128) >> 8) + 16;
+    uint8_t u_val = static_cast<uint8_t>((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
+    uint8_t v_val = static_cast<uint8_t>((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
+
+    Debug(1, "Overlaying colour on YUV420P: Y=%d U=%d V=%d, dest linesize %d, src linesize %d",
+          y_val, u_val, v_val, linesize, image.linesize);
+
+    // Calculate plane sizes and pointers
+    // Y plane: full resolution
+    // U plane: starts after Y, quarter resolution (width/2 * height/2)
+    // V plane: starts after U, quarter resolution
+    unsigned int y_plane_size = linesize * height;
+    unsigned int uv_linesize = linesize / 2;
+    uint8_t* u_plane = buffer + y_plane_size;
+    uint8_t* v_plane = u_plane + (uv_linesize * (height / 2));
+
+    // Apply colour where mask is non-zero
+    for (unsigned int y = 0; y < height; y++) {
+      uint8_t* pdest_y = buffer + (y * linesize);
+      const uint8_t* psrc = image.buffer + (y * image.linesize);
+
+      // U and V planes are half resolution
+      uint8_t* pdest_u = u_plane + ((y / 2) * uv_linesize);
+      uint8_t* pdest_v = v_plane + ((y / 2) * uv_linesize);
+
+      for (unsigned int x = 0; x < width; x++) {
+        if (*psrc) {
+          // Set Y value
+          *pdest_y = y_val;
+
+          // Set U and V values (shared by 2x2 pixel blocks)
+          unsigned int uv_x = x / 2;
+          pdest_u[uv_x] = u_val;
+          pdest_v[uv_x] = v_val;
+        }
+        pdest_y++;
+        psrc++;
+      }
+    }
+
+  /* Coloured overlay on RGB24 */
+  } else if (colours == ZM_COLOUR_RGB24) {
+    for (unsigned int y = 0; y < height; y++) {
+      uint8_t* pdest = buffer + (y * linesize);
+      const uint8_t* psrc = image.buffer + (y * image.linesize);
+      for (unsigned int x = 0; x < width; x++) {
+        if (*psrc) {
+          if (subpixelorder == ZM_SUBPIX_ORDER_BGR) {
+            pdest[0] = b;
+            pdest[1] = g;
+            pdest[2] = r;
+          } else {
+            pdest[0] = r;
+            pdest[1] = g;
+            pdest[2] = b;
+          }
+        }
+        pdest += 3;
+        psrc++;
+      }
+    }
+
+  /* Coloured overlay on RGB32 */
+  } else if (colours == ZM_COLOUR_RGB32) {
+    for (unsigned int y = 0; y < height; y++) {
+      Rgb* pdest = reinterpret_cast<Rgb*>(buffer + (y * linesize));
+      const uint8_t* psrc = image.buffer + (y * image.linesize);
+      for (unsigned int x = 0; x < width; x++) {
+        if (*psrc) {
+          *pdest = colour;
+        }
+        pdest++;
+        psrc++;
+      }
+    }
+
+  /* Coloured overlay on grayscale - convert colour to grayscale intensity */
+  } else if (colours == ZM_COLOUR_GRAY8) {
+    uint8_t gray = static_cast<uint8_t>((r * 77 + g * 150 + b * 29) >> 8);
+    for (unsigned int y = 0; y < height; y++) {
+      uint8_t* pdest = buffer + (y * linesize);
+      const uint8_t* psrc = image.buffer + (y * image.linesize);
+      for (unsigned int x = 0; x < width; x++) {
+        if (*psrc) {
+          *pdest = gray;
+        }
+        pdest++;
+        psrc++;
+      }
+    }
+
+  } else {
+    Error("Unsupported colour overlay: dest colours=%d subpixelorder=%d",
+          colours, subpixelorder);
+  }
+}
+
 /* RGB32 compatible: complete */
 void Image::Overlay( const Image &image, const unsigned int lo_x, const unsigned int lo_y ) {
   if ( !(width < image.width || height < image.height) ) {

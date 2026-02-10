@@ -269,6 +269,7 @@ SwsContext *sws_convert_context;
   bool Crop(const Box &limits);
 
   void Overlay(const Image &image);
+  void Overlay(const Image &image, Rgb colour);
   void Overlay(const Image &image, unsigned int x, unsigned int y);
   void Blend(const Image &image, int transparency=12);
   static Image *Merge( unsigned int n_images, Image *images[] );
