@@ -44,6 +44,7 @@ monitorData[monitorData.length] = {
   'Restream':<?php echo $m->Restream() ?>,
   'RTSP2WebEnabled':<?php echo $m->RTSP2WebEnabled() ?>,
   'DefaultPlayer':'<?php echo $m->DefaultPlayer() ?>',
+  'RTSPServer':<?php echo $m->RTSPServer() ? 'true' : 'false' ?>,
   'StreamChannel':'<?php echo $m->StreamChannel() ?>',
   'Go2RTCEnabled': <?php echo $m->Go2RTCEnabled() ?>,
   'Path':'<?php echo validJsStr($m->Path()) ?>',
