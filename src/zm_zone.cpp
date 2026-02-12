@@ -240,6 +240,32 @@ bool Zone::CheckAlarms(const Image *delta_image) {
      } */
   std_alarmedpixels(diff_image, pg_image, &stats.alarm_pixels_, &pixel_diff_count);
 
+  // Clear pixels outside the zone's bounding box to prevent them from being
+  // overlaid. std_alarmedpixels only processes the bounding box region.
+  unsigned int diff_height = diff_image->Height();
+
+  // Clear rows above the bounding box
+  if (lo_y > 0) {
+    memset(diff_buff, 0, lo_y * diff_width);
+  }
+  // Clear rows below the bounding box
+  if (hi_y < diff_height - 1) {
+    memset(diff_buff + (hi_y + 1) * diff_width, 0, (diff_height - hi_y - 1) * diff_width);
+  }
+  // For rows within the bounding box, clear columns outside the zone
+  for (unsigned int y = lo_y; y <= hi_y; y++) {
+    int row_lo_x = ranges[y].lo_x;
+    int row_hi_x = ranges[y].hi_x;
+    // Clear pixels to the left of the zone
+    if (row_lo_x > 0) {
+      memset(diff_buff + y * diff_width, 0, row_lo_x);
+    }
+    // Clear pixels to the right of the zone
+    if (row_hi_x < diff_width - 1) {
+      memset(diff_buff + y * diff_width + row_hi_x + 1, 0, diff_width - row_hi_x - 1);
+    }
+  }
+
   if (config.record_diag_images) {
     diff_image->WriteJpeg(diag_path, config.record_diag_images_fifo);
   }
