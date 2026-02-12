@@ -993,6 +993,9 @@ function getOptionsHTML($forLeftBar = false) {
     'display',
     'system',
     'auth',
+    'ai_datasets',
+    'ai_models',
+    'ai_classes',
     'config',
   ];
   if (defined('ZM_PATH_DNSMASQ_CONF') and ZM_PATH_DNSMASQ_CONF) {

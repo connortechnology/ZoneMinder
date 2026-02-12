@@ -1339,6 +1339,10 @@ source @PKGDATADIR@/db/triggers.sql
 
 source @PKGDATADIR@/db/manufacturers.sql
 source @PKGDATADIR@/db/models.sql
+
+-- AI object detection tables and COCO dataset
+source @PKGDATADIR@/db/AI_Models.sql
+source @PKGDATADIR@/db/coco_dataset.sql
 --
 -- Apply the initial configuration
 --
