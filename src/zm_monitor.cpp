@@ -89,7 +89,7 @@ struct Namespace namespaces[] = {
 // It will be used wherever a Monitor dbrow is needed.
 std::string load_monitor_sql =
   "SELECT `Id`, `Name`, `Deleted`, `ServerId`, `StorageId`, `Type`, "
-  "`Capturing`+0, `Analysing`+0, `AnalysisSource`+0, `AnalysisImage`+0, "
+  "`Capturing`+0, `Analysing`+0, `AnalysisSource`+0, `AnalysisImage`+0, `AnalysisImageOpacity`, "
    "`ObjectDetection`, `ObjectDetectionModel`, `ObjectDetectionObjectThreshold`, `ObjectDetectionNMSThreshold`, "
   "`Recording`+0, `RecordingSource`+0, `Decoding`+0, "
   "`RTSP2WebEnabled`, `RTSP2WebType`, `StreamChannel`+0,"
@@ -339,7 +339,7 @@ std::string TriggerState_Strings[] = {"Cancel", "On", "Off"};
 /*
    std::string load_monitor_sql =
    "SELECT `Id`, `Name`, `Deleted`, `ServerId`, `StorageId`, `Type`, `Capturing`+0,"
-   " `Analysing`+0, `AnalysisSource`+0, `AnalysisImage`+0,"
+   " `Analysing`+0, `AnalysisSource`+0, `AnalysisImage`+0, `AnalysisImageOpacity`,"
    "`ObjectDetection`, `ObjectDetectionModel`, `ObjectDetectionObjectThreshold`, `ObjectDetectionNMSThreshold`, "
    "`Recording`+0, `RecordingSource`+0, `Decoding`+0, "
    " RTSP2WebEnabled, RTSP2WebType, `StreamChannel`+0,"
@@ -407,6 +407,8 @@ void Monitor::Load(MYSQL_ROW dbrow, bool load_zones = true, Purpose p = QUERY) {
   analysis_source = (AnalysisSourceOption)atoi(dbrow[col]);
   col++;
   analysis_image = (AnalysisImageOption)atoi(dbrow[col]);
+  col++;
+  analysis_image_opacity = dbrow[col] ? atoi(dbrow[col]) : 128;
   col++;
   std::string od = dbrow[col]; col++;
   if (od == "none") {
@@ -2892,7 +2894,7 @@ std::pair<int, std::string> Monitor::Analyse_MotionDetection(std::shared_ptr<ZMP
             } else {
               zone_colour = kRGBWhite;
             }
-            packet->analysis_image->Overlay(*(zone.AlarmImage()), zone_colour);
+            packet->analysis_image->Overlay(*(zone.AlarmImage()), zone_colour, analysis_image_opacity);
           }
         }
         Debug(4, "Setting score for zone %d to %d", zone_index, zone.Score());

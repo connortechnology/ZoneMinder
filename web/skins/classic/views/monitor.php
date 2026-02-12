@@ -1045,11 +1045,18 @@ echo htmlSelect('newMonitor[Decoder]', $decoders, $monitor->Decoder());
             </li>
             <li id="AnalysisImage" class="AnalysisImage">
               <label><?php echo translate('Analysis Image') ?></label>
-              
+
 <?php
         echo htmlSelect('newMonitor[AnalysisImage]', ZM\Monitor::getAnalysisImageOptions(), $monitor->AnalysisImage());
 ?>
-              
+
+            </li>
+            <li id="AnalysisImageOpacity" class="AnalysisImageOpacity">
+              <label><?php echo translate('Analysis Image Opacity') ?><?php echo makeHelpLink('ANALYSIS_IMAGE_OPACITY') ?></label>
+              <input type="range" name="newMonitor[AnalysisImageOpacity]"
+                     value="<?php echo validHtmlStr($monitor->AnalysisImageOpacity()) ?>"
+                     min="0" max="255" step="1"/>
+              <span id="AnalysisImageOpacityValue"><?php echo validHtmlStr($monitor->AnalysisImageOpacity()); ?></span>
             </li>
             <li class="AnalysisFPS">
               <label><?php echo translate('AnalysisFPS') ?></label>

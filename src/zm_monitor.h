@@ -516,6 +516,7 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   AnalysingOption analysing;          // None, Always
   AnalysisSourceOption  analysis_source;    // Primary, Secondary
   AnalysisImageOption   analysis_image;     // FullColour, YChannel
+  uint8_t               analysis_image_opacity; // 0-255 opacity for zone overlays
   ObjectDetectionOption objectdetection;    // none, quadra, speedai, uvicorn
   std::string objectdetection_model;
   float   objectdetection_object_threshold;

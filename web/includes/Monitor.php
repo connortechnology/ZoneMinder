@@ -225,6 +225,7 @@ class Monitor extends ZM_Object {
     'RecordingSource' => 'Primary',
     'AnalysisSource' => 'Primary',
     'AnalysisImage' => 'FullColour',
+    'AnalysisImageOpacity' => array('type'=>'integer','default'=>128),
     'ObjectDetection' => 'None',
     'ObjectDetectionModel' => '',
     'ObjectDetectionObjectThreshold' => '0.4',

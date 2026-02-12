@@ -79,6 +79,7 @@ $SLANG = array(
     'All'                   => 'All',
     'AllTokensRevoked'      => 'All Tokens Revoked',
     'AnalysisFPS'           => 'Analysis FPS',
+    'Analysis Image Opacity' => 'Analysis Image Opacity',
     'AnalysisUpdateDelay'   => 'Analysis Update Delay',
     'APIEnabled'            => 'API Enabled',
     'ApplyingStateChange'   => 'Applying State Change',
@@ -1050,6 +1051,9 @@ None: No frames will be decoded, live view and thumbnails will not be available~
 //        'Prompt' => "This is a new prompt for this option",
 //        'Help' => "This is some new help for this option which will be displayed in the window when the ? is clicked"
 //    ),
+  'ANALYSIS_IMAGE_OPACITY' => array(
+    'Help' => 'Controls the transparency of zone overlays on analysis images. Lower values are more transparent, higher values are more opaque. A value around 50 is recommended for a good balance between seeing the zones and the underlying image.'
+  ),
 );
 
 ?>

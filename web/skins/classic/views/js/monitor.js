@@ -523,6 +523,15 @@ function initPage() {
   if (!isMobile()) initThumbAnimation();
 
   manageChannelStream();
+
+  // Analysis Image Opacity slider value display
+  const opacitySlider = document.querySelector('input[name="newMonitor[AnalysisImageOpacity]"]');
+  const opacityValue = document.getElementById('AnalysisImageOpacityValue');
+  if (opacitySlider && opacityValue) {
+    opacitySlider.addEventListener('input', function() {
+      opacityValue.textContent = this.value;
+    });
+  }
 } // end function initPage()
 
 function saveMonitorData(href = '') {

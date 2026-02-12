@@ -2217,7 +2217,7 @@ void Image::Overlay( const Image &image ) {
 }
 
 /* Overlay with colour - applies the specified colour where mask pixels are non-zero */
-void Image::Overlay(const Image &image, Rgb colour) {
+void Image::Overlay(const Image &image, Rgb colour, uint8_t alpha) {
   if (!(width == image.width && height == image.height)) {
     Panic("Attempt to overlay different sized images, expected %dx%d, got %dx%d",
           width, height, image.width, image.height);
@@ -2233,8 +2233,8 @@ void Image::Overlay(const Image &image, Rgb colour) {
   uint8_t g = GREEN_VAL_RGBA(colour);
   uint8_t b = BLUE_VAL_RGBA(colour);
 
-  Debug(1, "Overlay with colour: R=%d G=%d B=%d on format colours=%d subpixelorder=%d",
-        r, g, b, colours, subpixelorder);
+  Debug(1, "Overlay with colour: R=%d G=%d B=%d alpha=%d on format colours=%d subpixelorder=%d",
+        r, g, b, alpha, colours, subpixelorder);
 
   /* Coloured overlay on YUV420P - apply colour to Y, U, V planes */
   if (subpixelorder == ZM_SUBPIX_ORDER_YUV420P || subpixelorder == ZM_SUBPIX_ORDER_YUVJ420P) {
@@ -2266,13 +2266,15 @@ void Image::Overlay(const Image &image, Rgb colour) {
 
       for (unsigned int x = 0; x < width; x++) {
         if (*psrc) {
-          // Set Y value
-          *pdest_y = y_val;
-
-          // Set U and V values (shared by 2x2 pixel blocks)
+          // Alpha blending: result = original + alpha * (overlay - original) / 255
+          // Use signed arithmetic to handle overlay < original correctly
           unsigned int uv_x = x / 2;
-          pdest_u[uv_x] = u_val;
-          pdest_v[uv_x] = v_val;
+          int new_y = *pdest_y + (alpha * (static_cast<int>(y_val) - *pdest_y)) / 255;
+          int new_u = pdest_u[uv_x] + (alpha * (static_cast<int>(u_val) - pdest_u[uv_x])) / 255;
+          int new_v = pdest_v[uv_x] + (alpha * (static_cast<int>(v_val) - pdest_v[uv_x])) / 255;
+          *pdest_y = static_cast<uint8_t>(new_y);
+          pdest_u[uv_x] = static_cast<uint8_t>(new_u);
+          pdest_v[uv_x] = static_cast<uint8_t>(new_v);
         }
         pdest_y++;
         psrc++;
@@ -2286,14 +2288,15 @@ void Image::Overlay(const Image &image, Rgb colour) {
       const uint8_t* psrc = image.buffer + (y * image.linesize);
       for (unsigned int x = 0; x < width; x++) {
         if (*psrc) {
+          // Alpha blending (use signed arithmetic)
           if (subpixelorder == ZM_SUBPIX_ORDER_BGR) {
-            pdest[0] = b;
-            pdest[1] = g;
-            pdest[2] = r;
+            pdest[0] = static_cast<uint8_t>(pdest[0] + (alpha * (static_cast<int>(b) - pdest[0])) / 255);
+            pdest[1] = static_cast<uint8_t>(pdest[1] + (alpha * (static_cast<int>(g) - pdest[1])) / 255);
+            pdest[2] = static_cast<uint8_t>(pdest[2] + (alpha * (static_cast<int>(r) - pdest[2])) / 255);
           } else {
-            pdest[0] = r;
-            pdest[1] = g;
-            pdest[2] = b;
+            pdest[0] = static_cast<uint8_t>(pdest[0] + (alpha * (static_cast<int>(r) - pdest[0])) / 255);
+            pdest[1] = static_cast<uint8_t>(pdest[1] + (alpha * (static_cast<int>(g) - pdest[1])) / 255);
+            pdest[2] = static_cast<uint8_t>(pdest[2] + (alpha * (static_cast<int>(b) - pdest[2])) / 255);
           }
         }
         pdest += 3;
@@ -2308,7 +2311,12 @@ void Image::Overlay(const Image &image, Rgb colour) {
       const uint8_t* psrc = image.buffer + (y * image.linesize);
       for (unsigned int x = 0; x < width; x++) {
         if (*psrc) {
-          *pdest = colour;
+          // Alpha blending on each component (use signed arithmetic)
+          uint8_t* p = reinterpret_cast<uint8_t*>(pdest);
+          p[0] = static_cast<uint8_t>(p[0] + (alpha * (static_cast<int>(r) - p[0])) / 255);
+          p[1] = static_cast<uint8_t>(p[1] + (alpha * (static_cast<int>(g) - p[1])) / 255);
+          p[2] = static_cast<uint8_t>(p[2] + (alpha * (static_cast<int>(b) - p[2])) / 255);
+          // p[3] is alpha channel, leave unchanged
         }
         pdest++;
         psrc++;
@@ -2323,7 +2331,8 @@ void Image::Overlay(const Image &image, Rgb colour) {
       const uint8_t* psrc = image.buffer + (y * image.linesize);
       for (unsigned int x = 0; x < width; x++) {
         if (*psrc) {
-          *pdest = gray;
+          // Alpha blending (use signed arithmetic)
+          *pdest = static_cast<uint8_t>(*pdest + (alpha * (static_cast<int>(gray) - *pdest)) / 255);
         }
         pdest++;
         psrc++;

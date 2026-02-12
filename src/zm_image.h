@@ -269,7 +269,9 @@ SwsContext *sws_convert_context;
   bool Crop(const Box &limits);
 
   void Overlay(const Image &image);
-  void Overlay(const Image &image, Rgb colour);
+  // Overlay colour where mask image is non-zero. Alpha controls transparency:
+  // 255 = fully opaque (default), 0 = fully transparent, 64 = 75% transparent
+  void Overlay(const Image &image, Rgb colour, uint8_t alpha = 255);
   void Overlay(const Image &image, unsigned int x, unsigned int y);
   void Blend(const Image &image, int transparency=12);
   static Image *Merge( unsigned int n_images, Image *images[] );
