@@ -2,7 +2,7 @@
 # Created by mastertheknife (Kfir Itzhak)
 # For more information and installation, see the INSTALL file
 #
-cmake_minimum_required(VERSION 3.5.0)
+cmake_minimum_required(VERSION 3.12)
 project(zoneminder)
 file(STRINGS "version.txt" zoneminder_VERSION)
 # make API version a minor of ZM version
@@ -69,7 +69,7 @@ if(ZM_SYSTEM_PROC MATCHES "^arm")
       set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -mfpu=neon")
       set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -mfpu=neon")
     else()
-      add_definitions(-DZM_STRIP_NEON=1)
+      set(ZM_STRIP_NEON 1)
       message(STATUS "ARM Neon is not available on this processor. Neon functions will be absent")
     endif()
   endif()
@@ -612,7 +612,6 @@ endif()
 find_package(GSOAP 2.8.91)
 if (GSOAP_FOUND)
   set(optlibsfound "${optlibsfound} gsoap")
-  add_definitions(-DWITH_GSOAP)
 else()
   set(optlibsnotfound "${optlibsnotfound} gsoap")
 endif()
@@ -869,11 +868,11 @@ message(STATUS "Enabled JWT backend: ${ZM_JWT_BACKEND}")
 
 # Run ZM configuration generator
 message(STATUS "Running ZoneMinder configuration generator")
-execute_process(COMMAND perl ${CMAKE_CURRENT_BINARY_DIR}/zmconfgen.pl RESULT_VARIABLE ZMCONFGEN_RESULT)
+execute_process(COMMAND "${PERL_EXECUTABLE}" ${CMAKE_CURRENT_BINARY_DIR}/zmconfgen.pl RESULT_VARIABLE ZMCONFGEN_RESULT)
 if(ZMCONFGEN_RESULT EQUAL 0)
   message(STATUS "ZoneMinder configuration generator completed successfully")
 else()
-  message(FATAL_ERROR "ZoneMinder configuration generator failed. Exit code: ${zmconfgen_result}")
+  message(FATAL_ERROR "ZoneMinder configuration generator failed. Exit code: ${ZMCONFGEN_RESULT}")
 endif()
 
 # Install zm.conf
@@ -884,7 +883,7 @@ install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/conf.d/" DESTINATION "${ZM_CONFIG
 configure_file(
   "${CMAKE_CURRENT_SOURCE_DIR}/cmake/cmake_uninstall.cmake.in"
   "${CMAKE_CURRENT_BINARY_DIR}/cmake/cmake_uninstall.cmake"
-  IMMEDIATE @ONLY)
+  @ONLY)
 add_custom_target(uninstall
   COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/cmake/cmake_uninstall.cmake)
 
