@@ -340,11 +340,59 @@ void zmDbQueue::push(std::string &&sql) {
   }
 }
 
+// Simple fallback escaping when database connection is unavailable.
+// This handles the critical SQL injection characters without requiring
+// a MySQL connection (which mysql_real_escape_string needs for charset info).
+static std::string zmDbEscapeStringFallback(const std::string& to_escape) {
+  std::string escaped;
+  escaped.reserve(to_escape.length() * 2);
+
+  for (char c : to_escape) {
+    switch (c) {
+      case '\0':
+        escaped += "\\0";
+        break;
+      case '\n':
+        escaped += "\\n";
+        break;
+      case '\r':
+        escaped += "\\r";
+        break;
+      case '\\':
+        escaped += "\\\\";
+        break;
+      case '\'':
+        escaped += "\\'";
+        break;
+      case '"':
+        escaped += "\\\"";
+        break;
+      case '\x1a':  // Ctrl-Z (EOF on Windows)
+        escaped += "\\Z";
+        break;
+      default:
+        escaped += c;
+        break;
+    }
+  }
+  return escaped;
+}
+
 std::string zmDbEscapeString(const std::string& to_escape) {
+  std::lock_guard<std::mutex> lck(db_mutex);
+
+  // Check connection and try to reconnect if needed
+  if (!zmDbConnected) {
+    if (!zmDbConnect()) {
+      // Connection failed - use fallback escaping to avoid segfault
+      Warning("Database not connected, using fallback string escaping");
+      return zmDbEscapeStringFallback(to_escape);
+    }
+  }
+
   // According to docs, size of safer_whatever must be 2 * length + 1
   // due to unicode conversions + null terminator.
   std::string escaped((to_escape.length() * 2) + 1, '\0');
-
 
   size_t escaped_len = mysql_real_escape_string(&dbconn, &escaped[0], to_escape.c_str(), to_escape.length());
   escaped.resize(escaped_len);
