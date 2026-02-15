@@ -6187,32 +6187,15 @@ int Image::draw_boxes(
         float score = detection["confidence"] != nullptr ? detection["confidence"] : detection["score"];
         std::string annotation = stringtf("%s %d%%", coco_class.c_str(), static_cast<int>(100*score));
 
-#if 0
-        {
-          std::vector<Vector2> coords;
-          coords.push_back(Vector2(x1, y1));
-          coords.push_back(Vector2(x2, y1));
-          coords.push_back(Vector2(x2, y2));
-          coords.push_back(Vector2(x1, y2));
-
-          Polygon poly(coords);
-          this->Outline(kRGBRed, poly);
+        // Get box color - use per-class color if provided, otherwise default to red
+        Rgb box_color = kRGBRed;
+        if (detection.contains("box_color") && !detection["box_color"].is_null()) {
+          box_color = detection["box_color"].get<Rgb>();
         }
-        {
-          std::vector<Vector2> coords;
-          coords.push_back(Vector2(x1+1, y1+1));
-          coords.push_back(Vector2(x2-1, y1+1));
-          coords.push_back(Vector2(x2-1, y2-1));
-          coords.push_back(Vector2(x1+1, y2-1));
 
-          Polygon poly(coords);
-          this->Outline(kRGBGreen, poly);
-        }
-#else
-        this->DrawBox(x1, y1, x2, y2, kRGBRed);
-        this->DrawBox(x1+1, y1+1, x2-1, y2-1, kRGBRed);
-        this->DrawBox(x1+2, y1+2, x2-2, y2-2, kRGBRed);
-#endif
+        this->DrawBox(x1, y1, x2, y2, box_color);
+        this->DrawBox(x1+1, y1+1, x2-1, y2-1, box_color);
+        this->DrawBox(x1+2, y1+2, x2-2, y2-2, box_color);
         this->Annotate(annotation.c_str(), Vector2(x1+line_width, y1+line_width),
             font_size, kRGBWhite, kRGBTransparent);
       }  // end foreach detection

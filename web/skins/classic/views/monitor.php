@@ -1154,6 +1154,110 @@ echo htmlSelect('newMonitor[Decoder]', $decoders, $monitor->Decoder());
               <label><?php echo translate('use_Amcrest_API') ?></label>
               <?php echo html_radio('newMonitor[use_Amcrest_API]', array('1'=>translate('Enabled'), '0'=>translate('Disabled')), $monitor->use_Amcrest_API()); ?>
             </li>
+
+            <li class="AIDetectionSettings">
+              <label><?php echo translate('AI Detection Classes') ?></label>
+              <div class="ai-detection-container">
+<?php
+// Load detection settings for this monitor (or defaults if new monitor)
+$monitor_id = $monitor->Id();
+$detection_settings = array();
+
+// First load global defaults (MonitorId IS NULL)
+$result = dbQuery('SELECT ds.*, oc.ClassName, oc.ClassIndex, d.Name as DatasetName
+  FROM AI_Detection_Settings ds
+  JOIN AI_Object_Classes oc ON ds.ObjectClassId = oc.Id
+  JOIN AI_Datasets d ON oc.DatasetId = d.Id
+  WHERE ds.MonitorId IS NULL
+  ORDER BY d.Name, oc.ClassIndex');
+if ($result) {
+  while ($row = dbFetchNext($result)) {
+    $detection_settings[$row['ObjectClassId']] = $row;
+  }
+}
+
+// Then load monitor-specific settings (override defaults)
+if ($monitor_id) {
+  $result = dbQuery('SELECT ds.*, oc.ClassName, oc.ClassIndex, d.Name as DatasetName
+    FROM AI_Detection_Settings ds
+    JOIN AI_Object_Classes oc ON ds.ObjectClassId = oc.Id
+    JOIN AI_Datasets d ON oc.DatasetId = d.Id
+    WHERE ds.MonitorId = ?
+    ORDER BY d.Name, oc.ClassIndex', array($monitor_id));
+  if ($result) {
+    while ($row = dbFetchNext($result)) {
+      $detection_settings[$row['ObjectClassId']] = $row;
+    }
+  }
+}
+
+// Load all available object classes
+$all_classes = array();
+$result = dbQuery('SELECT oc.*, d.Name as DatasetName
+  FROM AI_Object_Classes oc
+  JOIN AI_Datasets d ON oc.DatasetId = d.Id
+  ORDER BY d.Name, oc.ClassIndex');
+if ($result) {
+  while ($row = dbFetchNext($result)) {
+    $all_classes[$row['Id']] = $row;
+  }
+}
+
+if (count($all_classes) > 0) {
+?>
+                <div class="ai-detection-filter mb-2">
+                  <input type="text" id="aiClassFilter" class="form-control form-control-sm" placeholder="<?php echo translate('FilterClasses') ?>..." />
+                </div>
+                <div class="ai-detection-table-wrapper" style="max-height: 300px; overflow-y: auto;">
+                  <table class="table table-sm table-striped" id="aiDetectionTable">
+                    <thead>
+                      <tr>
+                        <th style="width: 40px;"><?php echo translate('Enabled') ?></th>
+                        <th><?php echo translate('ClassName') ?></th>
+                        <th style="width: 100px;"><?php echo translate('Threshold') ?></th>
+                        <th style="width: 60px;"><?php echo translate('Colour') ?></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+<?php
+  foreach ($all_classes as $class_id => $class) {
+    $settings = isset($detection_settings[$class_id]) ? $detection_settings[$class_id] : null;
+    $enabled = $settings ? $settings['Enabled'] : 0;
+    $threshold = $settings ? $settings['ConfidenceThreshold'] : 50;
+    $color = $settings ? $settings['BoxColor'] : '#FF0000';
+?>
+                      <tr class="ai-class-row" data-class-name="<?php echo strtolower(validHtmlStr($class['ClassName'])) ?>">
+                        <td>
+                          <input type="checkbox" name="aiDetection[<?php echo $class_id ?>][Enabled]" value="1" <?php echo $enabled ? 'checked' : '' ?> />
+                        </td>
+                        <td><?php echo validHtmlStr($class['ClassName']) ?></td>
+                        <td>
+                          <input type="number" name="aiDetection[<?php echo $class_id ?>][ConfidenceThreshold]" value="<?php echo validInt($threshold) ?>" min="0" max="100" class="form-control form-control-sm" style="width: 70px;" />
+                        </td>
+                        <td>
+                          <input type="color" name="aiDetection[<?php echo $class_id ?>][BoxColor]" value="<?php echo validHtmlStr($color) ?>" />
+                        </td>
+                      </tr>
+<?php
+  }
+?>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="ai-detection-actions mt-2">
+                  <button type="button" class="btn btn-sm btn-secondary" id="aiSelectAll"><?php echo translate('SelectAll') ?></button>
+                  <button type="button" class="btn btn-sm btn-secondary" id="aiSelectNone"><?php echo translate('SelectNone') ?></button>
+                  <button type="button" class="btn btn-sm btn-secondary" id="aiSelectCommon"><?php echo translate('SelectCommon') ?></button>
+                </div>
+<?php
+} else {
+?>
+                <p class="text-muted"><?php echo translate('NoAIClassesConfigured') ?></p>
+<?php
+}
+?>
+              </div>
+            </li>
 <?php
     }
     break;

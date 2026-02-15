@@ -19,6 +19,7 @@
 
 #include "zm_monitor.h"
 
+#include "zm_db.h"
 #include "zm_eventstream.h"
 #include "zm_ffmpeg_camera.h"
 #include "zm_fifo.h"
@@ -805,6 +806,11 @@ void Monitor::Load(MYSQL_ROW dbrow, bool load_zones = true, Purpose p = QUERY) {
     }
   }  // end if purpose
 
+  // Load AI detection settings for this monitor (if object detection is enabled)
+  if (objectdetection != OBJECT_DETECTION_NONE) {
+    LoadAIDetectionSettings();
+  }
+
 }  // Monitor::Load(MYSQL_ROW dbrow, bool load_zones=true, Purpose p = QUERY)
 
 void Monitor::LoadCamera() {
@@ -899,6 +905,111 @@ void Monitor::LoadCamera() {
       break;
     }
   }
+}
+
+void Monitor::LoadAIDetectionSettings() {
+  ai_detection_settings.clear();
+
+  // Query to get AI detection settings for this monitor
+  // If no monitor-specific setting exists, we'll get the global setting (MonitorId IS NULL)
+  // Monitor-specific settings override global settings
+  std::string sql = stringtf(
+    "SELECT oc.Id, oc.ClassName, "
+    "COALESCE(ms.Enabled, gs.Enabled, 1) AS Enabled, "
+    "COALESCE(ms.ConfidenceThreshold, gs.ConfidenceThreshold, 50) AS ConfidenceThreshold, "
+    "COALESCE(ms.BoxColor, gs.BoxColor, '#FF0000') AS BoxColor "
+    "FROM AI_Object_Classes oc "
+    "LEFT JOIN AI_Detection_Settings ms ON oc.Id = ms.ObjectClassId AND ms.MonitorId = %u "
+    "LEFT JOIN AI_Detection_Settings gs ON oc.Id = gs.ObjectClassId AND gs.MonitorId IS NULL",
+    id);
+
+  MYSQL_RES *result = zmDbFetch(sql);
+  if (!result) {
+    Debug(1, "No AI detection settings found or query failed for monitor %u", id);
+    return;
+  }
+
+  while (MYSQL_ROW dbrow = mysql_fetch_row(result)) {
+    AIDetectionSetting setting;
+    setting.class_id = atoi(dbrow[0]);
+    setting.class_name = dbrow[1] ? dbrow[1] : "";
+    setting.enabled = dbrow[2] ? (atoi(dbrow[2]) != 0) : true;
+    setting.confidence_threshold = dbrow[3] ? atoi(dbrow[3]) : 50;
+
+    // Parse hex color string (e.g., "#FF0000") to Rgb
+    std::string color_str = dbrow[4] ? dbrow[4] : "#FF0000";
+    if (!color_str.empty() && color_str[0] == '#') {
+      color_str = color_str.substr(1);
+    }
+    setting.box_color = strtol(color_str.c_str(), nullptr, 16);
+
+    ai_detection_settings[setting.class_name] = setting;
+    Debug(2, "Loaded AI detection setting for class '%s': enabled=%d, threshold=%d, color=0x%06X",
+          setting.class_name.c_str(), setting.enabled, setting.confidence_threshold, setting.box_color);
+  }
+  mysql_free_result(result);
+
+  Debug(1, "Loaded %zu AI detection settings for monitor %u", ai_detection_settings.size(), id);
+}
+
+nlohmann::json Monitor::FilterDetections(const nlohmann::json &detections) {
+  // If no settings loaded, return all detections unfiltered
+  if (ai_detection_settings.empty()) {
+    return detections;
+  }
+
+  nlohmann::json filtered;
+  for (const auto &detection : detections) {
+    std::string class_name;
+    if (detection.contains("class") && !detection["class"].is_null()) {
+      class_name = detection["class"].get<std::string>();
+    } else if (detection.contains("name") && !detection["name"].is_null()) {
+      class_name = detection["name"].get<std::string>();
+    } else {
+      // No class name, skip this detection
+      continue;
+    }
+
+    // Look up settings for this class
+    auto it = ai_detection_settings.find(class_name);
+    if (it == ai_detection_settings.end()) {
+      // Class not in settings, include by default with global threshold
+      filtered.push_back(detection);
+      continue;
+    }
+
+    const AIDetectionSetting &setting = it->second;
+
+    // Check if class is enabled
+    if (!setting.enabled) {
+      Debug(3, "Filtering out detection of class '%s' (disabled)", class_name.c_str());
+      continue;
+    }
+
+    // Check confidence threshold
+    float confidence = 0.0f;
+    if (detection.contains("confidence") && !detection["confidence"].is_null()) {
+      confidence = detection["confidence"].get<float>();
+    } else if (detection.contains("score") && !detection["score"].is_null()) {
+      confidence = detection["score"].get<float>();
+    }
+
+    // Confidence is typically 0-1, threshold is 0-100
+    int confidence_pct = static_cast<int>(confidence * 100);
+    if (confidence_pct < setting.confidence_threshold) {
+      Debug(3, "Filtering out detection of class '%s' (confidence %d%% < threshold %d%%)",
+            class_name.c_str(), confidence_pct, setting.confidence_threshold);
+      continue;
+    }
+
+    // Add the box_color to the detection so draw_boxes can use it
+    nlohmann::json filtered_detection = detection;
+    filtered_detection["box_color"] = setting.box_color;
+    filtered.push_back(filtered_detection);
+  }
+
+  Debug(2, "Filtered detections: %zu of %zu passed", filtered.size(), detections.size());
+  return filtered;
 }
 
 std::shared_ptr<Monitor> Monitor::Load(unsigned int p_id, bool load_zones,
@@ -2564,7 +2675,9 @@ std::pair<int, std::string> Monitor::Analyse_MxAccl(std::shared_ptr<ZMPacket> pa
       }
 #endif
       last_detection_count = 2;
-      const nlohmann::json detections = mx_accl->receive_detections(mx_accl_job, objectdetection_object_threshold);
+      const nlohmann::json raw_detections = mx_accl->receive_detections(mx_accl_job, objectdetection_object_threshold);
+      // Filter detections based on per-class AI detection settings
+      const nlohmann::json detections = FilterDetections(raw_detections);
       if (detections.size()) {
         Image *ai_image = new Image(packet->in_frame.get(), packet->in_frame->width, packet->in_frame->height); //copies
         ai_image->draw_boxes(detections, LabelSize(), LabelSize());
@@ -2578,6 +2691,7 @@ std::pair<int, std::string> Monitor::Analyse_MxAccl(std::shared_ptr<ZMPacket> pa
     } else { // skipping
       if (last_detection_count >0 and last_detections.size()) {
         Image *ai_image = new Image(packet->in_frame.get(), packet->in_frame->width, packet->in_frame->height); //copies
+        // last_detections is already filtered
         ai_image->draw_boxes(last_detections, LabelSize(), LabelSize());
         packet->ai_image = ai_image;
         // Populate ai_frame as well
@@ -2796,8 +2910,10 @@ std::pair<int, std::string> Monitor::Analyse_UVICORN(std::shared_ptr<ZMPacket> p
   Debug(1, "CURL detections %s", detections.dump().c_str());
   if (detections.size()) {// and detections["predictions"] and detections["predictions"].size()) {
     Debug(1, "CURL Doing draw_boxes camera dims %dx%d", camera_width, camera_height);
-    nlohmann::json predictions = detections["predictions"];
-    predictions = scale_coordinates(predictions, camera_width/640.0, camera_height/640.0, camera_width, camera_height);
+    nlohmann::json raw_predictions = detections["predictions"];
+    raw_predictions = scale_coordinates(raw_predictions, camera_width/640.0, camera_height/640.0, camera_width, camera_height);
+    // Filter detections based on per-class AI detection settings
+    nlohmann::json predictions = FilterDetections(raw_predictions);
     last_detections = predictions;
 
     Image *ai_image = new Image(packet->in_frame.get(), packet->in_frame->width, packet->in_frame->height); //copies
@@ -2807,7 +2923,7 @@ std::pair<int, std::string> Monitor::Analyse_UVICORN(std::shared_ptr<ZMPacket> p
     packet->ai_frame = av_frame_ptr(av_frame_alloc());
     ai_image->PopulateFrame(packet->ai_frame.get());
 
-    packet->detections = detections["predictions"];
+    packet->detections = predictions;  // Store filtered detections
     last_detection_count  = 10;
     endtime = std::chrono::system_clock::now();
     Debug(1, "UVICORN took: %.3f seconds to drawboxes.", FPSeconds(endtime - partial_starttime).count());

@@ -532,6 +532,54 @@ function initPage() {
       opacityValue.textContent = this.value;
     });
   }
+
+  // AI Detection Settings handlers
+  const aiClassFilter = document.getElementById('aiClassFilter');
+  if (aiClassFilter) {
+    aiClassFilter.addEventListener('input', function() {
+      const filterText = this.value.toLowerCase();
+      document.querySelectorAll('.ai-class-row').forEach(function(row) {
+        const className = row.getAttribute('data-class-name');
+        if (className.indexOf(filterText) !== -1) {
+          row.style.display = '';
+        } else {
+          row.style.display = 'none';
+        }
+      });
+    });
+  }
+
+  const aiSelectAll = document.getElementById('aiSelectAll');
+  if (aiSelectAll) {
+    aiSelectAll.addEventListener('click', function() {
+      document.querySelectorAll('#aiDetectionTable input[type="checkbox"]').forEach(function(cb) {
+        cb.checked = true;
+      });
+    });
+  }
+
+  const aiSelectNone = document.getElementById('aiSelectNone');
+  if (aiSelectNone) {
+    aiSelectNone.addEventListener('click', function() {
+      document.querySelectorAll('#aiDetectionTable input[type="checkbox"]').forEach(function(cb) {
+        cb.checked = false;
+      });
+    });
+  }
+
+  const aiSelectCommon = document.getElementById('aiSelectCommon');
+  if (aiSelectCommon) {
+    aiSelectCommon.addEventListener('click', function() {
+      const commonClasses = ['person', 'car', 'truck', 'bus', 'motorcycle', 'bicycle', 'dog', 'cat'];
+      document.querySelectorAll('.ai-class-row').forEach(function(row) {
+        const className = row.getAttribute('data-class-name');
+        const checkbox = row.querySelector('input[type="checkbox"]');
+        if (checkbox) {
+          checkbox.checked = commonClasses.indexOf(className) !== -1;
+        }
+      });
+    });
+  }
 } // end function initPage()
 
 function saveMonitorData(href = '') {

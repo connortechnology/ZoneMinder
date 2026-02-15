@@ -25,6 +25,7 @@
 
 #include <list>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 #include "zm_analysis_thread.h"
@@ -57,6 +58,17 @@ extern "C" {
 
 class Group;
 class MonitorLinkExpression;
+
+// Structure to hold per-class AI detection settings
+struct AIDetectionSetting {
+  unsigned int class_id;     // AI_Object_Classes.Id
+  std::string class_name;    // AI_Object_Classes.ClassName
+  bool enabled;              // Whether to detect this class
+  int confidence_threshold;  // Minimum confidence (0-100)
+  Rgb box_color;             // Color for bounding boxes
+
+  AIDetectionSetting() : class_id(0), enabled(true), confidence_threshold(50), box_color(0xFF0000) {}
+};
 
 #define SIGNAL_CAUSE "Signal"
 #define MOTION_CAUSE "Motion"
@@ -771,6 +783,9 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   nlohmann::json last_detections;
   int last_detection_count;
 
+  // Per-class AI detection settings (keyed by class name for quick lookup)
+  std::unordered_map<std::string, AIDetectionSetting> ai_detection_settings;
+
   // Used in check signal
   uint8_t red_val;
   uint8_t green_val;
@@ -789,6 +804,8 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   void AddPrivacyBitmask();
 
   void LoadCamera();
+  void LoadAIDetectionSettings();  // Load per-class AI detection settings from database
+  nlohmann::json FilterDetections(const nlohmann::json &detections);  // Filter detections based on AI settings
   const std::shared_ptr<Camera> getCamera() { return camera; }
   bool connect();
   bool disconnect();
