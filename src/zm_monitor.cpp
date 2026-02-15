@@ -2674,7 +2674,7 @@ std::pair<int, std::string> Monitor::Analyse_MxAccl(std::shared_ptr<ZMPacket> pa
         Debug(1, "AI took: %.2f seconds", FPSeconds(endtime - starttime).count());
       }
 #endif
-      last_detection_count = 2;
+      last_detection_count = motion_frame_skip;
       const nlohmann::json raw_detections = mx_accl->receive_detections(mx_accl_job, objectdetection_object_threshold);
       // Filter detections based on per-class AI detection settings
       const nlohmann::json detections = FilterDetections(raw_detections);
@@ -2761,7 +2761,7 @@ std::pair<int, std::string> Monitor::Analyse_Quadra(std::shared_ptr<ZMPacket> pa
           do {
             ret = quadra_yolo->receive_detection(packet);
             if (0 < ret) {
-              last_detection_count = 2;
+              last_detection_count = motion_frame_skip;
               endtime = std::chrono::system_clock::now();
               if (endtime - starttime > Seconds(1)) {
                 Warning("AI receive is too slow: %.2f seconds", FPSeconds(endtime - starttime).count());
@@ -2781,7 +2781,8 @@ std::pair<int, std::string> Monitor::Analyse_Quadra(std::shared_ptr<ZMPacket> pa
               quadra_yolo = nullptr;
             } else {
               // EAGAIN
-              Debug(1, "ret %d EAGAIN, sleeping 10 millis", ret);
+              count--;
+              Debug(1, "ret %d EAGAIN (%d retries left), sleeping 10 millis", ret, count);
               std::this_thread::sleep_for(Microseconds(10000));
             }
           } while (ret == 0 and count > 0);
@@ -2924,7 +2925,7 @@ std::pair<int, std::string> Monitor::Analyse_UVICORN(std::shared_ptr<ZMPacket> p
     ai_image->PopulateFrame(packet->ai_frame.get());
 
     packet->detections = predictions;  // Store filtered detections
-    last_detection_count  = 10;
+    last_detection_count = motion_frame_skip;
     endtime = std::chrono::system_clock::now();
     Debug(1, "UVICORN took: %.3f seconds to drawboxes.", FPSeconds(endtime - partial_starttime).count());
     partial_starttime = endtime;
