@@ -40,7 +40,6 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include "netint_network.h"
-#include "ni_log.h"
 #include "zm_logger.h"
 
 static int init_hwframe_scale(NiNetworkContext *network_ctx,
