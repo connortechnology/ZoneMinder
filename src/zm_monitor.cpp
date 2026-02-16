@@ -2628,7 +2628,7 @@ int Monitor::Analyse() {
     } // end if !event
   }  // end scope for event_lock
   packet->analyzed = true;
-  packetqueue.notify_all();  // Wake event thread waiting on analyzed flag
+  packet->notify_all();  // Wake up event thread waiting for analyzed
 
   shared_data->last_read_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
   packetqueue.increment_it(analysis_it, false);
@@ -3254,7 +3254,7 @@ int Monitor::Capture() {
       shared_data->last_capture_index = index;
       shared_data->last_write_time = std::chrono::system_clock::to_time_t(packet->timestamp);
       packet->decoded = true;
-      packetqueue.notify_all();  // Wake event thread waiting on decoded flag
+      packet->notify_all();
     }
     Debug(2, "Have packet stream_index:%d ?= videostream_id: %d q.vpktcount %d event? %d image_count %d",
           packet->packet->stream_index, video_stream_id, packetqueue.packet_count(video_stream_id), ( event ? 1 : 0 ), shared_data->capture_image_count);
@@ -3701,12 +3701,23 @@ Event * Monitor::openEvent(
       logTerm();
       int fdlimit = (int)sysconf(_SC_OPEN_MAX);
       for (int i = 0; i < fdlimit; i++) close(i);
-      execlp(event_start_command.c_str(), event_start_command.c_str(),
-             std::to_string(event->Id()).c_str(),
-             std::to_string(event->MonitorId()).c_str(), nullptr);
-      logInit(log_id.c_str());
-      Error("Error execing %s: %s", event_start_command.c_str(),
-            strerror(errno));
+      if (event_start_command.find('%') != std::string::npos) {
+        std::string cmd = ReplaceAll(ReplaceAll(
+            ReplaceAll(event_start_command, "%EID%", std::to_string(event->Id())),
+            "%MID%", std::to_string(event->MonitorId())),
+            "%EC%", ShellEscape(cause));
+        execl("/bin/sh", "sh", "-c", cmd.c_str(), nullptr);
+        logInit(log_id.c_str());
+        Error("Error execing %s: %s", cmd.c_str(), strerror(errno));
+      } else {
+        execlp(event_start_command.c_str(),
+               event_start_command.c_str(),
+               std::to_string(event->Id()).c_str(),
+               std::to_string(event->MonitorId()).c_str(),
+               nullptr);
+        logInit(log_id.c_str());
+        Error("Error execing %s: %s", event_start_command.c_str(), strerror(errno));
+      }
       std::quick_exit(0);
     }
   }
@@ -3728,29 +3739,40 @@ void Monitor::closeEvent() {
   if (mqtt) mqtt->send(stringtf("event end: %" PRId64, event->Id()));
 #endif
   Debug(1, "Starting thread to close event");
-  close_event_thread = std::thread(
-      [](Event *e, const std::string &command) {
-        int64_t event_id = e->Id();
-        int monitor_id = e->MonitorId();
-        delete e;
+  close_event_thread = std::thread([](Event *e, const std::string &command) {
+    int64_t event_id = e->Id();
+    int monitor_id = e->MonitorId();
+    Debug(1, "close_event_thread: deleting event %" PRId64, event_id);
+    delete e;
+    Debug(1, "close_event_thread: event %" PRId64 " deleted", event_id);
 
-        if (!command.empty()) {
-          if (fork() == 0) {
-            Logger *log = Logger::fetch();
-            std::string log_id = log->id();
-            logTerm();
-            int fdlimit = (int)sysconf(_SC_OPEN_MAX);
-            for (int i = 0; i < fdlimit; i++) close(i);
-            execlp(command.c_str(), command.c_str(),
-                   std::to_string(event_id).c_str(),
-                   std::to_string(monitor_id).c_str(), nullptr);
-            logInit(log_id.c_str());
-            Error("Error execing %s: %s", command.c_str(), strerror(errno));
-            std::quick_exit(0);
-          }
+    if (!command.empty()) {
+      if (fork() == 0) {
+        Logger *log = Logger::fetch();
+        std::string log_id = log->id();
+        logTerm();
+        int fdlimit = (int)sysconf(_SC_OPEN_MAX);
+        for (int i = 0; i < fdlimit; i++) close(i);
+        if (command.find('%') != std::string::npos) {
+          std::string cmd = ReplaceAll(
+              ReplaceAll(command, "%EID%", std::to_string(event_id)),
+              "%MID%", std::to_string(monitor_id));
+          execl("/bin/sh", "sh", "-c", cmd.c_str(), nullptr);
+          logInit(log_id.c_str());
+          Error("Error execing %s: %s", cmd.c_str(), strerror(errno));
+        } else {
+          execlp(command.c_str(),
+                 command.c_str(),
+                 std::to_string(event_id).c_str(),
+                 std::to_string(monitor_id).c_str(),
+                 nullptr);
+          logInit(log_id.c_str());
+          Error("Error execing %s: %s", command.c_str(), strerror(errno));
         }
-      },
-      event, event_end_command);
+        std::quick_exit(0);
+      }
+    }
+  }, event, event_end_command);
   Debug(1, "Nulling event");
   event = nullptr;
   if (shared_data) video_store_data->recording = {};

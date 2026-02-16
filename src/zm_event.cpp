@@ -314,19 +314,21 @@ int Event::OpenJpegCodec(AVFrame *frame) {
 }
 
 Event::~Event() {
+  Debug(1, "~Event %" PRIu64 ": calling Stop", id);
   Stop();
 
   if (thread_.joinable()) {
-    Debug(1, "Joining event thread");
-    // Should be.  Issuing the stop and then getting the lock
+    Debug(1, "~Event %" PRIu64 ": joining Run thread", id);
     thread_.join();
+    Debug(1, "~Event %" PRIu64 ": Run thread joined", id);
   }
+  Debug(1, "~Event %" PRIu64 ": freeing packetqueue iterator", id);
   packetqueue->free_it(packetqueue_it);
 
   /* Close the video file */
   // We close the videowriter first, because if we finish the event, we might try to view the file, but we aren't done writing it yet.
   if (videoStore != nullptr) {
-    Debug(4, "Deleting video store");
+    Debug(1, "~Event %" PRIu64 ": deleting video store", id);
     delete videoStore;
     videoStore = nullptr;
     int result = rename(video_incomplete_path.c_str(), video_path.c_str());
@@ -957,6 +959,7 @@ bool Event::SetPath(Storage *storage) {
 }  // end bool Event::SetPath
 
 void Event::Run() {
+  Debug(1, "Event::Run %" PRIu64 ": starting setup", id);
   Storage *storage = monitor->getStorage();
   if (!SetPath(storage)) {
     // Try another
@@ -1053,6 +1056,7 @@ void Event::Run() {
 
   // The idea is to process the queue no matter what so that all packets get processed.
   // We only break if the queue is empty
+  Debug(1, "Event::Run %" PRIu64 ": entering packet loop", id);
   while (!terminate_ and !zm_terminate) {
     // I don't exactly remember why the no_wait
     ZMPacketLock packet_lock = packetqueue->get_packet_no_wait(packetqueue_it);
@@ -1061,16 +1065,12 @@ void Event::Run() {
       if (!packet->decoded) {
         Debug(1, "Not decoded");
         packet_lock.unlock();
-        // Wait on packetqueue condition instead of blind sleep — wakes immediately
-        // when decoder sets decoded=true and calls packetqueue.notify_all()
         packetqueue->wait_for(Microseconds(ZM_SAMPLE_RATE));
         continue;
       }
       if (!packet->analyzed) {
         Debug(1, "Not analyzed");
         packet_lock.unlock();
-        // Wait on packetqueue condition instead of blind sleep — wakes immediately
-        // when analysis sets analyzed=true and calls packetqueue.notify_all()
         packetqueue->wait_for(Microseconds(ZM_SAMPLE_RATE));
         continue;
       }
@@ -1078,15 +1078,15 @@ void Event::Run() {
       Debug(1, "Adding packet %d", packet->image_index);
       this->AddPacket_(packet);
 
-      // Important not to increment it until after we are done with the packet because clearPackets checks for iterators pointing to it.
-      packetqueue->increment_it(packetqueue_it, true);
+      // Use wait=false: deletePacket may have advanced our iterator to end()
+      // while we were in AddPacket_ without the queue lock.
+      packetqueue->increment_it(packetqueue_it, false);
     } else {
       if (terminate_ or zm_terminate) return;
-      // Wait on packetqueue condition instead of blind sleep — wakes immediately
-      // when a packet is queued or a packet lock becomes available
       packetqueue->wait_for(Microseconds(10000));
-    } // end if packet_lock
+    }
   }  // end while
+  Debug(1, "Event::Run %" PRIu64 ": exiting, terminate_=%d zm_terminate=%d", id, terminate_.load(), zm_terminate);
 }  // end Run()
 
 int Event::MonitorId() const {

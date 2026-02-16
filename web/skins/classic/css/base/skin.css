@@ -1046,6 +1046,9 @@ a.flip {
   height: 100%;
   background: none;
 }
+.colThumbnail img {
+  border-radius: 4px;
+}
 .monitor {
   position: relative;
 }
@@ -1595,6 +1598,25 @@ video-stream {
 /* Fix bootstrap-table */
 .fixed-table-loading {
   overflow: hidden;
+}
+
+img[id^='liveStream'], video[id^='liveStream'], video-stream[id^='liveStream'] {
+  margin: 0 auto;
+  object-fit: fill;
+}
+
+video-stream[id^='liveStream'] video{
+  max-height: inherit;
+  max-width: inherit;
+  object-fit: fill;
+}
+
+.imageFeed,
+.nav,
+.fixed-table-body,
+*[id^='videoFeedStream']
+ {
+  border-radius: 4px;
 }
 
 /* +++ This block should always be located at the end! */

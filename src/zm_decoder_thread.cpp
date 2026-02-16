@@ -89,6 +89,7 @@ bool DecoderThread::Decode() {
             new_decoder_queue.push_back(std::move(delayed_packet_lock));
           } else {
             delayed_packet->decoded = true;
+            delayed_packet->notify_all();
           }
 #else
             delayed_packet->decoded = true;
@@ -101,6 +102,7 @@ bool DecoderThread::Decode() {
           ZMPacketLock delayed_packet_lock = std::move(monitor_->decoder_queue.front());
           monitor_->decoder_queue.pop_front();
           delayed_packet_lock.packet_->decoded = true;
+          delayed_packet_lock.packet->notify_all();
         }
       } // end if success opening codec
     } // end if ! mCodec
@@ -132,6 +134,7 @@ bool DecoderThread::Decode() {
       for (auto &lock : monitor_->decoder_queue) {
         if (lock.packet_) {
           lock.packet_->decoded = true;
+          lock.packet->notify_all();
         }
       }
       monitor_->decoder_queue.clear();
@@ -190,6 +193,7 @@ bool DecoderThread::Decode() {
     if (packet->codec_type != AVMEDIA_TYPE_VIDEO) {
       Debug(3, "Audio packet %d, marking decoded", packet->image_index);
       packet->decoded = true;
+      packet->notify_all();
       monitor_->packetqueue.increment_it(monitor_->decoder_it, !monitor_->decoder_queue.empty());
       return true;
     }
@@ -213,6 +217,7 @@ bool DecoderThread::Decode() {
       for (auto &lock : monitor_->decoder_queue) {
         if (lock.packet_) {
           lock.packet_->decoded = true;
+          lock.packet->notify_all();
         }
       }
       monitor_->decoder_queue.clear();
@@ -225,6 +230,7 @@ bool DecoderThread::Decode() {
       if (!monitor_->mVideoCodecContext) {
         Debug(1, "No decoder");
         packet->decoded = true;
+        packet->notify_all();
         monitor_->packetqueue.increment_it(monitor_->decoder_it, (monitor_->decoder_queue.size() > 0));
         return 1;
       }
@@ -321,6 +327,7 @@ bool DecoderThread::Decode() {
     if (monitor_->deinterlacing_value) {
       if (!monitor_->applyDeinterlacing(packet, capture_image)) {
         packet->decoded = true;
+        packet->notify_all();
         return false;
       }
     }
@@ -398,7 +405,6 @@ bool DecoderThread::Decode() {
   }
 
   packet->decoded = true;
-  // The idea is that capture is firing often enough
-  monitor_->packetqueue.notify_all();
+  packet->notify_all();
   return 1;
 }  // end DecoderThread::Decode()

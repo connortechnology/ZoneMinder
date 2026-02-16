@@ -413,6 +413,7 @@ function MonitorStream(monitorData) {
         const url = new URL(ZM_GO2RTC_PATH);
 
         const stream = this.element = replaceDOMElement(this.getElement(), 'video-stream');
+        stream.srcObject = null;
         stream.background = true; // We do not use the document hiding/showing analysis from "video-rtc.js", because we have our own analysis
         //stream.muted = this.muted;
         const Go2RTCModUrl = url;
@@ -453,6 +454,7 @@ function MonitorStream(monitorData) {
     if (this.janusEnabled && ((!this.player) || (-1 !== this.player.indexOf('janus')))) {
       let server;
       const stream = this.element = replaceDOMElement(this.getElement(), 'video');
+      stream.srcObject = null;
       stream.setAttribute("autoplay", "");
       stream.setAttribute("muted", this.muted);
       const video_el = document.querySelector('#liveStream'+this.id);
@@ -490,6 +492,7 @@ function MonitorStream(monitorData) {
     if (this.RTSP2WebEnabled && ((!this.player) || (-1 !== this.player.indexOf('rtsp2web')))) {
       if (ZM_RTSP2WEB_PATH) {
         const stream = this.element = replaceDOMElement(this.getElement(), 'video');
+        stream.srcObject = null;
         stream.setAttribute("autoplay", "");
         stream.setAttribute("muted", this.muted);
         stream.setAttribute("playsinline", "");
@@ -561,6 +564,7 @@ function MonitorStream(monitorData) {
 
     // zms stream
     const stream = this.element = replaceDOMElement(this.getElement(), 'img');
+    stream.srcObject = null;
     if (!stream) return;
 
     this.destroyVolumeSlider();
@@ -603,6 +607,9 @@ function MonitorStream(monitorData) {
         if (match) {
           src += '&maxfps='+match[1];
         }
+      }
+      if (this.analyse_frames && -1 == src.search('analysis=')) {
+        src += '&analysis=true';
       }
       if (stream.src != src) {
         //console.log("Setting src.src", stream.src, src);
@@ -1714,7 +1721,12 @@ async function attachVideo(monitorStream) {
     console.log(`The Janus object for the camera with ID=${id} does not exist.`);
     return;
   }
-  await waitUntil(() => janus.isConnected() );
+  await waitUntil(() => (janus && ('isConnected' in janus)) ? janus.isConnected() : true );
+  if (!janus || !('isConnected' in janus)) { // Janus may crash while waiting for a connection due to network problems.
+    console.log(`The Janus object for the camera with ID=${id} does not exist.`);
+    return;
+  }
+
   janus.attach({
     plugin: "janus.plugin.streaming",
     opaqueId: "streamingtest-"+Janus.randomString(12),
