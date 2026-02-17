@@ -250,19 +250,19 @@ bool Zone::CheckAlarms(const Image *delta_image) {
   int alarm_mid_y = -1;
 
   //unsigned int lo_x = polygon.Extent().Lo().x_;
-  unsigned int lo_y = polygon.Extent().Lo().y_;
-  unsigned int hi_x = polygon.Extent().Hi().x_;
-  unsigned int hi_y = polygon.Extent().Hi().y_;
+  int lo_y = polygon.Extent().Lo().y_;
+  int hi_x = polygon.Extent().Hi().x_;
+  int hi_y = polygon.Extent().Hi().y_;
 
   // Clamp polygon extents to image dimensions to prevent buffer overflows.
   // This can happen if zone polygon coordinates exceed the actual frame size
   // (e.g., camera reconnected at a different resolution).
-  if (hi_y >= (unsigned int)diff_height) {
+  if (hi_y >= diff_height) {
     Warning("Zone %s: polygon hi_y (%u) >= image height (%d), clamping",
             label.c_str(), hi_y, diff_height);
     hi_y = diff_height - 1;
   }
-  if (hi_x >= (unsigned int)diff_width) {
+  if (hi_x >= diff_width) {
     Warning("Zone %s: polygon hi_x (%u) >= image width (%d), clamping",
             label.c_str(), hi_x, diff_width);
     hi_x = diff_width - 1;
@@ -283,7 +283,6 @@ bool Zone::CheckAlarms(const Image *delta_image) {
 
   // Clear pixels outside the zone's bounding box to prevent them from being
   // overlaid. std_alarmedpixels only processes the bounding box region.
-  unsigned int diff_height = diff_image->Height();
 
   // Clear rows above the bounding box
   if (lo_y > 0) {
@@ -294,7 +293,7 @@ bool Zone::CheckAlarms(const Image *delta_image) {
     memset(diff_buff + (hi_y + 1) * diff_width, 0, (diff_height - hi_y - 1) * diff_width);
   }
   // For rows within the bounding box, clear columns outside the zone
-  for (unsigned int y = lo_y; y <= hi_y; y++) {
+  for (int y = lo_y; y <= hi_y; y++) {
     int row_lo_x = ranges[y].lo_x;
     int row_hi_x = ranges[y].hi_x;
     // Clear pixels to the left of the zone
@@ -353,7 +352,7 @@ bool Zone::CheckAlarms(const Image *delta_image) {
       unsigned char *cpdiff;
       int ldx, hdx, ldy, hdy;
       bool block;
-      for (unsigned int y = lo_y; y <= hi_y; y++) {
+      for (int y = lo_y; y <= hi_y; y++) {
         int lo_x = ranges[y].lo_x;
         int hi_x = ranges[y].hi_x;
 
@@ -440,7 +439,7 @@ bool Zone::CheckAlarms(const Image *delta_image) {
       uint8_t last_x, last_y;
       BlobStats *bsx, *bsy;
       BlobStats *bsm, *bss;
-      for (unsigned int y = lo_y; y <= hi_y; y++) {
+      for (int y = lo_y; y <= hi_y; y++) {
         int lo_x = ranges[y].lo_x;
         int hi_x = ranges[y].hi_x;
 
@@ -780,9 +779,9 @@ bool Zone::CheckAlarms(const Image *delta_image) {
 
     if ((type < PRECLUSIVE) && (check_method >= BLOBS) && (monitor->GetOptSaveJPEGs() > 1)) {
 
-      unsigned int lo_x = polygon.Extent().Lo().x_;
+      int lo_x = polygon.Extent().Lo().x_;
       // First mask out anything we don't want
-      for (unsigned int y = lo_y; y <= hi_y; y++) {
+      for (int y = lo_y; y <= hi_y; y++) {
         int lo_x2 = ranges[y].lo_x;
         int hi_x2 = ranges[y].hi_x;
 
