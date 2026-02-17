@@ -102,7 +102,7 @@ bool DecoderThread::Decode() {
           ZMPacketLock delayed_packet_lock = std::move(monitor_->decoder_queue.front());
           monitor_->decoder_queue.pop_front();
           delayed_packet_lock.packet_->decoded = true;
-          delayed_packet_lock.packet->notify_all();
+          delayed_packet_lock.packet_->notify_all();
         }
       } // end if success opening codec
     } // end if ! mCodec
@@ -134,7 +134,7 @@ bool DecoderThread::Decode() {
       for (auto &lock : monitor_->decoder_queue) {
         if (lock.packet_) {
           lock.packet_->decoded = true;
-          lock.packet->notify_all();
+          lock.packet_->notify_all();
         }
       }
       monitor_->decoder_queue.clear();
@@ -217,7 +217,7 @@ bool DecoderThread::Decode() {
       for (auto &lock : monitor_->decoder_queue) {
         if (lock.packet_) {
           lock.packet_->decoded = true;
-          lock.packet->notify_all();
+          lock.packet_->notify_all();
         }
       }
       monitor_->decoder_queue.clear();
