@@ -35,7 +35,6 @@ set(ZM_BIN_SRC_FILES
   zm_libvlc_camera.cpp
   zm_libvnc_camera.cpp
   zm_local_camera.cpp
-  zm_memx.cpp
   zm_mx_accl.cpp
   zm_memx_yolo_core.cpp
   zm_memx_yolov8.cpp
