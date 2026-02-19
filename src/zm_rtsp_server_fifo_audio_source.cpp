@@ -42,7 +42,6 @@ void ZoneMinderFifoAudioSource::PushFrame(const uint8_t *data, size_t size, int6
   xop::AVFrame frame(data, size);
   frame.type = xop::AUDIO_FRAME;
   frame.timestamp = av_rescale_q(pts, AV_TIME_BASE_Q, m_timeBase);
-  frame.last = last;
   m_rtspServer->PushFrame(m_sessionId, m_channelId, frame);
 }
 #endif // HAVE_RTSP_SERVER
