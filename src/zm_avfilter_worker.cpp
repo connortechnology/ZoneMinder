@@ -52,9 +52,7 @@ bool filter_worker::setup(const std::string &filter_desc, const std::string &fil
       if (strstr(filter_graph->filters[i]->name, filter_of_interest.c_str()) != nullptr) {
         filter_ctx = filter_graph->filters[i];
         break;
-        //} else {
-        //Debug(1, "Didn't match %s != %s", filter_graph->filters[i]->name, filter_of_interest.c_str());
-    }
+      }
     }
 
     if (filter_ctx == nullptr) {
@@ -64,10 +62,10 @@ bool filter_worker::setup(const std::string &filter_desc, const std::string &fil
   }
 
   return initialised = true;
-}; // end setup
+} // end setup
 
 int filter_worker::execute(AVFrame *in_frame, AVFrame **out_frame) {
-  AVFrame *output = av_frame_alloc();
+  av_frame_ptr output{av_frame_alloc()};
   if (!output) {
     Error("cannot allocate output filter frame");
     return AVERROR(ENOMEM);
@@ -75,7 +73,6 @@ int filter_worker::execute(AVFrame *in_frame, AVFrame **out_frame) {
 
   int ret = av_buffersrc_add_frame_flags(this->buffersrc_ctx, in_frame, AV_BUFFERSRC_FLAG_KEEP_REF);
   if (ret < 0) {
-    av_frame_free(&output);
     Error("cannot add frame to %s buffer src %d %s",
         filter_ctx->name, ret, av_make_error_string(ret).c_str());
     return ret;
@@ -83,23 +80,22 @@ int filter_worker::execute(AVFrame *in_frame, AVFrame **out_frame) {
 
   int count = 10;
   do {
-    ret = av_buffersink_get_frame(this->buffersink_ctx, output);
+    ret = av_buffersink_get_frame(this->buffersink_ctx, output.get());
     if ((ret == AVERROR(EAGAIN)) and count) {
       count --;
       Debug(1, "EAGAIN %s", filter_ctx->name);
     } else if (ret < 0) {
       Error("cannot get frame from %s buffer sink %d %s",
           filter_ctx->name, ret, av_make_error_string(ret).c_str());
-      av_frame_free(&output);
       return ret;
     } else {
       break;
     }
   } while (!zm_terminate);
 
-  *out_frame = output;
+  *out_frame = output.release();
   return 0;
-};
+}
 
 int filter_worker::opt_set(const std::string &opt, const std::string &value) {
   return av_opt_set(filter_ctx->priv, opt.c_str(), value.c_str(), 0);
@@ -151,7 +147,7 @@ int filter_worker::init_filter(const char *filters_desc, AVBufferRef *hw_frames_
 
   ret = avfilter_graph_create_filter(&buffersrc_ctx, avfilter_get_by_name("buffer"), name, args, nullptr, filter_graph);
   if (ret < 0) {
-    Error("Cannot create buffer source");
+    Error("Cannot create buffer source: %s (args: %s)", av_make_error_string(ret).c_str(), args);
     return ret;
   }
 
