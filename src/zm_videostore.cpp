@@ -20,17 +20,13 @@
 
 #include "zm_videostore.h"
 
-#include "zm_logger.h"
 #include "zm_monitor.h"
 #include "zm_signal.h"
-#include "zm_time.h"
 
 extern "C" {
 #include <libavutil/time.h>
 #include <libavutil/display.h>
 }
-
-#include <string>
 
 VideoStore::VideoStore(
   const char *filename_in,
