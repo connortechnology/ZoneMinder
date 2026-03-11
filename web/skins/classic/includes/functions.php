@@ -385,6 +385,8 @@ function buildSidebarMenu() {
               </a>
             </li>
 ';
+  } else if (defined(ZM_SIDEBAR_FOOTER) and ZM_SIDEBAR_FOOTER) {
+    $menu .- ZM_SIDEBAR_FOOTER;
   }
   $menu .= '
           </ul>
@@ -1111,7 +1113,6 @@ function getOptionsHTML($forLeftBar = false, $customLabel = null) {
     if ($forLeftBar) {
       global $view;
 
-      $view_ = 'options';
       //$tab = isset($_REQUEST['tab']) ? validHtmlStr($_REQUEST['tab']) : 'system';
       $tab = isset($_REQUEST['tab']) ? validHtmlStr($_REQUEST['tab']) : '';
 
@@ -1122,7 +1123,7 @@ function getOptionsHTML($forLeftBar = false, $customLabel = null) {
       foreach ($zmMenu::$submenuOptionsItems as $name=>$value) {
         $subMenuOptions .= '
           <li class="menu-item '.$name.' '.($tab == $name ? ' active' : '').'">
-            <a href="?view='.$view_.'&amp;tab='.$name.'">
+            <a href="?view=options&amp;tab='.$name.'">
               <span class="menu-title">'.$value.'</span>
             </a>
           </li>'.PHP_EOL;
@@ -1132,6 +1133,7 @@ function getOptionsHTML($forLeftBar = false, $customLabel = null) {
       </div>
       ';
 
+      global $menuIconOverride;
       $optIcon = 'settings';
       $optIconType = 'material';
       if (isset($menuIconOverride)) {
@@ -1140,8 +1142,8 @@ function getOptionsHTML($forLeftBar = false, $customLabel = null) {
       }
 
       $result .= '
-<li id="getOptionsHTML" class="menu-item sub-menu '.($view == "options" ? ' open' : '').'">
-  <a href="#<!--?view='.$view_.'&amp;tab=system-->">
+<li id="getOptionsHTML" class="menu-item sub-menu '.($view == 'options' ? ' open' : '').'">
+  <a href="#<!--?view=options&amp;tab=system-->">
     <span class="menu-icon">'.renderMenuIcon($optIcon, $optIconType).'</span>
     <span class="menu-title">'.htmlspecialchars($label).'</span>
   </a>
@@ -1657,7 +1659,7 @@ function getStatsTableHTML($eid, $fid, $row='') {
   if ( !canView('Events') ) return;
   $result = '';
   
-  $sql = 'SELECT S.*,E.*,Z.Name AS ZoneName,Z.Units,Z.Area,M.Name AS MonitorName FROM Stats AS S LEFT JOIN Events AS E ON S.EventId = E.Id LEFT JOIN Zones AS Z ON S.ZoneId = Z.Id LEFT JOIN Monitors AS M ON E.MonitorId = M.Id WHERE S.EventId = ? AND S.FrameId = ? ORDER BY S.ZoneId';
+  $sql = 'SELECT S.*,E.*,Z.Name AS ZoneName,Z.Units,Z.Area,Z.Coords,M.Name AS MonitorName,M.Width,M.Height FROM Stats AS S LEFT JOIN Events AS E ON S.EventId = E.Id LEFT JOIN Zones AS Z ON S.ZoneId = Z.Id LEFT JOIN Monitors AS M ON E.MonitorId = M.Id WHERE S.EventId = ? AND S.FrameId = ? ORDER BY S.ZoneId';
   $stats = dbFetchAll( $sql, NULL, array( $eid, $fid ) );
   
   $result .= '<table id="contentStatsTable' .$row. '"'.PHP_EOL;
@@ -1686,18 +1688,23 @@ function getStatsTableHTML($eid, $fid, $row='') {
 
     if ( count($stats) ) {
       foreach ( $stats as $stat ) {
+        // Area is in percentage coordinate space (0-10000 for full frame).
+        // Convert to pixel area for percentage calculations since Stats values are pixel counts.
+        $pixelArea = $stat['Area'] / 10000.0 * $stat['Width'] * $stat['Height'];
+        if ($pixelArea <= 0) $pixelArea = 1; // avoid division by zero
+
         $result .= '<tr>'.PHP_EOL;
           $result .= '<td class="colZone">' .validHtmlStr($stat['ZoneName']). '</td>'.PHP_EOL;
           $result .= '<td class="colPixelDiff">' .validHtmlStr($stat['PixelDiff']). '</td>'.PHP_EOL;
-          $result .= '<td class="colAlarmPx">' .sprintf( "%d (%d%%)", $stat['AlarmPixels'], (100*$stat['AlarmPixels']/$stat['Area']) ). '</td>'.PHP_EOL;
-          $result .= '<td class="colFilterPx">' .sprintf( "%d (%d%%)", $stat['FilterPixels'], (100*$stat['FilterPixels']/$stat['Area']) ).'</td>'.PHP_EOL;
-          $result .= '<td class="colBlobPx">' .sprintf( "%d (%d%%)", $stat['BlobPixels'], (100*$stat['BlobPixels']/$stat['Area']) ). '</td>'.PHP_EOL;
+          $result .= '<td class="colAlarmPx">' .sprintf( "%d (%d%%)", $stat['AlarmPixels'], (100*$stat['AlarmPixels']/$pixelArea) ). '</td>'.PHP_EOL;
+          $result .= '<td class="colFilterPx">' .sprintf( "%d (%d%%)", $stat['FilterPixels'], (100*$stat['FilterPixels']/$pixelArea) ).'</td>'.PHP_EOL;
+          $result .= '<td class="colBlobPx">' .sprintf( "%d (%d%%)", $stat['BlobPixels'], (100*$stat['BlobPixels']/$pixelArea) ). '</td>'.PHP_EOL;
           $result .= '<td class="colBlobs">' .validHtmlStr($stat['Blobs']). '</td>'.PHP_EOL;
-          
+
           if ( $stat['Blobs'] > 1 ) {
-            $result .= '<td class="colBlobSizes">' .sprintf( "%d-%d (%d%%-%d%%)", $stat['MinBlobSize'], $stat['MaxBlobSize'], (100*$stat['MinBlobSize']/$stat['Area']), (100*$stat['MaxBlobSize']/$stat['Area']) ). '</td>'.PHP_EOL;
+            $result .= '<td class="colBlobSizes">' .sprintf( "%d-%d (%d%%-%d%%)", $stat['MinBlobSize'], $stat['MaxBlobSize'], (100*$stat['MinBlobSize']/$pixelArea), (100*$stat['MaxBlobSize']/$pixelArea) ). '</td>'.PHP_EOL;
           } else {
-            $result .= '<td class="colBlobSizes">' .sprintf( "%d (%d%%)", $stat['MinBlobSize'], 100*$stat['MinBlobSize']/$stat['Area'] ). '</td>'.PHP_EOL;
+            $result .= '<td class="colBlobSizes">' .sprintf( "%d (%d%%)", $stat['MinBlobSize'], 100*$stat['MinBlobSize']/$pixelArea ). '</td>'.PHP_EOL;
           }
           
           $result .= '<td class="colAlarmLimits">' .validHtmlStr($stat['MinX'].",".$stat['MinY']."-".$stat['MaxX'].",".$stat['MaxY']). '</td>'.PHP_EOL;
