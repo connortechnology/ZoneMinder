@@ -3018,6 +3018,37 @@ our @options = (
     category    => 'web',
   },
   {
+    name        => 'ZM_WEB_BUTTON_STYLE',
+    default     => 'icons+text',
+    description => 'How to display toolbar buttons throughout the interface.',
+    help        => q`
+      Controls the display of toolbar buttons across the web interface.
+      Icons + Text: Show both icon and label (default).
+      Icons Only: Show only the icon; labels are hidden.
+      Text Only: Show only the label; icons are hidden on buttons that have labels.
+      `,
+    type        => {
+      db_type     => 'string',
+      hint        => 'icons+text|icons|text',
+      pattern     => qr|^([it])|i,
+      format      => q( $1 )
+    },
+    category    => 'web',
+  },
+  {
+    name        => 'ZM_WEB_SHOW_NAV_BUTTONS',
+    default     => 'yes',
+    description => 'Show Back and Refresh buttons at the top of views.',
+    help        => q`
+      Controls whether the Back and Refresh navigation buttons are
+      displayed in the top-left corner of most views. If disabled,
+      the buttons are hidden to save screen space. You can still use
+      your browser's back and refresh functions.
+      `,
+    type        => $types{boolean},
+    category    => 'web',
+  },
+  {
     name        => 'ZM_WEB_H_REFRESH_MAIN',
     default     => '240',
     introduction => q`

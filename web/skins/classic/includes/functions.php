@@ -168,6 +168,9 @@ function getBodyTopHTML() {
   $classes = $view.'-page';
   if (defined('ZM_WEB_NAVBAR_STICKY') and ZM_WEB_NAVBAR_STICKY) $classes .= ' sticky';
   if (defined('ZM_WEB_FILTER_SETTINGS_POSITION') and ZM_WEB_FILTER_SETTINGS_POSITION == 'inline') $classes .= ' filter-inline';
+  if (defined('ZM_WEB_BUTTON_STYLE') and ZM_WEB_BUTTON_STYLE == 'icons') $classes .= ' btn-icons-only';
+  else if (defined('ZM_WEB_BUTTON_STYLE') and ZM_WEB_BUTTON_STYLE == 'text') $classes .= ' btn-text-only';
+  if (defined('ZM_WEB_SHOW_NAV_BUTTONS') and !ZM_WEB_SHOW_NAV_BUTTONS) $classes .= ' hide-nav-buttons';
   $classHTML = ' class="'.$classes.'"';
   echo '
 <body data-swipe-threshold="10" data-swipe-unit="vw" data-swipe-timeout="300"'.$classHTML.'>
