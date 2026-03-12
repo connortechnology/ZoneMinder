@@ -561,6 +561,11 @@ function getSidebarTopHTML() {
           <div>
 ' . getAccountCircleHTML($skin, $user, $forLeftBar = true) . '
           </div>
+';
+  if (defined('ZM_SIDEBAR_FOOTER') and ZM_SIDEBAR_FOOTER) {
+    $block .= ZM_SIDEBAR_FOOTER;
+  } else {
+    $block .= '
           <div style="padding: 0 10px">
             <span style="display: block; margin-bottom: 10px">
               <ul id="versionSidebar">
@@ -571,6 +576,9 @@ function getSidebarTopHTML() {
 ' . getStatusBtnHTML(runtimeStatus($running)) . '
             </ul>
           </div>
+';
+  }
+  $block .= '
         </div>
       </div>
     </div>
@@ -584,9 +592,6 @@ echo $block;
 function getSidebarBottomHTML() {
   global $skin;
   $block = '';
-  if (defined('ZM_SIDEBAR_FOOTER') and ZM_SIDEBAR_FOOTER) {
-    $block .= ZM_SIDEBAR_FOOTER;
-  }
   $block .= '
     <div class="overlay"></div>
   </div> <!-- class="content-main" -->
