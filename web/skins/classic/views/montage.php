@@ -273,7 +273,7 @@ echo getNavBarHTML();
           <input id="action" type="hidden" name="action" value=""/> <?php // "value" is generated in montage.js depending on the action "Save" or "Delete"?>
 
           <span id="monitorStatusPositionControl">
-            <label><?php echo translate('Monitor status position') ?></label>
+            <label><?php echo translate('Status Position') ?></label>
             <?php echo htmlSelect('monitorStatusPosition', $monitorStatusPosition, $monitorStatusPositionSelected, array('id'=>'monitorStatusPosition', 'data-on-change'=>'changeMonitorStatusPosition', 'class'=>'chosen')); ?>
           </span>
           <span id="rateControl">
