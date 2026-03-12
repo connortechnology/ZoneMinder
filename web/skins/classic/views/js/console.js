@@ -279,6 +279,19 @@ function processRows(rows) {
     sourceHtml += '<br/>' + row.Width + 'x' + row.Height;
     row.Source = sourceHtml;
 
+    // Format Output column
+    var outputHtml = row.OutputMode;
+    if (row.OutputMode === 'Encoding' || row.OutputMode === 'Passthrough') {
+      var details = [];
+      if (row.Encoder) details.push(row.Encoder);
+      if (row.OutputCodecName) details.push(row.OutputCodecName);
+      if (row.OutputContainer) details.push(row.OutputContainer);
+      if (details.length) {
+        outputHtml += '<br/><div class="small text-nowrap text-muted">' + details.join(', ') + '</div>';
+      }
+    }
+    row.Output = outputHtml;
+
     // Format event count columns
     var eventPeriods = ['Total', 'Hour', 'Day', 'Week', 'Month', 'Archived'];
     eventPeriods.forEach(function(period) {

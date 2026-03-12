@@ -319,6 +319,20 @@ function queryRequest() {
     $row['Width'] = $Monitor->Width();
     $row['Height'] = $Monitor->Height();
     
+    // Output
+    $videoWriter = isset($monitor['VideoWriter']) ? intval($monitor['VideoWriter']) : 0;
+    if ($videoWriter == 2) {
+      $row['OutputMode'] = 'Passthrough';
+    } else if ($videoWriter == 1) {
+      $row['OutputMode'] = 'Encoding';
+    } else {
+      $row['OutputMode'] = 'Disabled';
+    }
+    $row['Encoder'] = isset($monitor['Encoder']) ? $monitor['Encoder'] : '';
+    $row['OutputCodecName'] = isset($monitor['OutputCodecName']) ? $monitor['OutputCodecName'] : '';
+    $container = isset($monitor['OutputContainer']) ? $monitor['OutputContainer'] : '';
+    $row['OutputContainer'] = (!$container || $container === 'auto') ? 'auto:mp4' : $container;
+
     // Storage
     if (isset($StorageById[$monitor['StorageId']])) {
       $row['Storage'] = validHtmlStr($StorageById[$monitor['StorageId']]->Name());
