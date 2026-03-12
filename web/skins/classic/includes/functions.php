@@ -297,6 +297,27 @@ function getPageHelpData() {
   );
 }
 
+// Map view names to Menu_Items MenuKey values
+function getViewMenuKeyMap() {
+  return array(
+    'console'            => 'Console',
+    'montage'            => 'Montage',
+    'montagereview'      => 'MontageReview',
+    'events'             => 'Events',
+    'options'            => 'Options',
+    'log'                => 'Log',
+    'devices'            => 'Devices',
+    'intelgpu'           => 'IntelGpu',
+    'quadra'             => 'Quadra',
+    'groups'             => 'Groups',
+    'filter'             => 'Filters',
+    'snapshots'          => 'Snapshots',
+    'reports'            => 'Reports',
+    'report_event_audit' => 'ReportEventAudit',
+    'map'                => 'Map',
+  );
+}
+
 function getPageHeaderHTML($viewName = null) {
   if ($viewName === null) {
     global $view;
@@ -306,8 +327,22 @@ function getPageHeaderHTML($viewName = null) {
   if (!isset($pages[$viewName])) return '';
 
   $page = $pages[$viewName];
-  $title = htmlspecialchars($page['title']);
   $help = htmlspecialchars($page['help']);
+
+  // Use MenuItem label if this view has a menu entry
+  $title = null;
+  $menuKeyMap = getViewMenuKeyMap();
+  if (isset($menuKeyMap[$viewName])) {
+    require_once('includes/MenuItem.php');
+    $menuItem = ZM\MenuItem::find_one(array('MenuKey' => $menuKeyMap[$viewName]));
+    if ($menuItem) {
+      $title = htmlspecialchars($menuItem->displayLabel());
+    }
+  }
+  // Fall back to hardcoded title
+  if (!$title) {
+    $title = htmlspecialchars($page['title']);
+  }
 
   return '<div class="page-header-help">'
     .'<h2>'.$title.'</h2>'
