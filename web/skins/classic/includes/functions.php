@@ -945,7 +945,7 @@ function getCpuUsageHTML() {
     $thisServer->ReadStats();
 
     $result .= '<li id="getCpuUsageHTML" class="CpuUsage nav-item mx-2">'.PHP_EOL;
-    $result .= '&nbsp;'.translate('Cpu').': '.number_format($thisServer->CpuUsagePercent, 1, '.', '').'%'.PHP_EOL;
+    $result .= '&nbsp;'.translate('CPU').': '.number_format($thisServer->CpuUsagePercent, 1, '.', '').'%'.PHP_EOL;
     $result .= '</li>'.PHP_EOL;
   }
   return $result;
