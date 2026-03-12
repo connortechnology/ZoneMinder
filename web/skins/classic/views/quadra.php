@@ -254,23 +254,36 @@ echo getNavBarHTML();
   </div>
 <?php else: ?>
 
-  <!-- System-wide info -->
+  <!-- VPU Devices -->
   <div class="card mb-3">
     <div class="card-header">
-      <i class="material-icons md-18">info</i> System Information
+      <i class="material-icons md-18">memory</i> VPU Devices
+      <span class="text-muted small ml-2">
+        <?php echo htmlspecialchars($quadraSummary['timestamp'] ?: '') ?>
+        <?php if ($quadraSummary['uptime']) echo '&mdash; up '.htmlspecialchars($quadraSummary['uptime']) ?>
+      </span>
     </div>
-    <div class="card-body">
-      <div class="row">
-        <div class="col-md-3">
-          <strong>Timestamp:</strong> <?php echo htmlspecialchars($quadraSummary['timestamp'] ?: 'N/A') ?>
-        </div>
-        <div class="col-md-3">
-          <strong>Uptime:</strong> <?php echo htmlspecialchars($quadraSummary['uptime'] ?: 'N/A') ?>
-        </div>
-        <div class="col-md-3">
-          <strong>Cards detected:</strong> <?php echo count($cards) ?>
-        </div>
-      </div>
+    <div class="card-body table-responsive">
+      <table class="table table-sm table-hover">
+        <thead class="text-left">
+          <tr>
+            <th>Device</th>
+            <th>Firmware</th>
+            <th>PCIe Address</th>
+            <th>NUMA</th>
+          </tr>
+        </thead>
+        <tbody>
+<?php foreach ($cards as $cardIdx => $card): ?>
+          <tr>
+            <td><?php echo htmlspecialchars($card['device']) ?></td>
+            <td><?php echo htmlspecialchars($card['firmware']) ?></td>
+            <td><?php echo htmlspecialchars($card['pcie_addr']) ?></td>
+            <td><?php echo htmlspecialchars($card['numa_node']) ?></td>
+          </tr>
+<?php endforeach; ?>
+        </tbody>
+      </table>
     </div>
   </div>
 
@@ -287,7 +300,7 @@ echo getNavBarHTML();
     </div>
     <div class="card-body">
 
-    <!-- Resource Utilization -->
+    <!-- VPU Usage Chart -->
 <?php
 $hasResources = false;
 foreach ($resourceSections as $key => $meta) {
@@ -295,7 +308,8 @@ foreach ($resourceSections as $key => $meta) {
 }
 if ($hasResources):
 ?>
-    <h6><i class="material-icons md-18">speed</i> Resource Utilization</h6>
+    <h6><i class="material-icons md-18">speed</i> VPU Usage</h6>
+    <div id="chart-card-<?php echo $cardIdx ?>" style="width:100%;height:<?php echo 60 + 40 * count(array_filter($resourceSections, function($k) use ($card) { return !empty($card['summary'][$k]); }, ARRAY_FILTER_USE_KEY)) ?>px;" class="mb-3"></div>
     <div class="table-responsive mb-3">
       <table class="table table-sm table-striped table-hover">
         <thead class="thead-highlight text-left">
@@ -494,4 +508,33 @@ foreach ($card['detailed']['encoder'] as $encoder):
 <?php endif; ?>
   </div><!-- content -->
 </div>
+<?php
+// Pass chart data to JS
+if ($hasData):
+  $chartData = [];
+  foreach ($cards as $cardIdx => $card) {
+    $resources = [];
+    foreach ($resourceSections as $key => $meta) {
+      if (empty($card['summary'][$key])) continue;
+      $entry = $card['summary'][$key][0];
+      $totalMem = intval($entry['MEM'] ?? 0) + intval($entry['CRITICAL_MEM'] ?? 0) + intval($entry['SHARE_MEM'] ?? 0);
+      $resources[] = [
+        'label' => $meta['label'],
+        'load' => intval($entry['LOAD'] ?? 0),
+        'mem' => $totalMem > 0 ? intval($entry['MEM'] ?? 0) : 0,
+      ];
+    }
+    if (!empty($resources)) {
+      $chartData[] = [
+        'id' => "chart-card-{$cardIdx}",
+        'resources' => $resources,
+      ];
+    }
+  }
+?>
+<?php echo output_script_if_exists(array('assets/echarts-6.0.0/echarts.min.js'), false) ?>
+<script nonce="<?php echo $cspNonce ?>">
+var quadraChartData = <?php echo json_encode($chartData) ?>;
+</script>
+<?php endif; ?>
 <?php xhtmlFooter() ?>
