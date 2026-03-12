@@ -13,6 +13,13 @@ function initPage() {
     evt.preventDefault();
     window.location.reload(true);
   });
+
+  // Auto-refresh page
+  if (quadraRefreshInterval > 0) {
+    setInterval(function() {
+      window.location.reload(true);
+    }, quadraRefreshInterval);
+  }
 }
 
 $j(document).ready(initPage);
