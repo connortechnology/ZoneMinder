@@ -224,6 +224,7 @@ xhtmlHeaders(__FILE__, $monitor->Name().' - '.translate('Feed'));
 getBodyTopHTML();
 echo getNavBarHTML() ?>
 <div id="page">
+<?php echo getPageHeaderHTML() ?>
   <div id="header">
 <?php
     $filter_inline = defined('ZM_WEB_FILTER_SETTINGS_POSITION') && ZM_WEB_FILTER_SETTINGS_POSITION == 'inline';

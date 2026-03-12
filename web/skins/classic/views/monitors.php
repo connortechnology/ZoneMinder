@@ -44,7 +44,7 @@ echo getNavBarHTML();
 
 ?>
   <div id="page">
-    <h2 class="pt-2"><?php echo translate('Monitors') ?></h2>
+<?php echo getPageHeaderHTML() ?>
     <div id="content">
       <div class="Monitors">
         <div class="Instructions">

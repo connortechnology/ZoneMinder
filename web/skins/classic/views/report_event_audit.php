@@ -119,6 +119,7 @@ getBodyTopHTML();
 echo $navbar;
 ?>
 <div id="page">
+<?php echo getPageHeaderHTML() ?>
   <div id="content">
     <form name="monitorForm" method="post" action="?view=<?php echo $view ?>">
       <div class="filterBar">

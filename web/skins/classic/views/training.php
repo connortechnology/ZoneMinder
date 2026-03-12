@@ -34,6 +34,7 @@ xhtmlHeaders(__FILE__, translate('ObjectTraining').' - '.$Event->Id());
 getBodyTopHTML();
 ?>
   <div id="page">
+<?php echo getPageHeaderHTML() ?>
     <?php echo getNavBarHTML() ?>
     <div id="content">
 

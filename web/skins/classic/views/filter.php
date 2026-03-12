@@ -145,6 +145,7 @@ echo getBodyTopHTML();
 echo $navbar = getNavBarHTML();
 ?>
   <div id="page">
+<?php echo getPageHeaderHTML() ?>
     <div id="content">
       <form name="selectForm" id="selectForm" method="get" action="?">
         <input type="hidden" name="view" value="filter"/>

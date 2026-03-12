@@ -35,6 +35,7 @@ getBodyTopHTML();
 ?>
   <?php echo getNavBarHTML() ?>
   <div id="page">
+<?php echo getPageHeaderHTML() ?>
     <div id="content">
       <!-- Toolbar button placement and styling handled by bootstrap-tables -->
       <div id="toolbar">

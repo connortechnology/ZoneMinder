@@ -155,6 +155,7 @@ xhtmlHeaders(__FILE__, translate('Console'));
 getBodyTopHTML();
 echo $navbar ?>
 <div id="page">
+<?php echo getPageHeaderHTML() ?>
   <div id="content">
 
     <div id="fbpanel" class="filterBar<?php echo (defined('ZM_WEB_FILTER_SETTINGS_POSITION') && ZM_WEB_FILTER_SETTINGS_POSITION == 'inline') ? '' : ' hidden-shift' ?>">

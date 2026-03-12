@@ -188,6 +188,133 @@ function getBodyTopHTML() {
   }
 } // end function getBodyTopHTML
 
+function getPageHelpData() {
+  return array(
+    'console' => array(
+      'title' => 'Monitors',
+      'help' => 'Monitor dashboard showing status, events, and resource usage. Use the column picker to show/hide columns. Click a monitor name to view its live feed.',
+    ),
+    'montage' => array(
+      'title' => 'Montage',
+      'help' => 'Live grid view of all monitors. Drag to rearrange, use the layout selector to change grid size, and resize handles to adjust individual feeds.',
+    ),
+    'montagereview' => array(
+      'title' => 'Montage Review',
+      'help' => 'Review recorded footage from multiple monitors simultaneously. Use the timeline to scrub through events and the speed controls for playback.',
+    ),
+    'events' => array(
+      'title' => 'Events',
+      'help' => 'Browse and search recorded events. Use filters to narrow by monitor, date, or severity. Click an event to play it back.',
+    ),
+    'event' => array(
+      'title' => 'Event',
+      'help' => 'Event playback and review. Use the timeline to navigate frames, view detection zones, and export or download video.',
+    ),
+    'watch' => array(
+      'title' => 'Live Feed',
+      'help' => 'Live view of a single monitor with PTZ controls (if configured), event list, and zone overlay.',
+    ),
+    'cycle' => array(
+      'title' => 'Cycle',
+      'help' => 'Automatically cycles through monitor live feeds at a configurable interval.',
+    ),
+    'options' => array(
+      'title' => 'Options',
+      'help' => 'System configuration. Changes to most settings take effect immediately. Daemon-related settings require a restart of the affected service.',
+    ),
+    'log' => array(
+      'title' => 'System Log',
+      'help' => 'Live view of ZoneMinder system logs. Filter by component, level, or search text. Useful for diagnosing camera connection or recording issues.',
+    ),
+    'filter' => array(
+      'title' => 'Event Filter',
+      'help' => 'Create and manage event filters for automated actions like email alerts, archiving, or deletion. Filters run periodically via zmfilter.',
+    ),
+    'groups' => array(
+      'title' => 'Groups',
+      'help' => 'Organize monitors into groups for easier management. Groups can be nested and are used to filter monitors in the console and montage views.',
+    ),
+    'zones' => array(
+      'title' => 'Zones',
+      'help' => 'Detection zones for a monitor. Each zone defines a region and sensitivity for motion detection. Multiple zones allow different sensitivity in different areas.',
+    ),
+    'zone' => array(
+      'title' => 'Zone',
+      'help' => 'Edit a detection zone. Draw the polygon boundary, set the alarm thresholds, and choose the zone type (Active, Inclusive, Exclusive, Preclusive, Inactive).',
+    ),
+    'monitor' => array(
+      'title' => 'Monitor',
+      'help' => 'Configure a monitor\'s source, function, recording, and analysis settings. The tabs organize general, source, recording, and other settings.',
+    ),
+    'snapshots' => array(
+      'title' => 'Snapshots',
+      'help' => 'View saved snapshots. A snapshot captures the current state of multiple monitors and their events for later review.',
+    ),
+    'devices' => array(
+      'title' => 'Devices',
+      'help' => 'Manage X10 and other devices that can be controlled through ZoneMinder.',
+    ),
+    'map' => array(
+      'title' => 'Map',
+      'help' => 'Geographic view of monitors plotted on a map. Requires monitors to have latitude/longitude set in their configuration.',
+    ),
+    'reports' => array(
+      'title' => 'Reports',
+      'help' => 'Generate reports on system activity, event statistics, and monitor performance over time.',
+    ),
+    'report_event_audit' => array(
+      'title' => 'Event Audit Report',
+      'help' => 'Audit report showing event history across monitors. Useful for verifying recording coverage and identifying gaps.',
+    ),
+    'quadra' => array(
+      'title' => 'Quadra Status',
+      'help' => 'NetInt Quadra hardware status showing decoder/encoder resource utilization, active sessions, and device health.',
+    ),
+    'intelgpu' => array(
+      'title' => 'Intel GPU Status',
+      'help' => 'Intel GPU utilization showing video engine, render engine, and memory usage for hardware-accelerated encoding/decoding.',
+    ),
+    'add_monitors' => array(
+      'title' => 'Add Monitors',
+      'help' => 'Scan the network for cameras using ONVIF discovery or ARP scanning, then add them as monitors.',
+    ),
+    'export' => array(
+      'title' => 'Export',
+      'help' => 'Export events as video files or image archives for download or archival.',
+    ),
+    'timeline' => array(
+      'title' => 'Timeline',
+      'help' => 'Visual timeline of events across monitors. Click and drag to zoom into a time range.',
+    ),
+    'files' => array(
+      'title' => 'Files',
+      'help' => 'Browse and manage event files on disk.',
+    ),
+    'training' => array(
+      'title' => 'Object Training',
+      'help' => 'Train the object detection model by labeling objects in event frames.',
+    ),
+  );
+}
+
+function getPageHeaderHTML($viewName = null) {
+  if ($viewName === null) {
+    global $view;
+    $viewName = $view;
+  }
+  $pages = getPageHelpData();
+  if (!isset($pages[$viewName])) return '';
+
+  $page = $pages[$viewName];
+  $title = htmlspecialchars($page['title']);
+  $help = htmlspecialchars($page['help']);
+
+  return '<div class="page-header-help">'
+    .'<h2>'.$title.'</h2>'
+    .'<p class="page-help text-muted small">'.$help.'</p>'
+    .'</div>';
+}
+
 function renderMenuIcon($icon, $iconType = 'material') {
   if ($iconType == 'none') {
     return '';
@@ -393,7 +520,7 @@ function buildSidebarMenu() {
         </nav>
   ';
   return $menu;
-}
+}  // end buildSidebarMenu()
 
 function getSidebarTopHTML() {
   global $skin;

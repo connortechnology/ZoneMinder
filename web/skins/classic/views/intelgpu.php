@@ -171,7 +171,7 @@ getBodyTopHTML();
 echo getNavBarHTML();
 ?>
 <div id="page" class="container-fluid">
-  <h2><i class="material-icons md-18">memory</i> Intel GPU Status</h2>
+<?php echo getPageHeaderHTML() ?>
 
   <div id="toolbar" class="pb-2">
     <button id="backBtn" class="btn btn-normal" data-toggle="tooltip" data-placement="top" title="<?php echo translate('Back') ?>" disabled><i class="fa fa-arrow-left"></i></button>

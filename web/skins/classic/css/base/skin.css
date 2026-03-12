@@ -64,6 +64,18 @@ h2 {
     font-weight: bold;
 }
 
+.page-header-help {
+    padding: 4px 12px;
+    margin-bottom: 4px;
+}
+.page-header-help h2 {
+    margin-bottom: 0;
+}
+.page-header-help .page-help {
+    margin: 0;
+    line-height: 1.4;
+}
+
 h3 {
     font-family: inherit;
     font-size: 100%;

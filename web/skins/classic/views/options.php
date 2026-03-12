@@ -33,6 +33,8 @@ xhtmlHeaders(__FILE__, translate('Options'));
 getBodyTopHTML();
 echo getNavBarHTML();
 ?>
+<div id="page">
+<?php echo getPageHeaderHTML() ?>
   <div class="container-fluid" id="content">
     <div class="row flex-nowrap h-100">
       <nav id="sidebar">
@@ -408,4 +410,5 @@ document.addEventListener('DOMContentLoaded', function() {
       </div><!-- end #optionsContainer -->
   </div> <!-- end row -->
 </div>
+</div><!--page-->
 <?php xhtmlFooter() ?>

@@ -130,6 +130,7 @@ getBodyTopHTML();
 echo $navbar = getNavBarHTML();
 ?>
   <div id="page">
+<?php echo getPageHeaderHTML() ?>
     <div id="header">
       <div id="headerButtons">
 <?php if ( $options['mode'] == 'stream' ) { ?>

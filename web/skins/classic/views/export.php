@@ -63,6 +63,7 @@ getBodyTopHTML();
 echo getNavBarHTML();
 ?>
   <div id="page">
+<?php echo getPageHeaderHTML() ?>
       <div class="w-100 py-1">
         <div class="float-left pl-3">
           <button type="button" id="backBtn" class="btn btn-normal" data-toggle="tooltip" data-placement="top" title="<?php echo translate('Back') ?>" disabled><i class="fa fa-arrow-left"></i></button>

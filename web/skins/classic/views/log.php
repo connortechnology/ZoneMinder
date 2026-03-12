@@ -44,6 +44,8 @@ if (isset($_COOKIE['zmBrowserSizes'])) {
 xhtmlHeaders(__FILE__, translate('SystemLog'));
 getBodyTopHTML();
   echo getNavBarHTML() ?>
+<div id="page">
+<?php echo getPageHeaderHTML() ?>
   <div id="content" class="px-3 table-responsive-sm">
 
     <div id="logSummary" class="text-center">
@@ -178,4 +180,5 @@ echo '</span>';
     </table>
   </div><!--logstable-->
 </div><!--content-->
+</div><!--page-->
 <?php xhtmlFooter() ?>

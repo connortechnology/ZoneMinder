@@ -21,6 +21,8 @@ xhtmlHeaders(__FILE__, translate('Console'));
 getBodyTopHTML();
 $navbar = getNavBarHTML();
 echo $navbar ?>
+<div id="page">
+<?php echo getPageHeaderHTML() ?>
   <div id="content">
     <div id="statistics">
     <div class="progress">
@@ -36,6 +38,7 @@ echo $navbar ?>
     </div>
     <div id="map-template"></div>
     <script src="js/Map.js"></script>
+</div><!--page-->
 <?php
 echo output_script_if_exists(array('js/leaflet/leaflet.js'), false);
 echo output_link_if_exists(array('js/leaflet/leaflet.css'), false);

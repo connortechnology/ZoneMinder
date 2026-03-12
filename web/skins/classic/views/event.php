@@ -178,6 +178,7 @@ xhtmlHeaders(__FILE__, translate('Event').' '.$Event->Id());
 getBodyTopHTML();
 ?>
   <div id="page">
+<?php echo getPageHeaderHTML() ?>
     <?php echo getNavBarHTML() ?>
     <div id="content">
 <?php 

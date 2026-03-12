@@ -30,6 +30,7 @@ xhtmlHeaders(__FILE__, translate('Add Monitors'));
 getBodyTopHTML();
 ?>
   <div id="page">
+<?php echo getPageHeaderHTML() ?>
     <?php echo getNavBarHTML(); ?>
     <div id="content">
       <form name="contentForm" id="contentForm" method="post" action="?">

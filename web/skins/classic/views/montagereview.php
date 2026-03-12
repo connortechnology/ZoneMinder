@@ -275,6 +275,7 @@ xhtmlHeaders(__FILE__, translate('MontageReview') );
 getBodyTopHTML();
 ?>
 <div id="page">
+<?php echo getPageHeaderHTML() ?>
   <?php echo getNavBarHTML() ?>
   <div id="content">
   <form id="montagereview_form" action="?" method="get">

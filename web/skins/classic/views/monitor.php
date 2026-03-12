@@ -366,6 +366,7 @@ getBodyTopHTML();
 echo getNavBarHTML();
 ?>
 <div id="page">
+<?php echo getPageHeaderHTML() ?>
   <div id="content" class="row flex-nowrap">
     <nav>  <!-- BEGIN PILL LIST -->
       <ul class="nav nav-pills" id="pills-tab" role="tablist" aria-orientation="vertical">

@@ -247,6 +247,7 @@ getBodyTopHTML();
 echo getNavBarHTML();
 ?>
   <div id="page">
+<?php echo getPageHeaderHTML() ?>
   <div id="header"<?php echo (isset($_REQUEST['header']) and ($_REQUEST['header']=='0' or $_REQUEST['header']=='hidden')) ? ' style="display:none;"' : '' ?>>
 <?php
     $filter_inline = defined('ZM_WEB_FILTER_SETTINGS_POSITION') && ZM_WEB_FILTER_SETTINGS_POSITION == 'inline';

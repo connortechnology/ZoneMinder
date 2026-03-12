@@ -71,6 +71,7 @@ getBodyTopHTML();
 echo getNavBarHTML();
 ?>
   <div id="page">
+<?php echo getPageHeaderHTML() ?>
     <div id="content">
       <form id="filesForm" name="filesForm" method="post" action="?view=files&path=<?php echo urlencode($path); ?>">
         <div id="toolbar">

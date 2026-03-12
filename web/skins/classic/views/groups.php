@@ -45,6 +45,7 @@ xhtmlHeaders(__FILE__, translate('Groups'));
 getBodyTopHTML();
 ?>
   <div id="page">
+<?php echo getPageHeaderHTML() ?>
     <?php echo $navbar = getNavBarHTML(); ?>
     <div id="content" class="row">
       <div id="optionsContainer" class="col">
