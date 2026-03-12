@@ -192,19 +192,19 @@ function getPageHelpData() {
   return array(
     'console' => array(
       'title' => 'Monitors',
-      'help' => 'Monitor dashboard showing status, events, and resource usage. Use the column picker to show/hide columns. Click a monitor name to view its live feed.',
+      'help' => 'Dashboard showing status, events, and resource usage. Use the column picker to show/hide columns. Click a stream name to view its live feed.',
     ),
     'montage' => array(
       'title' => 'Montage',
-      'help' => 'Live grid view of all monitors. Drag to rearrange, use the layout selector to change grid size, and resize handles to adjust individual feeds.',
+      'help' => 'Live grid view of all streams. Drag to rearrange, use the layout selector to change grid size, and resize handles to adjust individual feeds.',
     ),
     'montagereview' => array(
       'title' => 'Montage Review',
-      'help' => 'Review recorded footage from multiple monitors simultaneously. Use the timeline to scrub through events and the speed controls for playback.',
+      'help' => 'Review recorded footage from multiple streams simultaneously. Use the timeline to scrub through events and the speed controls for playback.',
     ),
     'events' => array(
       'title' => 'Events',
-      'help' => 'Browse and search recorded events. Use filters to narrow by monitor, date, or severity. Click an event to play it back.',
+      'help' => 'Browse and search recorded events. Use filters to narrow by stream, date, or severity. Click an event to play it back.',
     ),
     'event' => array(
       'title' => 'Event',
@@ -212,11 +212,11 @@ function getPageHelpData() {
     ),
     'watch' => array(
       'title' => 'Live Feed',
-      'help' => 'Live view of a single monitor with PTZ controls (if configured), event list, and zone overlay.',
+      'help' => 'Live view of a single stream with PTZ controls (if configured), event list, and zone overlay.',
     ),
     'cycle' => array(
       'title' => 'Cycle',
-      'help' => 'Automatically cycles through monitor live feeds at a configurable interval.',
+      'help' => 'Automatically cycles through stream live feeds at a configurable interval.',
     ),
     'options' => array(
       'title' => 'Options',
@@ -224,7 +224,7 @@ function getPageHelpData() {
     ),
     'log' => array(
       'title' => 'System Log',
-      'help' => 'Live view of ZoneMinder system logs. Filter by component, level, or search text. Useful for diagnosing camera connection or recording issues.',
+      'help' => 'Live view of system logs. Filter by component, level, or search text. Useful for diagnosing camera connection or recording issues.',
     ),
     'filter' => array(
       'title' => 'Event Filter',
@@ -232,11 +232,11 @@ function getPageHelpData() {
     ),
     'groups' => array(
       'title' => 'Groups',
-      'help' => 'Organize monitors into groups for easier management. Groups can be nested and are used to filter monitors in the console and montage views.',
+      'help' => 'Organize streams into groups for easier management. Groups can be nested and are used to filter streams in various views.',
     ),
     'zones' => array(
       'title' => 'Zones',
-      'help' => 'Detection zones for a monitor. Each zone defines a region and sensitivity for motion detection. Multiple zones allow different sensitivity in different areas.',
+      'help' => 'Detection zones for streams. Each zone defines a region and sensitivity for motion detection. Multiple zones allow different sensitivity in different areas.',
     ),
     'zone' => array(
       'title' => 'Zone',
