@@ -274,7 +274,7 @@ echo $navbar ?>
 <?php if ( count($Servers) ) { ?>
             <th data-sortable="true" data-field="Server" class="colServer"><?php echo translate('Server') ?></th>
 <?php } ?>
-            <th data-sortable="true" data-field="Source" class="colSource"><?php echo translate('Source') ?></th>
+            <th data-sortable="true" data-field="Source" class="colSource"><?php echo translate('Input URL') ?></th>
             <th data-sortable="true" data-visible="false" data-field="Output" class="colOutput"><?php echo translate('Output') ?></th>
 <?php if ( $show_storage_areas ) { ?>
             <th data-sortable="true" data-field="Storage" class="colStorage"><?php echo translate('Storage') ?></th>
