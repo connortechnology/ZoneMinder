@@ -131,7 +131,8 @@ function parseQuadraJsonOutput($args) {
       $json = fixQuadraJson($block[0]);
       $parsed = json_decode($json, true);
       if ($parsed !== null && isset($parsed[$key])) {
-        $result[$key] = $parsed[$key];
+        if (!isset($result[$key])) $result[$key] = [];
+        $result[$key] = array_merge($result[$key], $parsed[$key]);
         $sectionCount++;
       } else {
         $jsonError = json_last_error_msg();
@@ -167,15 +168,6 @@ function formatBitrate($bps) {
 $quadraSummary = parseQuadraJsonOutput('-o json');
 $quadraDetailed = parseQuadraJsonOutput('-d -o json');
 
-// Extract device info from the first available section entry
-$deviceInfo = null;
-foreach (['decoder', 'encoder', 'scaler', 'AI', 'uploader', 'nvme'] as $sect) {
-  if (!empty($quadraSummary[$sect][0])) {
-    $deviceInfo = $quadraSummary[$sect][0];
-    break;
-  }
-}
-
 $resourceSections = [
   'decoder'  => ['label' => 'Decoder',  'icon' => 'input'],
   'encoder'  => ['label' => 'Encoder',  'icon' => 'output'],
@@ -189,6 +181,53 @@ $infraSections = [
   'tp'   => ['label' => 'Transport', 'icon' => 'swap_horiz'],
   'pcie' => ['label' => 'PCIe',      'icon' => 'settings_ethernet'],
 ];
+
+// Build per-card data indexed by card INDEX
+// Each entry in the summary/detailed arrays has an INDEX field identifying the card
+$cards = [];
+$allSections = array_merge(array_keys($resourceSections), array_keys($infraSections));
+foreach ($allSections as $sect) {
+  if (empty($quadraSummary[$sect])) continue;
+  foreach ($quadraSummary[$sect] as $entry) {
+    $idx = $entry['INDEX'] ?? 0;
+    if (!isset($cards[$idx])) {
+      $cards[$idx] = [
+        'device' => $entry['DEVICE'] ?? 'N/A',
+        'pcie_addr' => $entry['PCIE_ADDR'] ?? 'N/A',
+        'numa_node' => $entry['NUMA_NODE'] ?? '?',
+        'firmware' => $entry['FR'] ?? ($quadraSummary['version'] ?? 'N/A'),
+        'summary' => [],
+        'detailed' => [],
+      ];
+    }
+    if (!isset($cards[$idx]['summary'][$sect])) $cards[$idx]['summary'][$sect] = [];
+    $cards[$idx]['summary'][$sect][] = $entry;
+  }
+}
+// Build DEVICE -> card index lookup from summary data
+$deviceToCard = [];
+foreach ($cards as $idx => $card) {
+  $deviceToCard[$card['device']] = $idx;
+}
+// Assign detailed session data to cards by matching DEVICE field.
+// In detailed output INDEX is the session number, not the card index.
+foreach (['decoder', 'encoder'] as $sect) {
+  if (empty($quadraDetailed[$sect])) continue;
+  foreach ($quadraDetailed[$sect] as $entry) {
+    $dev = $entry['DEVICE'] ?? '';
+    if (isset($deviceToCard[$dev])) {
+      $idx = $deviceToCard[$dev];
+    } else {
+      // Fall back to first card if DEVICE not found
+      $idx = array_key_first($cards);
+      if ($idx === null) continue;
+    }
+    if (!isset($cards[$idx]['detailed'][$sect])) $cards[$idx]['detailed'][$sect] = [];
+    $cards[$idx]['detailed'][$sect][] = $entry;
+  }
+}
+ksort($cards);
+$hasData = !empty($cards);
 
 xhtmlHeaders(__FILE__, 'Quadra Status');
 getBodyTopHTML();
@@ -208,55 +247,56 @@ echo getNavBarHTML();
     <strong>Error running ni_rsrc_mon:</strong><br>
     <?php echo htmlspecialchars($quadraSummary['error']) ?>
   </div>
-<?php elseif (!$deviceInfo && empty($quadraSummary['decoder']) && empty($quadraSummary['encoder'])): ?>
+<?php elseif (!$hasData): ?>
   <div class="alert alert-warning">
     <strong>No data:</strong> ni_rsrc_mon returned no resource data.
     Check that a NetInt Quadra device is installed and that the web server user has permission to access it.
   </div>
 <?php else: ?>
 
-  <!-- Device Information -->
+  <!-- System-wide info -->
   <div class="card mb-3">
     <div class="card-header">
-      <i class="material-icons md-18">info</i> Device Information
+      <i class="material-icons md-18">info</i> System Information
     </div>
     <div class="card-body">
       <div class="row">
         <div class="col-md-3">
           <strong>Timestamp:</strong> <?php echo htmlspecialchars($quadraSummary['timestamp'] ?: 'N/A') ?>
         </div>
-        <div class="col-md-2">
+        <div class="col-md-3">
           <strong>Uptime:</strong> <?php echo htmlspecialchars($quadraSummary['uptime'] ?: 'N/A') ?>
         </div>
-        <div class="col-md-2">
-          <strong>Firmware:</strong> v<?php echo htmlspecialchars($quadraSummary['version'] ?: 'N/A') ?>
-        </div>
-<?php if ($deviceInfo): ?>
-        <div class="col-md-2">
-          <strong>Device:</strong> <?php echo htmlspecialchars($deviceInfo['DEVICE'] ?? 'N/A') ?>
-        </div>
         <div class="col-md-3">
-          <strong>PCIe:</strong> <?php echo htmlspecialchars($deviceInfo['PCIE_ADDR'] ?? 'N/A') ?>
-          (NUMA <?php echo htmlspecialchars($deviceInfo['NUMA_NODE'] ?? '?') ?>)
+          <strong>Cards detected:</strong> <?php echo count($cards) ?>
         </div>
-<?php endif; ?>
       </div>
     </div>
   </div>
 
-  <!-- Resource Utilization -->
+<?php foreach ($cards as $cardIdx => $card): ?>
+  <!-- Card <?php echo $cardIdx ?> -->
+  <div class="card mb-3">
+    <div class="card-header">
+      <i class="material-icons md-18">memory</i>
+      <strong>Card <?php echo $cardIdx ?></strong>
+      &mdash; <?php echo htmlspecialchars($card['device']) ?>
+      @ <?php echo htmlspecialchars($card['pcie_addr']) ?>
+      (NUMA <?php echo htmlspecialchars($card['numa_node']) ?>)
+      &mdash; FW v<?php echo htmlspecialchars($card['firmware']) ?>
+    </div>
+    <div class="card-body">
+
+    <!-- Resource Utilization -->
 <?php
 $hasResources = false;
 foreach ($resourceSections as $key => $meta) {
-  if (!empty($quadraSummary[$key])) { $hasResources = true; break; }
+  if (!empty($card['summary'][$key])) { $hasResources = true; break; }
 }
 if ($hasResources):
 ?>
-  <div class="card mb-3">
-    <div class="card-header">
-      <i class="material-icons md-18">speed</i> Resource Utilization
-    </div>
-    <div class="card-body table-responsive">
+    <h6><i class="material-icons md-18">speed</i> Resource Utilization</h6>
+    <div class="table-responsive mb-3">
       <table class="table table-sm table-striped table-hover">
         <thead class="thead-highlight text-left">
           <tr>
@@ -272,8 +312,8 @@ if ($hasResources):
         </thead>
         <tbody>
 <?php foreach ($resourceSections as $key => $meta):
-  if (empty($quadraSummary[$key])) continue;
-  foreach ($quadraSummary[$key] as $entry):
+  if (empty($card['summary'][$key])) continue;
+  foreach ($card['summary'][$key] as $entry):
 ?>
           <tr>
             <td><i class="material-icons md-18"><?php echo $meta['icon'] ?></i> <?php echo $meta['label'] ?></td>
@@ -289,22 +329,18 @@ if ($hasResources):
         </tbody>
       </table>
     </div>
-  </div>
 <?php endif; ?>
 
-  <!-- Infrastructure -->
+    <!-- Infrastructure -->
 <?php
 $hasInfra = false;
 foreach ($infraSections as $key => $meta) {
-  if (!empty($quadraSummary[$key])) { $hasInfra = true; break; }
+  if (!empty($card['summary'][$key])) { $hasInfra = true; break; }
 }
 if ($hasInfra):
 ?>
-  <div class="card mb-3">
-    <div class="card-header">
-      <i class="material-icons md-18">developer_board</i> Infrastructure
-    </div>
-    <div class="card-body table-responsive">
+    <h6><i class="material-icons md-18">developer_board</i> Infrastructure</h6>
+    <div class="table-responsive mb-3">
       <table class="table table-sm table-striped table-hover">
         <thead class="thead-highlight text-left">
           <tr>
@@ -316,8 +352,8 @@ if ($hasInfra):
         </thead>
         <tbody>
 <?php foreach ($infraSections as $key => $meta):
-  if (empty($quadraSummary[$key])) continue;
-  foreach ($quadraSummary[$key] as $entry):
+  if (empty($card['summary'][$key])) continue;
+  foreach ($card['summary'][$key] as $entry):
 ?>
           <tr>
             <td><i class="material-icons md-18"><?php echo $meta['icon'] ?></i> <?php echo $meta['label'] ?></td>
@@ -329,16 +365,12 @@ if ($hasInfra):
         </tbody>
       </table>
     </div>
-  </div>
 <?php endif; ?>
 
-  <!-- Active Decoder Sessions -->
-<?php if (!empty($quadraDetailed['decoder'])): ?>
-  <div class="card mb-3">
-    <div class="card-header">
-      <i class="material-icons md-18">input</i> Active Decoder Sessions (<?php echo count($quadraDetailed['decoder']) ?>)
-    </div>
-    <div class="card-body table-responsive">
+    <!-- Active Decoder Sessions -->
+<?php if (!empty($card['detailed']['decoder'])): ?>
+    <h6><i class="material-icons md-18">input</i> Active Decoder Sessions (<?php echo count($card['detailed']['decoder']) ?>)</h6>
+    <div class="table-responsive mb-3">
       <table class="table table-sm table-striped table-hover">
         <thead class="thead-highlight text-left">
           <tr>
@@ -357,7 +389,7 @@ if ($hasInfra):
 $totalDecoderFps = 0;
 $totalDecoderInFrames = 0;
 $totalDecoderOutFrames = 0;
-foreach ($quadraDetailed['decoder'] as $decoder):
+foreach ($card['detailed']['decoder'] as $decoder):
   $totalDecoderFps += floatval($decoder['FrameRate'] ?? 0);
   $totalDecoderInFrames += intval($decoder['InFrame'] ?? 0);
   $totalDecoderOutFrames += intval($decoder['OutFrame'] ?? 0);
@@ -387,16 +419,12 @@ foreach ($quadraDetailed['decoder'] as $decoder):
         </tfoot>
       </table>
     </div>
-  </div>
 <?php endif; ?>
 
-  <!-- Active Encoder Sessions -->
-<?php if (!empty($quadraDetailed['encoder'])): ?>
-  <div class="card mb-3">
-    <div class="card-header">
-      <i class="material-icons md-18">output</i> Active Encoder Sessions (<?php echo count($quadraDetailed['encoder']) ?>)
-    </div>
-    <div class="card-body table-responsive">
+    <!-- Active Encoder Sessions -->
+<?php if (!empty($card['detailed']['encoder'])): ?>
+    <h6><i class="material-icons md-18">output</i> Active Encoder Sessions (<?php echo count($card['detailed']['encoder']) ?>)</h6>
+    <div class="table-responsive mb-3">
       <table class="table table-sm table-striped table-hover">
         <thead class="thead-highlight text-left">
           <tr>
@@ -420,7 +448,7 @@ $totalEncoderBitrate = 0;
 $totalEncoderAvgBitrate = 0;
 $totalEncoderInFrames = 0;
 $totalEncoderOutFrames = 0;
-foreach ($quadraDetailed['encoder'] as $encoder):
+foreach ($card['detailed']['encoder'] as $encoder):
   $totalEncoderFps += floatval($encoder['FrameRate'] ?? 0);
   $totalEncoderBitrate += intval($encoder['BR'] ?? 0);
   $totalEncoderAvgBitrate += intval($encoder['AvgBR'] ?? 0);
@@ -457,8 +485,11 @@ foreach ($quadraDetailed['encoder'] as $encoder):
         </tfoot>
       </table>
     </div>
-  </div>
 <?php endif; ?>
+
+    </div><!-- card-body -->
+  </div><!-- card -->
+<?php endforeach; ?>
 
 <?php endif; ?>
   </div><!-- content -->
