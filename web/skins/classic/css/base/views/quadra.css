@@ -1,0 +1,29 @@
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap');
+
+/* Quadra view uses Roboto to match the NetInt dashboard style */
+#page.quadra-page {
+  font-family: 'Roboto', 'Open Sans', Verdana, Arial, Helvetica, sans-serif;
+}
+
+#page.quadra-page .card-header {
+  font-weight: 500;
+  font-size: 14px;
+}
+
+#page.quadra-page .card-header strong {
+  font-weight: 700;
+}
+
+#page.quadra-page h6 {
+  font-weight: 500;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+#page.quadra-page .table {
+  font-size: 12px;
+}
+
+#page.quadra-page .table th {
+  font-weight: 500;
+}

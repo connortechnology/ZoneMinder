@@ -228,12 +228,59 @@ foreach (['decoder', 'encoder'] as $sect) {
 }
 ksort($cards);
 $hasData = !empty($cards);
+$multiCard = count($cards) > 1;
+
+// Gather Host Usage data (CPU, RAM, Storage)
+$hostUsage = [];
+
+// CPU
+global $thisServer;
+if ($thisServer) {
+  $thisServer->ReadStats();
+  $cpuPercent = round($thisServer->CpuUsagePercent, 1);
+  $cpuThreads = getcpus();
+  $hostUsage[] = [
+    'label' => 'CPU',
+    'value' => $cpuPercent,
+    'info' => $cpuThreads.' Threads',
+  ];
+}
+
+// RAM
+if (file_exists('/proc/meminfo')) {
+  $contents = file_get_contents('/proc/meminfo');
+  preg_match_all('/(\w+):\s+(\d+)\s/', $contents, $matches);
+  $meminfo = array_combine($matches[1], array_map(function($v){return 1024*$v;}, $matches[2]));
+  if (isset($meminfo['MemTotal']) && $meminfo['MemTotal'] > 0) {
+    $mem_used = $meminfo['MemTotal'] - $meminfo['MemFree'] - $meminfo['Buffers'] - $meminfo['Cached'];
+    $mem_used_percent = round(100 * $mem_used / $meminfo['MemTotal'], 2);
+    $mem_total_human = human_filesize($meminfo['MemTotal'], 2);
+    $hostUsage[] = [
+      'label' => 'RAM',
+      'value' => $mem_used_percent,
+      'info' => $mem_total_human,
+    ];
+  }
+}
+
+// Storage areas
+$storage_areas = ZM\Storage::find(['Enabled' => true]);
+foreach ($storage_areas as $area) {
+  $disk_total = $area->disk_total_space();
+  if ($disk_total > 0) {
+    $hostUsage[] = [
+      'label' => 'Disk ('.$area->Name().')',
+      'value' => $area->disk_usage_percent(),
+      'info' => human_filesize($disk_total, 1),
+    ];
+  }
+}
 
 xhtmlHeaders(__FILE__, 'Quadra Status');
 getBodyTopHTML();
 echo getNavBarHTML();
 ?>
-<div id="page" class="container-fluid">
+<div id="page" class="container-fluid quadra-page">
 <?php echo getPageHeaderHTML() ?>
 
   <div id="toolbar" class="pb-2">
@@ -254,14 +301,48 @@ echo getNavBarHTML();
   </div>
 <?php else: ?>
 
+  <!-- Top charts: VPU Usage (left) + Host Usage (right) -->
+<?php
+// Count total VPU resource rows across all cards for chart height
+$vpuRowCount = 0;
+foreach ($cards as $c) {
+  foreach ($resourceSections as $k => $m) {
+    if (!empty($c['summary'][$k])) $vpuRowCount++;
+  }
+}
+?>
+  <div class="row mb-3">
+    <div class="col-md-6">
+      <div class="card h-100">
+        <div class="card-header"><strong>VPU Usage</strong>
+          <span class="text-muted small ml-2">
+            <?php echo htmlspecialchars($quadraSummary['timestamp'] ?: '') ?>
+            <?php if ($quadraSummary['uptime']) echo '&mdash; up '.htmlspecialchars($quadraSummary['uptime']) ?>
+          </span>
+        </div>
+        <div class="card-body">
+          <div id="chart-vpu-usage" style="width:100%;height:<?php echo max(150, 50 + 35 * $vpuRowCount) ?>px;"></div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="card h-100">
+        <div class="card-header"><strong>Host Usage</strong></div>
+        <div class="card-body">
+<?php if (!empty($hostUsage)): ?>
+          <div id="chart-host-usage" style="width:100%;height:<?php echo max(150, 50 + 35 * count($hostUsage)) ?>px;"></div>
+<?php else: ?>
+          <span class="text-muted">No host data available.</span>
+<?php endif; ?>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- VPU Devices -->
   <div class="card mb-3">
     <div class="card-header">
       <i class="material-icons md-18">memory</i> VPU Devices
-      <span class="text-muted small ml-2">
-        <?php echo htmlspecialchars($quadraSummary['timestamp'] ?: '') ?>
-        <?php if ($quadraSummary['uptime']) echo '&mdash; up '.htmlspecialchars($quadraSummary['uptime']) ?>
-      </span>
     </div>
     <div class="card-body table-responsive">
       <table class="table table-sm table-hover">
@@ -300,7 +381,7 @@ echo getNavBarHTML();
     </div>
     <div class="card-body">
 
-    <!-- VPU Usage Chart -->
+    <!-- Resource Table -->
 <?php
 $hasResources = false;
 foreach ($resourceSections as $key => $meta) {
@@ -308,8 +389,7 @@ foreach ($resourceSections as $key => $meta) {
 }
 if ($hasResources):
 ?>
-    <h6><i class="material-icons md-18">speed</i> VPU Usage</h6>
-    <div id="chart-card-<?php echo $cardIdx ?>" style="width:100%;height:<?php echo 60 + 40 * count(array_filter($resourceSections, function($k) use ($card) { return !empty($card['summary'][$k]); }, ARRAY_FILTER_USE_KEY)) ?>px;" class="mb-3"></div>
+    <h6><i class="material-icons md-18">speed</i> Resources</h6>
     <div class="table-responsive mb-3">
       <table class="table table-sm table-striped table-hover">
         <thead class="thead-highlight text-left">
@@ -506,35 +586,34 @@ foreach ($card['detailed']['encoder'] as $encoder):
 <?php endforeach; ?>
 
 <?php endif; ?>
+
   </div><!-- content -->
 </div>
 <?php
-// Pass chart data to JS
-if ($hasData):
-  $chartData = [];
+// Build combined VPU Usage chart data (all cards in one chart)
+$vpuChartData = [];
+if ($hasData) {
   foreach ($cards as $cardIdx => $card) {
-    $resources = [];
     foreach ($resourceSections as $key => $meta) {
       if (empty($card['summary'][$key])) continue;
       $entry = $card['summary'][$key][0];
       $totalMem = intval($entry['MEM'] ?? 0) + intval($entry['CRITICAL_MEM'] ?? 0) + intval($entry['SHARE_MEM'] ?? 0);
-      $resources[] = [
-        'label' => $meta['label'],
+      $label = $multiCard ? 'Card '.$cardIdx.' '.$meta['label'] : $meta['label'];
+      $vpuChartData[] = [
+        'label' => $label,
         'load' => intval($entry['LOAD'] ?? 0),
         'mem' => $totalMem > 0 ? intval($entry['MEM'] ?? 0) : 0,
-      ];
-    }
-    if (!empty($resources)) {
-      $chartData[] = [
-        'id' => "chart-card-{$cardIdx}",
-        'resources' => $resources,
+        'card' => $cardIdx,
       ];
     }
   }
+}
+if (!empty($vpuChartData) || !empty($hostUsage)):
 ?>
 <?php echo output_script_if_exists(array('assets/echarts-6.0.0/echarts.min.js'), false) ?>
 <script nonce="<?php echo $cspNonce ?>">
-var quadraChartData = <?php echo json_encode($chartData) ?>;
+var quadraVpuData = <?php echo json_encode($vpuChartData) ?>;
+var quadraHostUsage = <?php echo json_encode($hostUsage) ?>;
 </script>
 <?php endif; ?>
 <?php xhtmlFooter() ?>
