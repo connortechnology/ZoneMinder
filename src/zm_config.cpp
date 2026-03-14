@@ -240,9 +240,9 @@ bool ConfigItem::BooleanValue() const {
     ConvertValue();
 
   if ( cfg_type_ != CFG_BOOLEAN ) {
-    Error("Attempt to fetch boolean value for %s, actual type is %s. Try running 'zmupdate.pl -f' to reload config.",
-          name_.c_str(), type_.c_str());
-    exit(-1);
+    Warning("Attempt to fetch boolean value for %s, actual type is %s. Try running 'zmupdate.pl -f' to reload config.",
+            name_.c_str(), type_.c_str());
+    return !value_.empty() && value_ != "0";
   }
 
   return cfg_value_.boolean_value;
@@ -253,9 +253,9 @@ int ConfigItem::IntegerValue() const {
     ConvertValue();
 
   if ( cfg_type_ != CFG_INTEGER ) {
-    Error("Attempt to fetch integer value for %s, actual type is %s. Try running 'zmupdate.pl -f' to reload config.",
-          name_.c_str(), type_.c_str());
-    exit(-1);
+    Warning("Attempt to fetch integer value for %s, actual type is %s. Try running 'zmupdate.pl -f' to reload config.",
+            name_.c_str(), type_.c_str());
+    return static_cast<int>(strtol(value_.c_str(), nullptr, 0));
   }
 
   return cfg_value_.integer_value;
@@ -266,9 +266,9 @@ double ConfigItem::DecimalValue() const {
     ConvertValue();
 
   if ( cfg_type_ != CFG_DECIMAL ) {
-    Error("Attempt to fetch decimal value for %s, actual type is %s. Try running 'zmupdate.pl -f' to reload config.",
-          name_.c_str(), type_.c_str());
-    exit(-1);
+    Warning("Attempt to fetch decimal value for %s, actual type is %s. Try running 'zmupdate.pl -f' to reload config.",
+            name_.c_str(), type_.c_str());
+    return strtod(value_.c_str(), nullptr);
   }
 
   return cfg_value_.decimal_value;
@@ -279,9 +279,8 @@ const char *ConfigItem::StringValue() const {
     ConvertValue();
 
   if ( cfg_type_ != CFG_STRING ) {
-    Error("Attempt to fetch string value for %s, actual type is %s. Try running 'zmupdate.pl -f' to reload config.",
-          name_.c_str(), type_.c_str());
-    exit(-1);
+    Warning("Attempt to fetch string value for %s, actual type is %s. Try running 'zmupdate.pl -f' to reload config.",
+            name_.c_str(), type_.c_str());
   }
 
   return value_.c_str();
