@@ -459,11 +459,19 @@ void ONVIF::WaitForMessage() {
       const char *fault_string = soap_fault_string(soap);
 
       if (soap->error != SOAP_EOF) { //Ignore the timeout error
-        // Check if this is an authorization failure (SOAP_FAULT with auth-related message)
-        bool is_auth_error = (result == SOAP_FAULT &&
-            fault_string && (std::strstr(fault_string, "authorization") ||
-                            std::strstr(fault_string, "authorized") ||
-                            std::strstr(fault_string, "NotAuthorized")));
+        // Check if this is an authorization failure:
+        // - HTTP 401 status (gSOAP returns the HTTP status code as result for HTTP errors)
+        // - SOAP fault with auth-related keywords in fault string or detail
+        bool is_auth_error = (result == 401) ||
+            (result == SOAP_FAULT && (
+              (fault_string && (std::strstr(fault_string, "authorization") ||
+                               std::strstr(fault_string, "authorized") ||
+                               std::strstr(fault_string, "Unauthorized") ||
+                               std::strstr(fault_string, "NotAuthorized"))) ||
+              (detail && (std::strstr(detail, "authorization") ||
+                         std::strstr(detail, "authorized") ||
+                         std::strstr(detail, "Unauthorized") ||
+                         std::strstr(detail, "NotAuthorized")))));
 
         if (is_auth_error) {
           // Try switching auth method before giving up: digest <-> plain

@@ -29,16 +29,24 @@ function findNiRsrcMon() {
 // (e.g. "SID": 9e48), unquoted barewords ("Format": YUV), and trailing
 // commas after the last array element.  Fix these before json_decode.
 function fixQuadraJson($text) {
+  // Remove trailing commas before ] or }
   $text = preg_replace('/,(\s*[}\]])/', '$1', $text);
 
+  // Handle empty values: "KEY":  , or "KEY":  } — replace with null
+  $text = preg_replace('/"([\w]+)"\s*:\s*([,}\]])/', '"$1": null$2', $text);
+
+  // Quote unquoted values (barewords, hex strings, multi-word values).
+  // Matches "KEY": VALUE where VALUE is everything up to the next , or } or ]
+  // that isn't already a quoted string, array, object, or valid JSON literal.
   $text = preg_replace_callback(
-    '/("[\w]+"\s*:\s*)([^\s"\[\]{},][^\s,\]\}]*)(\s*[,}\]])/',
+    '/"([\w]+)"\s*:\s*([^\s"\[\]{},](?:[^,\]\}]*[^\s,\]\}])?)(\s*[,}\]])/',
     function ($matches) {
       $value = trim($matches[2]);
+      // Leave valid JSON literals alone
       if (preg_match('/^-?\d+$/', $value)) return $matches[0];
       if (preg_match('/^-?\d+\.\d+$/', $value)) return $matches[0];
       if (in_array($value, ['true', 'false', 'null'])) return $matches[0];
-      return $matches[1].'"'.$value.'"'.$matches[3];
+      return '"'.$matches[1].'": "'.$value.'"'.$matches[3];
     },
     $text
   );
@@ -108,7 +116,7 @@ function parseQuadraJsonOutput($args) {
       } else {
         $jsonError = json_last_error_msg();
         $parseErrors[] = "$key: $jsonError";
-        ZM\Warning("Quadra: JSON parse error for section '$key': $jsonError");
+        ZM\Warning("Quadra: JSON parse error for section '$key': $jsonError. Fixed JSON: ".substr($json, 0, 1000));
       }
     }
   } else {
