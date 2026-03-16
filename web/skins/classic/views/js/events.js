@@ -1,5 +1,6 @@
 "use strict";
 const backButton = $j('#backBtn');
+const refreshBtnEl = document.getElementById('refreshBtn');
 const viewButton = $j('#viewBtn');
 const archiveButton = $j('#archiveBtn');
 const unarchiveButton = $j('#unarchiveBtn');
@@ -351,7 +352,7 @@ function initPage() {
   });
 
   // Don't enable the back button if there is no previous zm page to go back to
-  backButton.prop('disabled', !document.referrer.length);
+  if (backButton.length) backButton.prop('disabled', !document.referrer.length);
 
   // Setup the thumbnail video animation
   if (!isMobile()) initThumbAnimation();
@@ -359,17 +360,22 @@ function initPage() {
   // Some toolbar events break the thumbnail animation, so re-init eventlistener
   table.on('all.bs.table', initThumbAnimation);
 
-  // Manage the BACK button
-  document.getElementById('backBtn').addEventListener('click', function onBackClick(evt) {
-    evt.preventDefault();
-    window.history.back();
-  });
+  // Manage the BACK button (only present when ZM_WEB_SHOW_NAV_BUTTONS is enabled)
+  const backBtnEl = document.getElementById('backBtn');
+  if (backBtnEl) {
+    backBtnEl.addEventListener('click', function onBackClick(evt) {
+      evt.preventDefault();
+      window.history.back();
+    });
+  }
 
-  // Manage the REFRESH Button
-  document.getElementById('refreshBtn').addEventListener('click', function onRefreshClick(evt) {
-    evt.preventDefault();
-    window.location.reload(true);
-  });
+  // Manage the REFRESH Button (only present when ZM_WEB_SHOW_NAV_BUTTONS is enabled)
+  if (refreshBtnEl) {
+    refreshBtnEl.addEventListener('click', function onRefreshClick(evt) {
+      evt.preventDefault();
+      window.location.reload(true);
+    });
+  }
 
   // Manage the TIMELINE Button
   document.getElementById('tlineBtn').addEventListener('click', function onTlineClick(evt) {
