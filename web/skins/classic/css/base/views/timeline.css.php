@@ -29,7 +29,7 @@
 
 .imageHeight {
 <?php
-echo 'padding-top: ' . round(100/$max_aspect_ratio, 2) . '%;';
+echo 'padding-top: ' . ($max_aspect_ratio > 0 ? round(100/$max_aspect_ratio, 2) : 75) . '%;';
 /*
 switch ( $max_aspect_ratio ) {
   case 0.56: // 1080x1920, 1520x2688
