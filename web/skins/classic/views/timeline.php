@@ -694,11 +694,12 @@ echo getNavBarHTML();
         <p><?php echo translate('TimelineTip3') ?></p>
         <p><?php echo translate('TimelineTip4') ?></p>
       </div>
-      <div id="topPanel" class="graphWidth">
+<?php $cols = max(1, (int)ceil(sqrt(count($monitors)))); ?>
+      <div id="topPanel" class="graphWidth" style="display:grid; grid-template-columns:repeat(<?php echo $cols ?>, 1fr); gap:4px;">
 <?php
 foreach ( $monitors as $monitor ) {
 ?>
-        <div class="monitorPanel" style="width:<?php echo 100/count($monitors); ?>%; float:left;">
+        <div class="monitorPanel">
         <div class="imagePanel"<?php echo count($monitors)==1?' style="width: 50%; float: left;"' :''?>>
             <div class="imageHeight image">
               <img id="imageSrc<?php echo $monitor->Id() ?>" class="imageWidth" src="graphics/transparent.png" alt="<?php echo translate('ViewEvent') ?>" title="<?php echo translate('ViewEvent') ?>" loading="lazy" />
