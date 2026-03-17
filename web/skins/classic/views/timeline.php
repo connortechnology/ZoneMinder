@@ -203,10 +203,22 @@ if ( isset($range) and validInt($range) ) {
 $tree = false;
 $filter = new ZM\Filter();
 if ( isset($_REQUEST['filter']) ) {
-  $filter = ZM\Filter::parse($_REQUEST['filter']);
-  $filter->remove_invalid_terms();
-  $tree = $filter->tree();
+  $filterFull = ZM\Filter::parse($_REQUEST['filter']);
+  $filterFull->remove_invalid_terms();
+  // Keep $tree from the full filter so extractDatetimeRange / appendDatetimeRange
+  // can read and rewrite the datetime nodes for pan/zoom navigation.
+  $tree = $filterFull->tree();
   ZM\Debug(print_r($tree, true));
+  // Copy only non-datetime terms into $filter.  Datetime terms conflict with the
+  // timeline's own minTime/maxTime range, producing duplicate StartDateTime
+  // conditions in the SQL and unwanted date pickers in the filter widget.
+  $dateTimeAttrs = ['DateTime', 'StartDateTime', 'EndDateTime',
+    'Date', 'StartDate', 'EndDate', 'StartTime', 'EndTime'];
+  foreach ($filterFull->terms() as $term) {
+    if (isset($term['attr']) && !in_array($term['attr'], $dateTimeAttrs)) {
+      $filter->addTerm($term);
+    }
+  }
 }
 if (!$filter->has_term('Monitor')) {
   $filter->addTerm(['cnj'=>'and', 'attr'=>'Monitor', 'op'=>'=', 'val'=>'', 'cookie'=>'timelineMonitor'], 0);
