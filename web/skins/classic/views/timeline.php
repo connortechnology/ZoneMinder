@@ -201,11 +201,15 @@ if ( isset($range) and validInt($range) ) {
 }
 
 $tree = false;
+$filter = new ZM\Filter();
 if ( isset($_REQUEST['filter']) ) {
   $filter = ZM\Filter::parse($_REQUEST['filter']);
   $filter->remove_invalid_terms();
   $tree = $filter->tree();
   ZM\Debug(print_r($tree, true));
+}
+if (!$filter->has_term('Monitor')) {
+  $filter->addTerm(['cnj'=>'and', 'attr'=>'Monitor', 'op'=>'=', 'val'=>'', 'cookie'=>'timelineMonitor'], 0);
 }
 $tempMinTime = $tempMaxTime = $tempExpandable = false;
 extractDatetimeRange($tree, $tempMinTime, $tempMaxTime, $tempExpandable);
@@ -685,6 +689,10 @@ echo getNavBarHTML();
         <button id="listBtn" class="btn btn-normal" data-toggle="tooltip" data-placement="top" title="<?php echo translate('List') ?>" ><i class="fa fa-list"></i></button>
       </div>
       <h2 class="align-self-end"><?php echo translate('Timeline') ?></h2>
+    </div>
+
+    <div id="fbpanel" class="buttons">
+      <?php echo $filter->simple_widget(); ?>
     </div>
 
     <div id="content" class="chartSize">
