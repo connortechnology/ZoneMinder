@@ -1197,12 +1197,12 @@ function systemStats() {
 }
 
 function getcpus() {
-  if ( is_readable('/proc/cpuinfo') ) { # Works on Linux
+  if (file_exists('/proc/cpuinfo')) { # Works on Linux
     preg_match_all('/^processor/m', file_get_contents('/proc/cpuinfo'), $matches);
     $num_cpus = count($matches[0]);
   } else { # Works on BSD
-    $matches = explode(':', shell_exec('sysctl hw.ncpu'));
-    $num_cpus = trim($matches[1]);
+    $output = shell_exec('sysctl -n hw.ncpu 2>/dev/null');
+    $num_cpus = $output ? intval(trim($output)) : 1;
   }
 
   return $num_cpus;
