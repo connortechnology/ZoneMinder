@@ -107,6 +107,11 @@ class VideoStore {
   int writePacket(const std::shared_ptr<ZMPacket> pkt);
   int write_packets(PacketQueue &queue);
   void flush_codecs();
+
+  // Rotate to a new output file without destroying encoder/decoder contexts.
+  // Drains reorder queues, writes trailer, closes old file, opens new file,
+  // writes header. Encoder state (hw accel, DPB, etc.) is preserved.
+  bool rotateFile(const char *new_filename);
   const char *get_codec() {
     if (chosen_codec_data)
       return chosen_codec_data->codec_codec;
@@ -119,6 +124,12 @@ class VideoStore {
   }
   size_t get_reorder_queue_size() const { return reorder_queue_size; };
 };
+
+// Remux a fragmented MP4 (empty_moov+frag_keyframe) to a non-fragmented
+// faststart MP4 with a proper moov atom containing full sample tables.
+// This enables efficient range-based seeking in browsers.
+// Returns true on success. On failure the original file is left untouched.
+bool remux_to_faststart(const std::string &filepath);
 
 #endif // ZM_VIDEOSTORE_H
 
