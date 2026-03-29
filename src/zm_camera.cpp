@@ -59,6 +59,8 @@ Camera::Camera(
   mFirstAudioPTS(AV_NOPTS_VALUE),
   mLastVideoPTS(0),
   mLastAudioPTS(0),
+  mLastVideoDTS(AV_NOPTS_VALUE),
+  mLastAudioDTS(AV_NOPTS_VALUE),
   bytes(0),
   mIsPrimed(false) {
   linesize = FFALIGN(av_image_get_linesize(AV_PIX_FMT_YUV420P, width, 0), 32); // hardcoded hack

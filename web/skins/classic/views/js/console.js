@@ -245,7 +245,7 @@ function processRows(rows) {
         functionHtml += 'Object Detecting: '+row.ObjectDetection + '<br/>';
       }
       if (row.ONVIF_Event_Listener) {
-        functionHtml += ' Using ONVIF Listener' + '<br/>';
+        functionHtml += ' Use ONVIF Events<br/>';
       }
       if (row.Recording && row.Recording != 'None') {
         functionHtml += 'Recording: ' + row.Recording + '<br/>';
@@ -408,7 +408,7 @@ function selectMonitor(element) {
 function reloadWindow() {
   // Use table refresh instead of full page reload
   if (table && table.length) {
-    table.bootstrapTable('refresh');
+    table.bootstrapTable('refresh', {silent: true, reinit: false});
   } else {
     window.location.replace(thisUrl);
   }
