@@ -63,16 +63,50 @@ if (ZM_OPT_USE_AUTH) {
   }
 }
 
+// Build segment URL helper
+$make_segment_url = function($filename) use ($base_url, $Event, $auth_query) {
+  return $base_url . '?view=view_video&eid=' . $Event->Id()
+    . '&file=' . urlencode($filename) . $auth_query;
+};
+
+// Determine init segment size from first segment (ftyp + moov boxes)
+$first_seg_path = $Event->Path() . '/' . basename($segments[0]['Filename']);
+$init_size = 0;
+$fh = @fopen($first_seg_path, 'rb');
+if ($fh) {
+  // Read ftyp box size (big-endian uint32 at offset 0)
+  $data = fread($fh, 4);
+  if ($data !== false && strlen($data) == 4) {
+    $ftyp_size = unpack('N', $data)[1];
+    // Seek to moov box and read its size
+    fseek($fh, $ftyp_size);
+    $data = fread($fh, 4);
+    if ($data !== false && strlen($data) == 4) {
+      $moov_size = unpack('N', $data)[1];
+      $init_size = $ftyp_size + $moov_size;
+    }
+  }
+  fclose($fh);
+}
+
 echo "#EXTM3U\n";
-echo "#EXT-X-VERSION:3\n";
+echo "#EXT-X-VERSION:7\n";
 echo "#EXT-X-TARGETDURATION:$target_duration\n";
 echo "#EXT-X-MEDIA-SEQUENCE:0\n";
 echo "#EXT-X-PLAYLIST-TYPE:VOD\n";
+echo "#EXT-X-INDEPENDENT-SEGMENTS\n";
+
+// fMP4 init segment (ftyp+moov from first segment)
+$init_url = $make_segment_url($segments[0]['Filename']);
+if ($init_size > 0) {
+  echo "#EXT-X-MAP:URI=\"$init_url\",BYTERANGE=\"$init_size@0\"\n";
+} else {
+  echo "#EXT-X-MAP:URI=\"$init_url\"\n";
+}
 
 foreach ($segments as $seg) {
   $duration = sprintf('%.3f', $seg['Duration']);
-  $segment_url = $base_url . '?view=view_video&eid=' . $Event->Id()
-    . '&file=' . urlencode($seg['Filename']) . $auth_query;
+  $segment_url = $make_segment_url($seg['Filename']);
   echo "#EXTINF:$duration,\n";
   echo "$segment_url\n";
 }

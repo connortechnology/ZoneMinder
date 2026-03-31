@@ -334,7 +334,7 @@ bool Event::openSegment() {
 
     // Set DefaultVideo to m3u8 filename immediately so the web UI
     // knows this event uses HLS, even during recording.
-    video_file = stringtf("%" PRIu64 ".m3u8", id);
+    video_file = stringtf("%" PRIu64 ".%s.m3u8", id, codec.c_str());
     video_path = path + "/" + video_file;
     std::string sql = stringtf(
         "UPDATE Events SET DefaultVideo='%s' WHERE Id=%" PRIu64,
@@ -475,7 +475,7 @@ void Event::rotateSegment(SystemTimePoint new_segment_start) {
 void Event::writeM3u8(bool is_complete) {
   if (video_segments.empty()) return;
 
-  video_file = stringtf("%" PRIu64 ".m3u8", id);
+  video_file = stringtf("%" PRIu64 ".%s.m3u8", id, codec.c_str());
   video_path = path + "/" + video_file;
 
   double max_duration = 0;
@@ -485,14 +485,42 @@ void Event::writeM3u8(bool is_complete) {
   int target_duration = static_cast<int>(max_duration) + 1;
   if (target_duration < 1) target_duration = 10;
 
+  // Calculate init segment size (ftyp + moov) from first segment
+  uint32_t init_size = 0;
+  {
+    std::string first_seg_path = path + "/" + video_segments[0].filename;
+    FILE *seg_file = fopen(first_seg_path.c_str(), "rb");
+    if (seg_file) {
+      uint8_t buf[4];
+      // Read ftyp box size (big-endian uint32)
+      if (fread(buf, 1, 4, seg_file) == 4) {
+        uint32_t ftyp_size = (buf[0]<<24) | (buf[1]<<16) | (buf[2]<<8) | buf[3];
+        // Seek past ftyp to moov box
+        if (fseek(seg_file, ftyp_size, SEEK_SET) == 0 &&
+            fread(buf, 1, 4, seg_file) == 4) {
+          uint32_t moov_size = (buf[0]<<24) | (buf[1]<<16) | (buf[2]<<8) | buf[3];
+          init_size = ftyp_size + moov_size;
+        }
+      }
+      fclose(seg_file);
+    }
+  }
+
   FILE *m3u8 = fopen(video_path.c_str(), "w");
   if (m3u8) {
     fprintf(m3u8, "#EXTM3U\n");
-    fprintf(m3u8, "#EXT-X-VERSION:3\n");
+    fprintf(m3u8, "#EXT-X-VERSION:7\n");
     fprintf(m3u8, "#EXT-X-TARGETDURATION:%d\n", target_duration);
     fprintf(m3u8, "#EXT-X-MEDIA-SEQUENCE:0\n");
     if (is_complete) {
       fprintf(m3u8, "#EXT-X-PLAYLIST-TYPE:VOD\n");
+    }
+    fprintf(m3u8, "#EXT-X-INDEPENDENT-SEGMENTS\n");
+    if (init_size > 0) {
+      fprintf(m3u8, "#EXT-X-MAP:URI=\"%s\",BYTERANGE=\"%u@0\"\n",
+              video_segments[0].filename.c_str(), init_size);
+    } else {
+      fprintf(m3u8, "#EXT-X-MAP:URI=\"%s\"\n", video_segments[0].filename.c_str());
     }
     for (const auto &seg : video_segments) {
       fprintf(m3u8, "#EXTINF:%.3f,\n", seg.duration);

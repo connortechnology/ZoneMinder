@@ -277,13 +277,9 @@ AVFrame *FFmpeg_Input::get_frame(int stream_id) {
       break;
     }  // end while !got_packet
 
-    if (
-        // Check if EOF.
-        (ret == AVERROR_EOF || (input_format_context->pb && input_format_context->pb->eof_reached)) ||
-        // Check for Connection failure.
-        (ret == -110)
-       ) {
-      ret = avcodec_send_packet(context, nullptr); // flush
+    if (ret < 0) {
+      // EOF or connection timeout — flush the decoder
+      ret = avcodec_send_packet(context, nullptr);
     } else {
       ret = avcodec_send_packet(context, packet.get());
     }

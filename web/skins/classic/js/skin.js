@@ -1924,27 +1924,37 @@ function canPlayCodec(filename) {
   const re = /\.(\w+)\.(\w+)$/i;
   const matches = re.exec(filename);
   if (matches && matches.length) {
+    const codec = matches[1];
+    const ext = matches[2].toLowerCase();
     const video = document.createElement('video');
-    if (matches[1] == 'av1') matches[1] = 'av01';
-    else if (matches[1] == 'h264') matches[1] = 'avc1';
-    else if (matches[1] == 'hevc') matches[1] = 'hvc1';
-    else {
-      console.log('matches didnt match'+matches[1]);
-    }
     video.muted = true;
 
-    const can = video.canPlayType('video/mp4; codecs="'+matches[1]+'"');
-    if (can == "probably") {
-      console.log("can probably play "+matches[1]);
-      return true;
-    } else if (can == "maybe") {
-      console.log("can maybe play "+matches[1]);
+    // For HLS playlists, check native HLS support with the embedded codec
+    if (ext === 'm3u8') {
+      const hlsCan = video.canPlayType('application/vnd.apple.mpegurl');
+      if (hlsCan === 'probably' || hlsCan === 'maybe') {
+        console.log(`can ${hlsCan} play HLS with codec ${codec}`);
+        return true;
+      }
+      console.log(`cannot play HLS natively, codec ${codec}`);
+      return false;
+    }
+
+    // For mp4/other containers, check specific codec support
+    let codecId = codec;
+    if (codec === 'av1') codecId = 'av01';
+    else if (codec === 'h264') codecId = 'avc1';
+    else if (codec === 'hevc') codecId = 'hvc1';
+
+    const can = video.canPlayType(`video/mp4; codecs="${codecId}"`);
+    if (can === 'probably' || can === 'maybe') {
+      console.log(`can ${can} play ${codecId}`);
       return true;
     }
-    console.log("cannot play "+matches[1]);
+    console.log(`cannot play ${codecId}`);
     return false;
   } else {
-    console.log("Failed to match re on ", filename);
+    console.log('Failed to match re on ', filename);
   }
   return false;
 }
