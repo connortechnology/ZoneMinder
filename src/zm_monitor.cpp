@@ -4165,7 +4165,10 @@ int Monitor::Pause() {
       sws_freeContext(convert_context);
       convert_context = nullptr;
     }
-    if (shared_data) shared_data->decoder_image_count = 0;
+    if (shared_data) {
+      shared_data->decoder_image_count = 0;
+      shared_data->last_decoder_index = image_buffer_count;
+    }
   }
   if (analysis_thread) {
     Debug(4, "Joining analysis");
