@@ -397,8 +397,10 @@ bool StreamBase::sendTextFrame(const char *frame_text) {
         || mJpegCodecContext->height != height 
         || mJpegPixelFormat != pixformat) {
       Debug(1, "Need to reinit contexts because mjpegCodecContext:%p ctx.width %d =? %d, ctx.height %d =? %d format %d =? %d",
-          mJpegCodecContext, mJpegCodecContext->width, width, mJpegCodecContext->height, height
-                  ,mJpegPixelFormat, pixformat);
+          mJpegCodecContext,
+          mJpegCodecContext ? mJpegCodecContext->width : 0, width,
+          mJpegCodecContext ? mJpegCodecContext->height : 0, height,
+          mJpegPixelFormat, pixformat);
       initContexts(width, height, pixformat, width, height, config.jpeg_stream_quality);
     }
     image.EncodeJpeg(buffer, &n_bytes);
