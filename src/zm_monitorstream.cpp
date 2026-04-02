@@ -568,6 +568,8 @@ void MonitorStream::runStream() {
     std::this_thread::sleep_for(MAX_SLEEP);
   }
   if (zm_terminate) {
+    if (connkey && command_processor.joinable())
+      command_processor.join();
     return;
   }
   updateFrameRate(monitor->GetFPS());
