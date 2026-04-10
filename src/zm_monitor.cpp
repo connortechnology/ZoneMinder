@@ -3340,8 +3340,7 @@ int Monitor::Capture() {
   return captureResult;
 }  // end Monitor::Capture
 
-bool Monitor::setupConvertContext(const AVFrame *input_frame,
-                                  const Image *image) {
+bool Monitor::setupConvertContext(const AVFrame *input_frame, const Image *image) {
   AVPixelFormat imagePixFormat = image->AVPixFormat();
   AVPixelFormat inputPixFormat;
   bool changeColorspaceDetails = false;
@@ -3379,8 +3378,7 @@ bool Monitor::setupConvertContext(const AVFrame *input_frame,
           av_get_pix_fmt_name(inputPixFormat), image->Width(), image->Height(),
           av_get_pix_fmt_name(imagePixFormat));
     if (changeColorspaceDetails) {
-      // change the range of input data by first reading the current color space
-      // and then setting it's range as yuvj.
+      // change the range of input data by first reading the current color space and then setting it's range as yuvj.
       int dummy[4];
       int srcRange, dstRange;
       int brightness, contrast, saturation;
@@ -3389,12 +3387,11 @@ bool Monitor::setupConvertContext(const AVFrame *input_frame,
                                &contrast, &saturation);
       const int *coefs = sws_getCoefficients(SWS_CS_DEFAULT);
       srcRange = 1;  // this marks that values are according to yuvj
-      sws_setColorspaceDetails(convert_context, coefs, srcRange, coefs,
-                               dstRange, brightness, contrast, saturation);
+      sws_setColorspaceDetails(convert_context, coefs, srcRange, coefs, dstRange, brightness, contrast, saturation);
     }
   }
   return (convert_context != nullptr);
-}
+} //end bool Monitor::setupConvertContext(const AVFrame *input_frame, const Image *image) 
 
 int Monitor::CloseDecoder() {
 #if HAVE_QUADRA
