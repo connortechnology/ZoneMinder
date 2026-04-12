@@ -56,6 +56,7 @@ class VideoStore {
   unsigned int frame_count;
   int64_t encode_total_us_;
   int encode_count_;
+  bool video_encoded;  // true once at least one frame has been sent to the video encoder
 
   AVBufferRef *hw_device_ctx;
 
