@@ -3428,7 +3428,7 @@ int Monitor::OpenDecoder() {
 
     for (auto it = codec_data.begin(); it != codec_data.end(); it ++) {
       const CodecData *chosen_codec_data = *it;
-      Debug(1, "Found codec %s", chosen_codec_data->codec_name);
+      Debug(1, "Found codec %s for decoder", chosen_codec_data->codec_name);
 
 #if 0
       if (!this->DecoderName().empty() and (this->DecoderName() != "auto")) {
