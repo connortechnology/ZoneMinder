@@ -83,7 +83,7 @@ function CORSHeaders() {
       }
     }
     if (!$valid) {
-      ZM\Warning($_SERVER['HTTP_ORIGIN'] . ' is not found in servers list.');
+      ZM\Debug($_SERVER['HTTP_ORIGIN'] . ' is not found in servers list.');
     }
   } else {
     ZM\Debug('CORS: NO origin');
