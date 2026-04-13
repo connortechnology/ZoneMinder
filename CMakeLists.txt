@@ -36,6 +36,12 @@ set(CMAKE_C_FLAGS_RELEASE "-O2 -fopenmp")
 set(CMAKE_CXX_FLAGS_RELEASE "-O2 -fopenmp")
 set(CMAKE_C_FLAGS_DEBUG "-g -fopenmp")
 set(CMAKE_CXX_FLAGS_DEBUG "-g -fopenmp")
+
+# Disable PIE for Debug builds so addr2line works with runtime addresses
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  set(CMAKE_POSITION_INDEPENDENT_CODE OFF)
+  add_link_options(-no-pie)
+endif()
 set(CMAKE_C_FLAGS_OPTIMISED "-O3 -fopenmp")
 set(CMAKE_CXX_FLAGS_OPTIMISED "-O3 -fopenmp")
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
