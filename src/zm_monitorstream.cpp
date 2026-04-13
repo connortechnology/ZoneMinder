@@ -782,7 +782,8 @@ void MonitorStream::runStream() {
 
     // Perhaps it restarted?
     if (image_count - monitor->image_buffer_count > analysis_image_count) {
-      Warning( "Image_count > analysis?  DId it restart? %d > %d", image_count, analysis_image_count);
+      Warning("image_count (%d) exceeds analysis_image_count (%d) by more than image_buffer_count (%d). Did analysis restart? Resetting image_count to analysis_image_count.",
+              image_count, analysis_image_count, monitor->image_buffer_count);
       image_count = analysis_image_count;
       // could be -1
     }
