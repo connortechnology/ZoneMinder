@@ -274,13 +274,7 @@ class Event extends ZM_Object {
     if ( $this->{'DefaultVideo'} and $args['mode'] != 'jpeg' ) {
       $streamSrc .= $Server->PathToIndex();
       $args['eid'] = $this->{'Id'};
-      // Segmented events have DefaultVideo set to an m3u8 manifest.
-      // Use the dynamic HLS view which adds auth tokens to segment URLs.
-      if (str_ends_with($this->{'DefaultVideo'}, '.m3u8') || $args['mode'] == 'hls') {
-        $args['view'] = 'view_event_hls';
-      } else {
-        $args['view'] = 'view_video';
-      }
+      $args['view'] = 'view_video';
     } else {
       $streamSrc .= $Server->PathToZMS();
 
@@ -865,20 +859,5 @@ class Event extends ZM_Object {
     return;
   } # end sub GenerateVideo
 
-  public function VideoSegments() {
-    if (!isset($this->video_segments)) {
-      $this->video_segments = dbFetchAll(
-        'SELECT SegmentIndex, Filename, StartDelta, Duration, Bytes'
-        . ' FROM Event_Video_Segments WHERE EventId = ? ORDER BY SegmentIndex',
-        NULL, array($this->Id())
-      );
-      if (!$this->video_segments) $this->video_segments = [];
-    }
-    return $this->video_segments;
-  }
-
-  public function hasVideoSegments() {
-    return count($this->VideoSegments()) > 0;
-  }
 } # end class
 ?>

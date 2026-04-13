@@ -69,8 +69,6 @@ Event::Event(
   hw_device_ctx(nullptr),
   //video_file(""),
   //video_path(""),
-  segment_index(0),
-  segment_start_time(p_start_time),
   last_db_frame(0),
   have_video_keyframe(false),
   //scheme
@@ -142,7 +140,7 @@ Event::Event(
                       state_id,
                       monitor->getOrientation(),
                       0,
-                      "",  // DefaultVideo empty during recording; set to m3u8 on close
+                      video_incomplete_file.c_str(),
                       save_jpegs,
                       storage->SchemeString().c_str(),
                       monitor->Latitude(),
@@ -306,244 +304,6 @@ int Event::OpenJpegCodec(AVFrame *frame) {
   return 0;
 }
 
-bool Event::openSegment() {
-  video_incomplete_path = path + "/" + video_incomplete_file;
-
-  AVCodecContext *video_ctx = monitor->GetVideoCodecContext();
-  videoStore = new VideoStore(
-      video_incomplete_path.c_str(),
-      container.c_str(),
-      monitor->GetVideoStream(),
-      video_ctx,
-      (monitor->RecordAudio() ? monitor->GetAudioStream() : nullptr),
-      (monitor->RecordAudio() ? monitor->GetAudioCodecContext() : nullptr),
-      monitor);
-
-  if (!videoStore->open()) {
-    delete videoStore;
-    videoStore = nullptr;
-    return false;
-  }
-
-  if (segment_index == 0) {
-    const AVCodec *encoder = videoStore->get_video_encoder();
-    if (encoder) {
-      noteSetMap["encoder"].insert(encoder->name);
-    }
-    codec = videoStore->get_codec();
-
-    // Set DefaultVideo to m3u8 filename immediately so the web UI
-    // knows this event uses HLS, even during recording.
-    video_file = stringtf("%" PRIu64 ".%s.m3u8", id, codec.c_str());
-    video_path = path + "/" + video_file;
-    std::string sql = stringtf(
-        "UPDATE Events SET DefaultVideo='%s' WHERE Id=%" PRIu64,
-        zmDbEscapeString(video_file).c_str(), id);
-    dbQueue.push(std::move(sql));
-  }
-
-  Debug(1, "Opened video segment %d for event %" PRIu64, segment_index, id);
-  return true;
-}
-
-void Event::closeSegment() {
-  if (!videoStore) return;
-
-  Debug(1, "Closing video segment %d for event %" PRIu64, segment_index, id);
-  delete videoStore;
-  videoStore = nullptr;
-
-  // Build the segment filename
-  std::string seg_file = stringtf("%" PRIu64 "-%s.%s-%03d.%s",
-      id, "video", codec.c_str(), segment_index, container.c_str());
-  std::string seg_path = path + "/" + seg_file;
-
-  int result = rename(video_incomplete_path.c_str(), seg_path.c_str());
-  if (result != 0) {
-    Error("Failed renaming %s to %s: %s",
-          video_incomplete_path.c_str(), seg_path.c_str(), strerror(errno));
-    seg_file = video_incomplete_file;
-    seg_path = video_incomplete_path;
-  }
-
-  // Record segment metadata
-  FPSeconds start_delta = segment_start_time - start_time;
-  FPSeconds duration = end_time - segment_start_time;
-
-  struct stat st = {};
-  if (stat(seg_path.c_str(), &st) != 0) {
-    Warning("Can't stat segment %s: %s", seg_path.c_str(), strerror(errno));
-  }
-
-  video_segments.push_back({
-    segment_index,
-    seg_file,
-    start_delta.count(),
-    duration.count(),
-    st.st_size
-  });
-
-  segment_index++;
-  // Note: segment_start_time for the NEXT segment is set by the caller
-  // (AddPacket_ sets it to the keyframe timestamp, destructor doesn't need it)
-}
-
-void Event::rotateSegment(SystemTimePoint new_segment_start) {
-  if (!videoStore) return;
-
-  // Build segment filename for the completed segment
-  std::string seg_file = stringtf("%" PRIu64 "-%s.%s-%03d.%s",
-      id, "video", codec.c_str(), segment_index, container.c_str());
-  std::string seg_path = path + "/" + seg_file;
-
-  // Rename the incomplete file to segment name BEFORE rotateFile opens
-  // a new file at the same incomplete path.
-  // rotateFile() closes the old muxer first (writes trailer, closes avio),
-  // then we rename, then it opens the new file.
-  //
-  // We split this: first just close the old muxer without opening a new one.
-  // Actually, rotateFile does both atomically. So rename first, then rotate
-  // to the (now-free) incomplete path.
-
-  // Step 1: Close old muxer — rotateFile writes trailer and closes avio,
-  // then opens new file. We need the old file renamed before the new file
-  // overwrites it. Use a temp name for the completed segment.
-  std::string tmp_seg_path = video_incomplete_path + ".done";
-  int result = rename(video_incomplete_path.c_str(), tmp_seg_path.c_str());
-  if (result != 0) {
-    Error("Failed renaming %s to %s: %s",
-          video_incomplete_path.c_str(), tmp_seg_path.c_str(), strerror(errno));
-    // Can't proceed safely — fall back to close/reopen
-    closeSegment();
-    segment_start_time = new_segment_start;
-    openSegment();
-    return;
-  }
-
-  // Step 2: rotateFile closes the muxer (which already wrote to the renamed file)
-  // and opens a new file at the incomplete path
-  if (!videoStore->rotateFile(video_incomplete_path.c_str())) {
-    Warning("Event %" PRIu64 " segment %d: rotateFile failed, falling back to close/reopen",
-            id, segment_index);
-    // Rename temp back and do full close/reopen
-    rename(tmp_seg_path.c_str(), video_incomplete_path.c_str());
-    closeSegment();
-    segment_start_time = new_segment_start;
-    openSegment();
-    return;
-  }
-
-  // Step 3: Rename temp to final segment name
-  result = rename(tmp_seg_path.c_str(), seg_path.c_str());
-  if (result != 0) {
-    Error("Failed renaming %s to %s: %s",
-          tmp_seg_path.c_str(), seg_path.c_str(), strerror(errno));
-    seg_file = video_incomplete_file + ".done";
-    seg_path = tmp_seg_path;
-  }
-
-  // No remux here — it blocks the event thread, stalling packet consumption,
-  // which blocks the capture thread, causing heartbeat timeout.
-  // Small segments served via HLS don't need faststart since the player knows
-  // duration from the m3u8 manifest and plays each segment start-to-finish.
-
-  // Record segment metadata
-  FPSeconds start_delta = segment_start_time - start_time;
-  FPSeconds duration = new_segment_start - segment_start_time;
-
-  struct stat st = {};
-  if (stat(seg_path.c_str(), &st) != 0) {
-    Warning("Can't stat segment %s: %s", seg_path.c_str(), strerror(errno));
-  }
-
-  video_segments.push_back({
-    segment_index,
-    seg_file,
-    start_delta.count(),
-    duration.count(),
-    st.st_size
-  });
-
-  segment_index++;
-  segment_start_time = new_segment_start;
-
-  // Update m3u8 manifest and DB DefaultVideo after each segment completes.
-  // Omit EXT-X-ENDLIST so HLS players treat it as a live/growing playlist.
-  writeM3u8(false);
-}
-
-void Event::writeM3u8(bool is_complete) {
-  if (video_segments.empty()) return;
-
-  video_file = stringtf("%" PRIu64 ".%s.m3u8", id, codec.c_str());
-  video_path = path + "/" + video_file;
-
-  double max_duration = 0;
-  for (const auto &seg : video_segments) {
-    if (seg.duration > max_duration) max_duration = seg.duration;
-  }
-  int target_duration = static_cast<int>(max_duration) + 1;
-  if (target_duration < 1) target_duration = 10;
-
-  // Calculate init segment size (ftyp + moov) from first segment
-  uint32_t init_size = 0;
-  {
-    std::string first_seg_path = path + "/" + video_segments[0].filename;
-    FILE *seg_file = fopen(first_seg_path.c_str(), "rb");
-    if (seg_file) {
-      uint8_t buf[4];
-      // Read ftyp box size (big-endian uint32)
-      if (fread(buf, 1, 4, seg_file) == 4) {
-        uint32_t ftyp_size = (buf[0]<<24) | (buf[1]<<16) | (buf[2]<<8) | buf[3];
-        // Seek past ftyp to moov box
-        if (fseek(seg_file, ftyp_size, SEEK_SET) == 0 &&
-            fread(buf, 1, 4, seg_file) == 4) {
-          uint32_t moov_size = (buf[0]<<24) | (buf[1]<<16) | (buf[2]<<8) | buf[3];
-          init_size = ftyp_size + moov_size;
-        }
-      }
-      fclose(seg_file);
-    }
-  }
-
-  FILE *m3u8 = fopen(video_path.c_str(), "w");
-  if (m3u8) {
-    fprintf(m3u8, "#EXTM3U\n");
-    fprintf(m3u8, "#EXT-X-VERSION:7\n");
-    fprintf(m3u8, "#EXT-X-TARGETDURATION:%d\n", target_duration);
-    fprintf(m3u8, "#EXT-X-MEDIA-SEQUENCE:0\n");
-    if (is_complete) {
-      fprintf(m3u8, "#EXT-X-PLAYLIST-TYPE:VOD\n");
-    }
-    fprintf(m3u8, "#EXT-X-INDEPENDENT-SEGMENTS\n");
-    if (init_size > 0) {
-      fprintf(m3u8, "#EXT-X-MAP:URI=\"%s\",BYTERANGE=\"%u@0\"\n",
-              video_segments[0].filename.c_str(), init_size);
-    } else {
-      fprintf(m3u8, "#EXT-X-MAP:URI=\"%s\"\n", video_segments[0].filename.c_str());
-    }
-    for (const auto &seg : video_segments) {
-      fprintf(m3u8, "#EXTINF:%.3f,\n", seg.duration);
-      fprintf(m3u8, "%s\n", seg.filename.c_str());
-    }
-    if (is_complete) {
-      fprintf(m3u8, "#EXT-X-ENDLIST\n");
-    }
-    fclose(m3u8);
-    Debug(1, "Wrote m3u8 manifest %s with %zu segments%s",
-          video_path.c_str(), video_segments.size(),
-          is_complete ? " (VOD)" : " (live)");
-  } else {
-    Warning("Failed to write m3u8 manifest %s: %s", video_path.c_str(), strerror(errno));
-  }
-
-  // Update DB so the web UI can find the m3u8 immediately
-  std::string sql = stringtf(
-      "UPDATE Events SET DefaultVideo='%s' WHERE Id=%" PRIu64,
-      zmDbEscapeString(video_file).c_str(), id);
-  dbQueue.push(std::move(sql));
-}
-
 Event::~Event() {
   Debug(1, "~Event %" PRIu64 ": calling Stop", id);
   Stop();
@@ -559,23 +319,15 @@ Event::~Event() {
   /* Close the video file */
   // We close the videowriter first, because if we finish the event, we might try to view the file, but we aren't done writing it yet.
   if (videoStore != nullptr) {
-    closeSegment();
-  }
-
-  // Write segment records to DB and finalize m3u8 manifest as VOD.
-  if (!video_segments.empty()) {
-    for (const auto &seg : video_segments) {
-      std::string sql = stringtf(
-          "INSERT INTO Event_Video_Segments (EventId, SegmentIndex, Filename, StartDelta, Duration, Bytes)"
-          " VALUES (%" PRIu64 ", %d, '%s', %.3f, %.3f, %jd)",
-          id, seg.index, zmDbEscapeString(seg.filename).c_str(),
-          seg.start_delta, seg.duration, static_cast<intmax_t>(seg.bytes));
-      dbQueue.push(std::move(sql));
+    Debug(1, "~Event %" PRIu64 ": deleting video store", id);
+    delete videoStore;
+    videoStore = nullptr;
+    int result = rename(video_incomplete_path.c_str(), video_path.c_str());
+    if (result != 0) {
+      Error("Failed renaming %s to %s, reason: %s", video_incomplete_path.c_str(), video_path.c_str(), strerror(errno));
+      // So that we don't update the event record
+      video_file = video_incomplete_file;
     }
-
-    // Final m3u8 with EXT-X-ENDLIST marks it as VOD (complete).
-    // Prior rotateSegment() calls wrote live manifests without ENDLIST.
-    writeM3u8(true);
   }
 
   // endtime is set in AddFrame, so SHOULD be set to the value of the last frame timestamp.
@@ -860,18 +612,7 @@ void Event::AddPacket_(const std::shared_ptr<ZMPacket>packet) {
 
   if (videoStore) {
     if (have_video_keyframe) {
-      // Rotate to a new segment at keyframe boundaries when target duration exceeded
-      if (packet->codec_type == AVMEDIA_TYPE_VIDEO && packet->keyframe) {
-        FPSeconds seg_dur = packet->timestamp - segment_start_time;
-        if (seg_dur.count() >= kTargetSegmentDuration) {
-          Debug(1, "Segment %d duration %.2fs >= %.1fs, rotating",
-                segment_index, seg_dur.count(), kTargetSegmentDuration);
-          rotateSegment(packet->timestamp);
-        }
-      }
-      if (videoStore) {
-        videoStore->writePacket(packet);
-      }
+      videoStore->writePacket(packet);
     } else {
       Debug(2, "No video keyframe yet, not writing");
     }
@@ -1268,12 +1009,36 @@ void Event::Run() {
   video_incomplete_path = path + "/" + video_incomplete_file;
 
   if (monitor->GetOptVideoWriter() != 0) {
-    if (!openSegment()) {
-      Warning("Failed to open initial video segment, turning on jpegs");
+    AVCodecContext *video_ctx = monitor->GetVideoCodecContext();
+
+    /* Save as video */
+    videoStore = new VideoStore(
+      video_incomplete_path.c_str(),
+      container.c_str(),
+      monitor->GetVideoStream(),
+      video_ctx,
+      ( monitor->RecordAudio() ? monitor->GetAudioStream() : nullptr ),
+      ( monitor->RecordAudio() ? monitor->GetAudioCodecContext() : nullptr ),
+      monitor );
+
+    if (!videoStore->open()) {
+      Warning("Failed to open videostore, turning on jpegs");
+      delete videoStore;
+      videoStore = nullptr;
       if (!(save_jpegs & 1)) {
         save_jpegs |= 1; // Turn on jpeg storage
         zmDbDo(stringtf("UPDATE Events SET SaveJpegs=%d, DefaultVideo='' WHERE Id=%" PRIu64, save_jpegs, id));
       }
+    } else {
+      const AVCodec *encoder = videoStore->get_video_encoder();
+      if (encoder) {
+        noteSetMap["encoder"].insert(encoder->name);
+      }
+
+      std::string codec = videoStore->get_codec();
+      video_file = stringtf("%" PRIu64 "-%s.%s.%s", id, "video", codec.c_str(), container.c_str());
+      video_path = path + "/" + video_file;
+      Debug(1, "Video file is %s", video_file.c_str());
     }
   }  // end if GetOptVideoWriter
 

@@ -326,20 +326,13 @@ if (file_exists($Event->Path().'/objdetect.jpg')) {
                     <div id="zoompan" class="zoompan">
 <?php
 if ($video_tag) {
-  if (str_ends_with($Event->DefaultVideo(), '.m3u8')) {
-    $videoSrc = $Event->getStreamSrc(array('mode'=>'hls'), '&amp;');
-    $sourceType = 'application/x-mpegURL';
-  } else {
-    $videoSrc = $Event->getStreamSrc(array('mode'=>'mp4','format'=>'h264'), '&amp;');
-    $sourceType = 'video/mp4';
-  }
 ?>
                   <video id="videoobj" class="video-js"
                    <?php echo $scale ? 'width="'.reScale($Event->Width(), $scale).'"' : '' ?>
                    <?php echo $scale ? 'height="'.reScale($Event->Height(), $scale).'"' : '' ?>
                     controls autoplay preload="auto"
                   >
-                  <source src="<?php echo $videoSrc; ?>" type="<?php echo $sourceType; ?>">
+                  <source src="<?php echo $Event->getStreamSrc(array('mode'=>'mp4','format'=>'h264'),'&amp;'); ?>" type="video/mp4">
                   <track id="monitorCaption" kind="captions" label="English" srclang="en" src='data:plain/text;charset=utf-8,"WEBVTT\n\n 00:00:00.000 --> 00:00:01.000 ZoneMinder"' default/>
                   Your browser does not support the video tag.
                   </video>
@@ -454,6 +447,18 @@ if ($video_tag) {
           </div><!-- class="row" -->
         </div><!-- class="container-fluid" -->
         <div id="EventData" class="EventData">
+
+<?php
+if ($Event->DefaultVideo()) {
+  $filePath = $Event->Path().'/'.$Event->DefaultVideo();
+  if (file_exists($filePath)) {
+    //exec('/usr/local/bin/ffprobe '.$filePath. ' 2>&1', $output);
+    ZM\Debug(print_r($output, true));
+    //echo implode('<br/>',$output);
+
+  }
+}
+    ?>
         <?php
 if (0) { // Need to do this in ajax.
           $data = ZM\Event_Data::find(['EventId'=>$Event->Id()]);

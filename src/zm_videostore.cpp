@@ -716,11 +716,6 @@ Debug(1, "Done flushing");
 
 VideoStore::~VideoStore() {
 
-  if (!oc) {
-    // rotateFile may have freed oc on partial failure — skip muxer cleanup
-    Debug(1, "~VideoStore: no format context, skipping muxer cleanup");
-  } else {
-
   for (auto &n : reorder_queues) {
     auto &queue = n.second;
     Debug(1, "Queue for %d length is %zu", n.first, queue.size());
@@ -765,7 +760,11 @@ VideoStore::~VideoStore() {
     oc->pb = nullptr;
   }  // end if oc->pb
 
-  } // end if oc
+  // I wonder if we should be closing the file first.
+  // I also wonder if we really need to be doing all the ctx
+  // allocation/de-allocation constantly, or whether we can just re-use it.
+  // Just do a file open/close/writeheader/etc.
+  // What if we were only doing audio recording?
 
   video_in_ctx = nullptr;
 
@@ -807,7 +806,7 @@ VideoStore::~VideoStore() {
 
   Debug(4, "free context");
   /* free the streams */
-  if (oc) avformat_free_context(oc);
+  avformat_free_context(oc);
   delete[] next_dts;
   next_dts = nullptr;
 } // VideoStore::~VideoStore()
@@ -1388,17 +1387,6 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
 
     // Some hwaccel codecs may get full if we only receive one pkt for one frame
 
-    // Clear keyframe/pict_type flags — let the encoder decide its own GOP
-    // structure. MJPEG-decoded frames have key_frame=1 on every frame, which
-    // forces the hw encoder to produce all-IDR output. VAAPI drivers reject
-    // this with VA_STATUS_ERROR_FLAG_NOT_SUPPORTED.
-#if LIBAVUTIL_VERSION_CHECK(58, 29, 100, 29, 100)
-    frame->flags &= ~AV_FRAME_FLAG_KEY;
-#else
-    frame->key_frame = 0;
-#endif
-    frame->pict_type = AV_PICTURE_TYPE_NONE;
-
     auto encode_start = std::chrono::steady_clock::now();
 
     do {
@@ -1407,12 +1395,6 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
       if (ret < 0) {
         if (AVERROR(EAGAIN) != ret) {
           Error("Could not send frame (error '%s')", av_make_error_string(ret).c_str());
-          // Drain any pending packets to prevent DPB overflow.
-          // Without this, hw encoders accumulate unfinished reference frames
-          // and eventually hit assertion failures (pic->nb_dpb_pics < 16).
-          while (avcodec_receive_packet(video_out_ctx, opkt.get()) >= 0) {
-            av_packet_unref(opkt.get());
-          }
           return ret;
         } else {
           Debug(3, "Got EAGAIN");
@@ -1681,321 +1663,3 @@ int VideoStore::write_packet(AVPacket *pkt, AVStream *stream) {
   }
   return ret;
 }  // end int VideoStore::write_packet(AVPacket *pkt, AVStream *stream)
-
-bool VideoStore::rotateFile(const char *new_filename) {
-  Debug(1, "Rotating video file to %s", new_filename);
-
-  // Drain reorder queues into current file
-  for (auto &n : reorder_queues) {
-    auto &queue = n.second;
-    while (!queue.empty()) {
-      auto pkt = queue.front();
-      queue.pop_front();
-      if (pkt->codec_type == AVMEDIA_TYPE_VIDEO) {
-        writeVideoFramePacket(pkt);
-      } else if (pkt->codec_type == AVMEDIA_TYPE_AUDIO) {
-        writeAudioFramePacket(pkt);
-      }
-    }
-  }
-
-  if (oc->pb) {
-    // Drain any pending encoded packets from the encoder into the CURRENT file
-    // before closing it. Don't send NULL frame (that would end the encoder).
-    // This prevents stale-timestamp packets from leaking into the next segment.
-    if (video_out_ctx && (video_out_ctx->codec->capabilities & AV_CODEC_CAP_DELAY)) {
-      AVPacket *drain_pkt = av_packet_alloc();
-      if (drain_pkt) {
-        while (avcodec_receive_packet(video_out_ctx, drain_pkt) >= 0) {
-          Debug(1, "rotateFile: drained pending encoder packet pts=%" PRId64 " dts=%" PRId64,
-                drain_pkt->pts, drain_pkt->dts);
-          if (drain_pkt->pts != AV_NOPTS_VALUE)
-            drain_pkt->pts = av_rescale_q(drain_pkt->pts, video_out_ctx->time_base, video_out_stream->time_base);
-          if (drain_pkt->dts != AV_NOPTS_VALUE)
-            drain_pkt->dts = av_rescale_q(drain_pkt->dts, video_out_ctx->time_base, video_out_stream->time_base);
-          write_packet(drain_pkt, video_out_stream);
-          av_packet_unref(drain_pkt);
-        }
-        av_packet_free(&drain_pkt);
-      }
-    }
-
-    // Flush interleaved queues
-    av_interleaved_write_frame(oc, nullptr);
-
-    int rc;
-    if ((rc = av_write_trailer(oc)) < 0) {
-      Error("rotateFile: error writing trailer: %s", av_err2str(rc));
-    }
-    if (!(out_format->flags & AVFMT_NOFILE)) {
-      if ((rc = avio_close(oc->pb)) < 0) {
-        Error("rotateFile: error closing avio: %s", av_err2str(rc));
-      }
-    }
-    oc->pb = nullptr;
-  }
-
-  // Free format context (frees streams, but NOT codec contexts)
-  avformat_free_context(oc);
-  oc = nullptr;
-  video_out_stream = nullptr;
-  audio_out_stream = nullptr;
-
-  // Allocate new format context
-  filename = new_filename;
-  int ret = avformat_alloc_output_context2(&oc, nullptr, nullptr, filename);
-  if (ret < 0 || !oc) {
-    ret = avformat_alloc_output_context2(&oc, nullptr, format, filename);
-    if (ret < 0 || !oc) {
-      Error("rotateFile: failed to allocate output context for %s", filename);
-      return false;
-    }
-  }
-
-  out_format = const_cast<AVOutputFormat *>(oc->oformat);
-#if !LIBAVFORMAT_VERSION_CHECK(59, 16,100, 9, 0)
-  out_format->flags |= AVFMT_TS_NONSTRICT;
-#endif
-
-  // Recreate streams from existing codec contexts
-  video_out_stream = avformat_new_stream(oc, nullptr);
-  if (!video_out_stream) {
-    Error("rotateFile: failed to create video stream");
-    return false;
-  }
-  if (video_out_ctx) {
-    avcodec_parameters_from_context(video_out_stream->codecpar, video_out_ctx);
-  } else if (video_in_stream) {
-    avcodec_parameters_copy(video_out_stream->codecpar, video_in_stream->codecpar);
-  }
-  video_out_stream->time_base = video_in_stream ? video_in_stream->time_base : AV_TIME_BASE_Q;
-  if (video_out_ctx && video_out_ctx->framerate.num) {
-    video_out_stream->avg_frame_rate = video_out_ctx->framerate;
-  } else if (video_in_stream && video_in_stream->avg_frame_rate.num) {
-    video_out_stream->avg_frame_rate = video_in_stream->avg_frame_rate;
-  }
-
-  max_stream_index = video_out_stream->index;
-
-  // Recreate audio stream if audio was active in previous segment
-  if (audio_in_stream && audio_out_ctx) {
-    audio_out_stream = avformat_new_stream(oc, nullptr);
-    if (audio_out_stream) {
-      avcodec_parameters_from_context(audio_out_stream->codecpar, audio_out_ctx);
-      audio_out_stream->time_base = audio_in_stream->time_base;
-      max_stream_index = audio_out_stream->index;
-    }
-  } else if (audio_in_stream) {
-    // Passthrough audio
-    audio_out_stream = avformat_new_stream(oc, nullptr);
-    if (audio_out_stream) {
-      avcodec_parameters_copy(audio_out_stream->codecpar, audio_in_stream->codecpar);
-      audio_out_stream->time_base = audio_in_stream->time_base;
-      max_stream_index = audio_out_stream->index;
-    }
-  }
-
-  // Reset timestamp tracking for new file — must happen AFTER stream setup
-  delete[] next_dts;
-  next_dts = new int64_t[max_stream_index + 1];
-  for (int i = 0; i <= max_stream_index; i++) {
-    next_dts[i] = 0;
-  }
-  video_first_pts = AV_NOPTS_VALUE;
-  video_first_dts = AV_NOPTS_VALUE;
-  audio_first_pts = AV_NOPTS_VALUE;
-  audio_first_dts = AV_NOPTS_VALUE;
-  video_last_pts = AV_NOPTS_VALUE;
-  audio_last_pts = AV_NOPTS_VALUE;
-  audio_next_pts = 0;
-  last_dts.clear();
-  last_duration.clear();
-  // Re-initialize last_dts for active streams
-  last_dts[video_out_stream->index] = AV_NOPTS_VALUE;
-  if (audio_out_stream)
-    last_dts[audio_out_stream->index] = AV_NOPTS_VALUE;
-  reorder_queues.clear();
-  reorder_queues[video_out_stream->index] = {};
-  if (audio_out_stream)
-    reorder_queues[audio_out_stream->index] = {};
-  packets_written = 0;
-  frame_count = 0;
-
-  // Open new output file
-  if (!(out_format->flags & AVFMT_NOFILE)) {
-    ret = avio_open2(&oc->pb, filename, AVIO_FLAG_WRITE, nullptr, nullptr);
-    if (ret < 0) {
-      Error("rotateFile: failed to open %s: %s", filename, av_err2str(ret));
-      return false;
-    }
-  }
-
-  // Write header with same movflags
-  AVDictionary *opts = nullptr;
-  av_dict_set(&opts, "movflags", "frag_keyframe+empty_moov+faststart", 0);
-  ret = avformat_write_header(oc, &opts);
-  av_dict_free(&opts);
-  if (ret < 0) {
-    Error("rotateFile: failed to write header: %s", av_err2str(ret));
-    avio_closep(&oc->pb);
-    return false;
-  }
-
-  Debug(1, "Successfully rotated to %s", filename);
-  return true;
-}
-
-bool remux_to_faststart(const std::string &filepath) {
-  AVFormatContext *ifmt_ctx = nullptr;
-  AVFormatContext *ofmt_ctx = nullptr;
-  int ret;
-
-  // Use .tmp before the extension so ffmpeg can autodetect the format.
-  // e.g. "foo.mp4" -> "foo.tmp.mp4"
-  std::string ext;
-  std::string base = filepath;
-  auto dot = filepath.rfind('.');
-  if (dot != std::string::npos) {
-    ext = filepath.substr(dot);   // ".mp4"
-    base = filepath.substr(0, dot); // "foo"
-  }
-  std::string tmp_path = base + ".tmp" + ext;
-
-  ret = avformat_open_input(&ifmt_ctx, filepath.c_str(), nullptr, nullptr);
-  if (ret < 0) {
-    Error("remux_to_faststart: failed to open input %s: %s",
-          filepath.c_str(), av_err2str(ret));
-    return false;
-  }
-
-  ret = avformat_find_stream_info(ifmt_ctx, nullptr);
-  if (ret < 0) {
-    Error("remux_to_faststart: failed to find stream info: %s", av_err2str(ret));
-    avformat_close_input(&ifmt_ctx);
-    return false;
-  }
-
-  ret = avformat_alloc_output_context2(&ofmt_ctx, nullptr, nullptr, tmp_path.c_str());
-  if (ret < 0 || !ofmt_ctx) {
-    Error("remux_to_faststart: failed to allocate output context: %s", av_err2str(ret));
-    avformat_close_input(&ifmt_ctx);
-    return false;
-  }
-
-  // Map all streams from input to output
-  int *stream_mapping = new int[ifmt_ctx->nb_streams];
-  int out_stream_idx = 0;
-  for (unsigned int i = 0; i < ifmt_ctx->nb_streams; i++) {
-    AVCodecParameters *in_codecpar = ifmt_ctx->streams[i]->codecpar;
-    if (in_codecpar->codec_type != AVMEDIA_TYPE_AUDIO &&
-        in_codecpar->codec_type != AVMEDIA_TYPE_VIDEO &&
-        in_codecpar->codec_type != AVMEDIA_TYPE_SUBTITLE) {
-      stream_mapping[i] = -1;
-      continue;
-    }
-    stream_mapping[i] = out_stream_idx++;
-    AVStream *out_stream = avformat_new_stream(ofmt_ctx, nullptr);
-    if (!out_stream) {
-      Error("remux_to_faststart: failed to allocate output stream");
-      delete[] stream_mapping;
-      avformat_close_input(&ifmt_ctx);
-      avformat_free_context(ofmt_ctx);
-      return false;
-    }
-    ret = avcodec_parameters_copy(out_stream->codecpar, in_codecpar);
-    if (ret < 0) {
-      Error("remux_to_faststart: failed to copy codec parameters: %s", av_err2str(ret));
-      delete[] stream_mapping;
-      avformat_close_input(&ifmt_ctx);
-      avformat_free_context(ofmt_ctx);
-      return false;
-    }
-    out_stream->codecpar->codec_tag = 0;
-    out_stream->time_base = ifmt_ctx->streams[i]->time_base;
-  }
-
-  if (!(ofmt_ctx->oformat->flags & AVFMT_NOFILE)) {
-    ret = avio_open(&ofmt_ctx->pb, tmp_path.c_str(), AVIO_FLAG_WRITE);
-    if (ret < 0) {
-      Error("remux_to_faststart: failed to open output file %s: %s",
-            tmp_path.c_str(), av_err2str(ret));
-      delete[] stream_mapping;
-      avformat_close_input(&ifmt_ctx);
-      avformat_free_context(ofmt_ctx);
-      return false;
-    }
-  }
-
-  // Non-fragmented with faststart: moov at front with full sample tables
-  AVDictionary *opts = nullptr;
-  av_dict_set(&opts, "movflags", "+faststart", 0);
-
-  ret = avformat_write_header(ofmt_ctx, &opts);
-  av_dict_free(&opts);
-  if (ret < 0) {
-    Error("remux_to_faststart: failed to write header: %s", av_err2str(ret));
-    delete[] stream_mapping;
-    avformat_close_input(&ifmt_ctx);
-    if (ofmt_ctx->pb) avio_closep(&ofmt_ctx->pb);
-    avformat_free_context(ofmt_ctx);
-    unlink(tmp_path.c_str());
-    return false;
-  }
-
-  AVPacket pkt;
-  while (true) {
-    ret = av_read_frame(ifmt_ctx, &pkt);
-    if (ret < 0) break;
-
-    if (pkt.stream_index >= (int)ifmt_ctx->nb_streams ||
-        stream_mapping[pkt.stream_index] < 0) {
-      av_packet_unref(&pkt);
-      continue;
-    }
-
-    AVStream *in_stream = ifmt_ctx->streams[pkt.stream_index];
-    pkt.stream_index = stream_mapping[pkt.stream_index];
-    AVStream *out_stream = ofmt_ctx->streams[pkt.stream_index];
-
-    // Rescale timestamps
-    pkt.pts = av_rescale_q_rnd(pkt.pts, in_stream->time_base, out_stream->time_base,
-                                static_cast<AVRounding>(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
-    pkt.dts = av_rescale_q_rnd(pkt.dts, in_stream->time_base, out_stream->time_base,
-                                static_cast<AVRounding>(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
-    pkt.duration = av_rescale_q(pkt.duration, in_stream->time_base, out_stream->time_base);
-    pkt.pos = -1;
-
-    ret = av_interleaved_write_frame(ofmt_ctx, &pkt);
-    av_packet_unref(&pkt);
-    if (ret < 0) {
-      Error("remux_to_faststart: error writing packet: %s", av_err2str(ret));
-      break;
-    }
-  }
-
-  av_write_trailer(ofmt_ctx);
-
-  // Cleanup
-  delete[] stream_mapping;
-  avformat_close_input(&ifmt_ctx);
-  if (ofmt_ctx->pb) avio_closep(&ofmt_ctx->pb);
-  avformat_free_context(ofmt_ctx);
-
-  if (ret < 0 && ret != AVERROR_EOF) {
-    Error("remux_to_faststart: remux failed, keeping original: %s", av_err2str(ret));
-    unlink(tmp_path.c_str());
-    return false;
-  }
-
-  // Replace original with remuxed file
-  ret = rename(tmp_path.c_str(), filepath.c_str());
-  if (ret != 0) {
-    Error("remux_to_faststart: failed to replace %s with remuxed file: %s",
-          filepath.c_str(), strerror(errno));
-    unlink(tmp_path.c_str());
-    return false;
-  }
-
-  Debug(1, "remux_to_faststart: successfully remuxed %s", filepath.c_str());
-  return true;
-}
