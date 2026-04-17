@@ -1927,6 +1927,12 @@ function canPlayCodec(filename) {
     const codec = matches[1];
     const ext = matches[2].toLowerCase();
     const video = document.createElement('video');
+    if (matches[1] == 'av1') matches[1] = 'av01.0.01M.08';
+    else if (matches[1] == 'h264') matches[1] = 'avc1.42E01E';
+    else if (matches[1] == 'hevc') matches[1] = 'hvc1.1.6.L93.B0';
+    else {
+      console.log('matches didnt match'+matches[1]);
+    }
     video.muted = true;
 
     // For HLS playlists, check native HLS support with the embedded codec
