@@ -780,6 +780,7 @@ uint8_t* Image::WriteBuffer(
     colours = p_colours;
     linesize = p_width * p_colours;
     subpixelorder = p_subpixelorder;
+    imagePixFormat = p_pixfmt;
     pixels = height*width;
     imagePixFormat = AVPixFormat();
   }  // end if need to re-alloc buffer
@@ -803,26 +804,9 @@ void Image::AssignDirect(const AVFrame *frame) {
   v_buffer = frame->data[2];
 
   linesize = frame->linesize[0];
+  allocation = size = av_image_get_buffer_size(static_cast<AVPixelFormat>(frame->format), frame->width, frame->height, 32);
   imagePixFormat = static_cast<AVPixelFormat>(frame->format);
-  size = av_image_get_buffer_size(imagePixFormat, frame->width, frame->height, 32);
-  allocation = size;
-//Debug(3, "Size %u, allocation %lu", size, allocation);
-//zm_dump_video_frame(frame, "AssignDirect");
-
-  switch(static_cast<AVPixelFormat>(frame->format)) {
-    case AV_PIX_FMT_RGBA:
-      subpixelorder = ZM_SUBPIX_ORDER_RGBA;
-      colours = ZM_COLOUR_RGB32;
-      break;
-    case AV_PIX_FMT_YUV420P:
-    case AV_PIX_FMT_YUVJ420P:
-      colours = ZM_COLOUR_YUV420P;
-      subpixelorder = ZM_SUBPIX_ORDER_YUV420P;
-      break;
-    default:
-      Warning("Unknown pixel format %d", frame->format);
-      break;
-  }
+  zm_colours_from_pixformat(imagePixFormat, colours, subpixelorder);
   holdbuffer = true;
   buffertype = ZM_BUFTYPE_DONTFREE;
   pixels = width * height;
@@ -888,6 +872,7 @@ void Image::AssignDirect(
     buffer = new_buffer;
   }
 
+  imagePixFormat = zm_pixformat_from_colours(colours, subpixelorder);
   linesize = FFALIGN(av_image_get_linesize(imagePixFormat, width, 0), 32);
   pixels = width * height;
   size = new_buffer_size;
@@ -942,7 +927,7 @@ void Image::Assign(
     pixels = width*height;
     colours = p_colours;
     subpixelorder = p_subpixelorder;
-    imagePixFormat = AVPixFormat();
+    imagePixFormat = zm_pixformat_from_colours(colours, subpixelorder);
     linesize = FFALIGN(av_image_get_linesize(imagePixFormat, width, 0), 32);
     size = new_size;
   }
