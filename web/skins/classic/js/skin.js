@@ -1940,18 +1940,31 @@ function canPlayCodec(filename) {
       return false;
     }
 
-    // For mp4/other containers, check specific codec support
-    let codecId = codec;
-    if (codec === 'av1') codecId = 'av01';
-    else if (codec === 'h264') codecId = 'avc1';
-    else if (codec === 'hevc') codecId = 'hvc1';
+    // Try specific codec strings with profile info first (more likely to get
+    // "probably"), then fall back to generic codec IDs.
+    // Browsers vary in which strings they accept, especially for HEVC.
+    let candidates;
+    if (codec === 'av1') candidates = ['av01.0.01M.08', 'av01'];
+    else if (codec === 'h264') candidates = ['avc1.42E01E', 'avc1'];
+    else if (codec === 'hevc') candidates = ['hvc1.1.6.L93.B0', 'hev1', 'hvc1', 'hevc'];
+    else candidates = [codec];
 
-    const can = video.canPlayType(`video/mp4; codecs="${codecId}"`);
-    if (can === 'probably' || can === 'maybe') {
-      console.log(`can ${can} play ${codecId}`);
+    for (const id of candidates) {
+      const can = video.canPlayType(`video/mp4; codecs="${id}"`);
+      if (can === 'probably' || can === 'maybe') {
+        console.log(`can ${can} play ${id} (native)`);
+        return true;
+      }
+    }
+
+    // Browser can't play natively, but video.js (if loaded) may handle it
+    // via software decoding or MSE extensions
+    if (typeof videojs !== 'undefined') {
+      console.log(`native cannot play ${codec}, but video.js is available`);
       return true;
     }
-    console.log(`cannot play ${codecId}`);
+
+    console.log(`cannot play ${codec} (tried: ${candidates.join(', ')})`);
     return false;
   } else {
     console.log('Failed to match re on ', filename);
