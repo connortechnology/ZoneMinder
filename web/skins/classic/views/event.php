@@ -150,9 +150,11 @@ if ((!$replayMode) or !$replayModes[$replayMode]) {
   $replayMode = 'none';
 }
 
-$video_tag = ($codec == 'MP4') ||
-  str_ends_with($Event->DefaultVideo(), '.m3u8') ||
-  ((false !== strpos($Event->DefaultVideo(), 'h264') || false !== strpos($Event->DefaultVideo(), 'av1')) && ($codec === 'auto'));
+// Render a <video> tag whenever there's a video file. The browser (via
+// canPlayCodec/video.js) determines whether it can actually play the codec —
+// PHP can't know that. Previously this whitelisted h264/av1 only, blocking
+// HEVC and future codecs.
+$video_tag = !empty($Event->DefaultVideo());
 
 
 // These are here to figure out the next/prev event, however if there is no filter, then default to one that specifies the Monitor

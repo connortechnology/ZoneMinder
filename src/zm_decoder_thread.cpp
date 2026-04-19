@@ -317,13 +317,10 @@ bool DecoderThread::Decode() {
 
     packet->image = new Image(monitor_->camera_width, monitor_->camera_height, native_colours, native_subpixelorder);
 
-    bool have_converter = monitor_->convert_context || monitor_->setupConvertContext(packet->in_frame.get(), packet->image);
-    if (have_converter) {
-      if (!packet->image->Assign(packet->in_frame.get(), monitor_->convert_context)) {
-        delete packet->image;
-        packet->image = nullptr;
-      }
-    } else {
+    // Assign uses av_image_copy when source/dest format match (fast path),
+    // or sws_scale when actual conversion is needed (e.g. different resolution
+    // or pixel format).
+    if (!packet->image->Assign(packet->in_frame.get())) {
       delete packet->image;
       packet->image = nullptr;
     }
