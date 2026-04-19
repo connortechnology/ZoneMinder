@@ -527,6 +527,7 @@ void Monitor::Load(MYSQL_ROW dbrow, bool load_zones = true, Purpose p = QUERY) {
   camera_height = atoi(dbrow[col]);
   col++;
   colours = atoi(dbrow[col]);
+  // colours from DB is legacy {1,3,4}. Derive the actual pixel format.
   col++;
   palette = atoi(dbrow[col]);
   col++;
@@ -1802,9 +1803,8 @@ void Monitor::DumpZoneImage(const char *zone_string) {
     }
   }
 
-  if ( zone_image->Colours() == ZM_COLOUR_GRAY8 ) {
-    // TODO isn't there a setting for this?
-    //zone_image->Colourise(ZM_COLOUR_RGB24, ZM_SUBPIX_ORDER_RGB);
+  if (zone_image->PixFormat() == AV_PIX_FMT_GRAY8) {
+    zone_image->Colourise(ZM_COLOUR_RGB24, ZM_SUBPIX_ORDER_RGB);
   }
 
   extra_zone.Clip(Box({0, 0}, {static_cast<int32>(zone_image->Width()),
@@ -1865,7 +1865,7 @@ bool Monitor::CheckSignal(const Image *image) {
   const uint8_t *buffer = image->Buffer();
   int pixels = image->Pixels();
   int width = image->Width();
-  int colours = image->Colours();
+  AVPixelFormat pix_fmt = image->PixFormat();
 
   int index = 0;
   for (int i = 0; i < signal_check_points; i++) {
@@ -1881,28 +1881,25 @@ bool Monitor::CheckSignal(const Image *image) {
       }
     }
 
-    if (colours == ZM_COLOUR_GRAY8) {
-      if (*(buffer + index) != grayscale_val) return true;
-    } else if (colours == ZM_COLOUR_RGB24) {
-      const uint8_t *ptr = buffer + (index * colours);
+    if (pix_fmt == AV_PIX_FMT_GRAY8 || zm_is_yuv420(pix_fmt)) {
+      if (*(buffer+index) != grayscale_val)
+        return true;
 
-      if (usedsubpixorder == ZM_SUBPIX_ORDER_BGR) {
-        if ((RED_PTR_BGRA(ptr) != red_val) ||
-            (GREEN_PTR_BGRA(ptr) != green_val) ||
-            (BLUE_PTR_BGRA(ptr) != blue_val))
+    } else if (zm_is_rgb24(pix_fmt)) {
+      const uint8_t *ptr = buffer + (index * static_cast<int>(zm_bytes_per_pixel(pix_fmt)));
+
+      if (pix_fmt == AV_PIX_FMT_BGR24) {
+        if ((RED_PTR_BGRA(ptr) != red_val) || (GREEN_PTR_BGRA(ptr) != green_val) || (BLUE_PTR_BGRA(ptr) != blue_val))
           return true;
       } else {
-        /* Assume RGB */
-        if ((RED_PTR_RGBA(ptr) != red_val) ||
-            (GREEN_PTR_RGBA(ptr) != green_val) ||
-            (BLUE_PTR_RGBA(ptr) != blue_val))
+        /* Assume RGB24 */
+        if ((RED_PTR_RGBA(ptr) != red_val) || (GREEN_PTR_RGBA(ptr) != green_val) || (BLUE_PTR_RGBA(ptr) != blue_val))
           return true;
       }
-    } else if (colours == ZM_COLOUR_RGB32) {
-      if (usedsubpixorder == ZM_SUBPIX_ORDER_ARGB ||
-          usedsubpixorder == ZM_SUBPIX_ORDER_ABGR) {
-        if (ARGB_ABGR_ZEROALPHA(*(((const Rgb *)buffer) + index)) !=
-            ARGB_ABGR_ZEROALPHA(colour_val))
+
+    } else if (zm_is_rgb32(pix_fmt)) {
+      if (pix_fmt == AV_PIX_FMT_ARGB || pix_fmt == AV_PIX_FMT_ABGR) {
+        if (ARGB_ABGR_ZEROALPHA(*(((const Rgb*)buffer)+index)) != ARGB_ABGR_ZEROALPHA(colour_val))
           return true;
       } else {
         /* Assume RGBA or BGRA */

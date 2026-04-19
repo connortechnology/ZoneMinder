@@ -480,13 +480,15 @@ bool MonitorStream::sendFrame(Image *image, SystemTimePoint timestamp) {
         return false;
     }
     if (
-        (0 > fprintf(stdout, "Content-Length: %zu\r\nX-Timestamp: %.6f\r\n\r\n",
-                     img_buffer_size, std::chrono::duration_cast<FPSeconds>(timestamp.time_since_epoch()).count()))
-        ||
-        (fwrite(img_buffer, img_buffer_size, 1, stdout) != 1)
-       ) {
-      // If the pipe was closed, we will get signalled SIGPIPE to exit, which will set zm_terminate
-      Debug(1, "Unable to send stream frame: %s, zm_terminate: %d", strerror(errno), (zm_terminate ? 1 : 0));
+      (0 > fprintf(stdout, "Content-Length: %zu\r\nX-Timestamp: %.6f\r\n\r\n",
+                   img_buffer_size, std::chrono::duration_cast<FPSeconds>(timestamp.time_since_epoch()).count()))
+      ||
+      (fwrite(img_buffer, img_buffer_size, 1, stdout) != 1)
+    ) {
+      // If the browser disconnected, SIGPIPE (handled by zm_pipe_handler in
+      // zms) sets zm_terminate; the fwrite above also returned an error with
+      // errno=EPIPE, which we log below before the loop exits cleanly.
+      Debug(1, "Unable to send stream frame: %s, zm_terminate: %d", strerror(errno), zm_terminate.load());
       return false;
     }
     bytes_sent += img_buffer_size;

@@ -56,6 +56,7 @@ VideoStore::VideoStore(
   encode_total_us_(0),
   encode_count_(0),
   video_encoded(false),
+  video_encoder_failed(false),
   hw_device_ctx(nullptr),
   resample_ctx(nullptr),
   fifo(nullptr),
@@ -1207,6 +1208,11 @@ int VideoStore::writePacket(const std::shared_ptr<ZMPacket> zm_pkt) {
 }
 
 int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet) {
+  if (video_encoder_failed) {
+    Debug(1, "Skipping encode — encoder in failed state");
+    return -1;
+  }
+
   av_packet_guard pkt_guard;
 
   frame_count += 1;
@@ -1269,50 +1275,69 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
         }
       } else if (zm_packet->in_frame) {
         Debug(1, "Using in_frame");
+        zm_dump_video_frame(zm_packet->in_frame.get(), "in_frame for encode");
         if (zm_packet->in_frame->width == video_out_ctx->width
             and
             zm_packet->in_frame->height == video_out_ctx->height
             and
             static_cast<AVPixelFormat>(zm_packet->in_frame->format) == chosen_codec_data->sw_pix_fmt
            ) {
+          Debug(1, "in_frame format %s matches encoder sw_pix_fmt %s, using directly",
+                av_get_pix_fmt_name(static_cast<AVPixelFormat>(zm_packet->in_frame->format)),
+                av_get_pix_fmt_name(chosen_codec_data->sw_pix_fmt));
           av_frame_ref(frame.get(), zm_packet->in_frame.get());
         } else {
-        Debug(1, "Scaling in_frame");
+          Debug(1, "Scaling in_frame %dx%d %s -> %dx%d %s",
+                zm_packet->in_frame->width, zm_packet->in_frame->height,
+                av_get_pix_fmt_name(static_cast<AVPixelFormat>(zm_packet->in_frame->format)),
+                video_out_ctx->width, video_out_ctx->height,
+                av_get_pix_fmt_name(chosen_codec_data->sw_pix_fmt));
           av_frame_ref(frame.get(), zm_packet->get_out_frame(video_out_ctx->width, video_out_ctx->height, chosen_codec_data->sw_pix_fmt));
-          // Have in_frame.... may need to convert it to out_frame
-          //av_frame_copy_props(frame.get(), zm_packet->in_frame.get());
           swscale.Convert(zm_packet->in_frame.get(), frame.get());
         }
       } // end if no in_frame
     } // end if no out_frame
 
+    zm_dump_video_frame(frame.get(), "frame before hwaccel check");
+    Debug(1, "Encoder: pix_fmt=%d %s sw_pix_fmt=%d %s, frame format=%d %s, hw_frames_ctx=%p, color_range=%d",
+          video_out_ctx->pix_fmt, av_get_pix_fmt_name(video_out_ctx->pix_fmt),
+          chosen_codec_data->sw_pix_fmt, av_get_pix_fmt_name(chosen_codec_data->sw_pix_fmt),
+          frame->format, av_get_pix_fmt_name(static_cast<AVPixelFormat>(frame->format)),
+          (void*)video_out_ctx->hw_frames_ctx,
+          frame->color_range);
+
 #if HAVE_LIBAVUTIL_HWCONTEXT_H
     if (video_out_ctx->hw_frames_ctx and (static_cast<AVPixelFormat>(frame->format) != video_out_ctx->pix_fmt)) {
-      zm_dump_frame(frame.get(), "using hwframe, src is");
+      zm_dump_video_frame(frame.get(), "hwframe upload src");
       int ret;
       av_frame_ptr hw_frame = av_frame_ptr{av_frame_alloc()};
       if (!hw_frame) {
         return AVERROR(ENOMEM);
       }
       if ((ret = av_hwframe_get_buffer(video_out_ctx->hw_frames_ctx, hw_frame.get(), 0)) < 0) {
-        Error("Error code: %s", av_err2str(ret));
+        Error("av_hwframe_get_buffer failed: %s", av_err2str(ret));
+        video_encoder_failed = true;
         return ret;
       }
       if (!hw_frame->hw_frames_ctx) {
-        Error("Out of ram!");
-        return 0;
+        Error("hw_frame has no hw_frames_ctx after get_buffer!");
+        video_encoder_failed = true;
+        return -1;
       }
       if ((ret = av_hwframe_transfer_data(hw_frame.get(), frame.get(), 0)) < 0) {
-        Error("Error while transferring frame data to surface: %d %s.", ret, av_err2str(ret));
+        Error("av_hwframe_transfer_data failed: %d %s. src format=%d %s",
+              ret, av_err2str(ret),
+              frame->format, av_get_pix_fmt_name(static_cast<AVPixelFormat>(frame->format)));
+        video_encoder_failed = true;
         return ret;
       }
-      ret = av_frame_copy_props( hw_frame.get(), frame.get());
+      ret = av_frame_copy_props(hw_frame.get(), frame.get());
       if (ret < 0) {
         Error("Unable to copy props: %s, continuing", av_make_error_string(ret).c_str());
       }
 
       frame = std::move(hw_frame);
-      zm_dump_frame(frame.get(), "using hwframe, dst is");
+      zm_dump_video_frame(frame.get(), "hwframe upload dst");
     }  // end if hwaccel
 #endif
     if (!frame) {
@@ -1398,21 +1423,50 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
 
     auto encode_start = std::chrono::steady_clock::now();
 
+    // Drain any pending packets from the encoder before sending a new frame.
+    // VAAPI encoders can accumulate output packets; not draining before send
+    // can exhaust the internal surface pool and trigger an abort.
+    {
+      AVPacket *drain_pkt = av_packet_alloc();
+      while (drain_pkt) {
+        int drain_ret = avcodec_receive_packet(video_out_ctx, drain_pkt);
+        if (drain_ret == 0) {
+          Debug(3, "Drained buffered packet from encoder before send");
+          av_packet_unref(drain_pkt);
+          continue;
+        }
+        break;
+      }
+      av_packet_free(&drain_pkt);
+    }
+
     do {
-      zm_dump_frame(frame.get(), "sending frame");
+      zm_dump_video_frame(frame.get(), "sending video frame");
+      if (frame->format != video_out_ctx->pix_fmt) {
+        Error("Frame format %d %s doesn't match encoder format %d %s",
+              frame->format, av_get_pix_fmt_name(static_cast<AVPixelFormat>(frame->format)),
+              video_out_ctx->pix_fmt, av_get_pix_fmt_name(video_out_ctx->pix_fmt));
+      }
       int ret = avcodec_send_frame(video_out_ctx, frame.get());
       if (ret < 0) {
         if (AVERROR(EAGAIN) != ret) {
           Error("Could not send frame (error '%s')", av_make_error_string(ret).c_str());
+          video_encoder_failed = true;
           return ret;
         } else {
-          Debug(3, "Got EAGAIN");
+          Debug(3, "Got EAGAIN, draining encoder");
+          // Drain one packet and retry
+          AVPacket *eagain_pkt = av_packet_alloc();
+          if (eagain_pkt) {
+            avcodec_receive_packet(video_out_ctx, eagain_pkt);
+            av_packet_free(&eagain_pkt);
+          }
         }
       } else {
         video_encoded = true;
         break;
       }
-    } while(!zm_terminate);
+    } while (!zm_terminate);
 
     while (!zm_terminate) {
       int ret = avcodec_receive_packet(video_out_ctx, opkt.get());

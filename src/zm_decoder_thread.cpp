@@ -290,22 +290,39 @@ bool DecoderThread::Decode() {
 
   packet->transfer_hwframe(monitor_->mVideoCodecContext);
   if (packet->in_frame && !packet->image) {
-    // Handle hardware-accelerated frames
-    //`packet->transfer_hwframe(monitor_->mVideoCodecContext);
+    // Use a pipeline-friendly pixel format. Prefer the decoded frame's native
+    // format when Image can represent it with full color (YUV420P, RGB24, RGBA,
+    // GRAY8). For formats like YUVJ422P (MJPEG output) where Image only stores
+    // the Y-plane and drops chroma, convert to YUV420P instead.
+    unsigned int native_colours, native_subpixelorder;
+    AVPixelFormat native_fmt = static_cast<AVPixelFormat>(packet->in_frame->format);
 
-    if (!packet->image) {
-      packet->image = new Image(monitor_->camera_width, monitor_->camera_height, monitor_->camera->Colours(), monitor_->camera->SubpixelOrder());
+    // Formats the Image class can represent with full fidelity
+    bool can_passthrough = (native_fmt == AV_PIX_FMT_YUV420P
+                         || native_fmt == AV_PIX_FMT_YUVJ420P
+                         || native_fmt == AV_PIX_FMT_YUV422P
+                         || native_fmt == AV_PIX_FMT_YUVJ422P
+                         || native_fmt == AV_PIX_FMT_GRAY8
+                         || zm_is_rgb24(native_fmt)
+                         || zm_is_rgb32(native_fmt));
 
-      bool have_converter = monitor_->convert_context || monitor_->setupConvertContext(packet->in_frame.get(), packet->image);
-      if (have_converter) {
-        if (!packet->image->Assign(packet->in_frame.get(), monitor_->convert_context)) {
-          delete packet->image;
-          packet->image = nullptr;
-        }
-      } else {
-        delete packet->image;
-        packet->image = nullptr;
-      }
+    if (can_passthrough && zm_colours_from_pixformat(native_fmt, native_colours, native_subpixelorder)) {
+      Debug(1, "Using native frame format %s", av_get_pix_fmt_name(native_fmt));
+    } else {
+      // Convert to YUV420P — universally supported, compact, encoder-friendly
+      Debug(1, "Converting %s to yuv420p for pipeline", av_get_pix_fmt_name(native_fmt));
+      native_colours = ZM_COLOUR_GRAY8;
+      native_subpixelorder = ZM_SUBPIX_ORDER_YUV420P;
+    }
+
+    packet->image = new Image(monitor_->camera_width, monitor_->camera_height, native_colours, native_subpixelorder);
+
+    // Assign uses av_image_copy when source/dest format match (fast path),
+    // or sws_scale when actual conversion is needed (e.g. different resolution
+    // or pixel format).
+    if (!packet->image->Assign(packet->in_frame.get())) {
+      delete packet->image;
+      packet->image = nullptr;
     }
   }
 

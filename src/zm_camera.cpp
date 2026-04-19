@@ -39,8 +39,9 @@ Camera::Camera(
   type(p_type),
   width(p_width),
   height(p_height),
-  colours(ZM_COLOUR_YUV420P),
-  subpixelorder(ZM_SUBPIX_ORDER_YUV420P),
+  colours(p_colours),
+  subpixelorder(p_subpixelorder),
+  pixelFormat(zm_pixformat_from_colours(p_colours, p_subpixelorder)),
   brightness(p_brightness),
   hue(p_hue),
   colour(p_colour),
@@ -63,9 +64,9 @@ Camera::Camera(
   mLastAudioDTS(AV_NOPTS_VALUE),
   bytes(0),
   mIsPrimed(false) {
-  linesize = FFALIGN(av_image_get_linesize(AV_PIX_FMT_YUV420P, width, 0), 32); // hardcoded hack
+  linesize = FFALIGN(av_image_get_linesize(pixelFormat, width, 0), 32);
   pixels = width * height;
-  imagesize = av_image_get_buffer_size(AV_PIX_FMT_YUV420P, width, height, 32); // hardcoded hack
+  imagesize = av_image_get_buffer_size(pixelFormat, width, height, 32);
 
   Debug(2, "New camera id: %d width: %d line size: %d height: %d colours: %d subpixelorder: %d capture: %d, size: %llu",
         monitor->Id(), width, linesize, height, colours, subpixelorder, capture, imagesize);
@@ -99,7 +100,7 @@ AVStream *Camera::getVideoStream() {
       mVideoStream->time_base = (AVRational) {1, 1000000}; // microseconds as base frame rate
       mVideoStream->codecpar->width = width;
       mVideoStream->codecpar->height = height;
-      mVideoStream->codecpar->format = GetFFMPEGPixelFormat(colours, subpixelorder);
+      mVideoStream->codecpar->format = pixelFormat;
       mVideoStream->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
       mVideoStream->codecpar->codec_id = AV_CODEC_ID_NONE;
       Debug(1, "Allocating avstream %p %p %d", mVideoStream, mVideoStream->codecpar, mVideoStream->codecpar->codec_id);
