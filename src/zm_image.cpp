@@ -1432,7 +1432,8 @@ bool Image::WriteJpeg(const std::string &filename,
   cinfo->image_width = width;   /* image width and height, in pixels */
   cinfo->image_height = height;
 
-  if (imagePixFormat == AV_PIX_FMT_GRAY8) {
+  if (zm_bytes_per_pixel(imagePixFormat) == 1) {
+    // GRAY8 and planar YUV formats: libjpeg encodes the Y-plane as grayscale
     cinfo->input_components = 1;
     cinfo->in_color_space = JCS_GRAYSCALE;
   } else if (zm_is_rgb32(imagePixFormat)) {
@@ -1799,7 +1800,8 @@ bool Image::EncodeJpeg(JOCTET *outbuffer, size_t *outbuffer_size, int quality_ov
   cinfo->image_width = width;   /* image width and height, in pixels */
   cinfo->image_height = height;
 
-  if (imagePixFormat == AV_PIX_FMT_GRAY8) {
+  if (zm_bytes_per_pixel(imagePixFormat) == 1) {
+    // GRAY8 and planar YUV formats: libjpeg encodes the Y-plane as grayscale
     cinfo->input_components = 1;
     cinfo->in_color_space = JCS_GRAYSCALE;
   } else if (zm_is_rgb32(imagePixFormat)) {

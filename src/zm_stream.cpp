@@ -353,8 +353,8 @@ Image *StreamBase::prepareImage(Image *image) {
 bool StreamBase::sendTextFrame(const char *frame_text) {
   int width = 640;
   int height = 480;
-  int colours = ZM_COLOUR_YUV420P;
-  int subpixelorder = ZM_SUBPIX_ORDER_YUV420P;
+  int colours = ZM_COLOUR_GRAY8;
+  int subpixelorder = ZM_SUBPIX_ORDER_NONE;
   int labelsize = 2;
 
   if (monitor) {
