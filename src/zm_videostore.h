@@ -66,6 +66,7 @@ class VideoStore {
   int64_t encode_total_us_;
   int encode_count_;
   bool video_encoded;  // true once at least one frame has been sent to the video encoder
+  bool video_encoder_failed;  // true after a fatal encoder error; skip further sends
 
   AVBufferRef *hw_device_ctx;
 
