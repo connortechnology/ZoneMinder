@@ -64,9 +64,9 @@ Camera::Camera(
   mLastAudioDTS(AV_NOPTS_VALUE),
   bytes(0),
   mIsPrimed(false) {
-  linesize = FFALIGN(av_image_get_linesize(AV_PIX_FMT_YUV420P, width, 0), 32); // hardcoded hack
+  linesize = FFALIGN(av_image_get_linesize(pixelFormat, width, 0), 32);
   pixels = width * height;
-  imagesize = av_image_get_buffer_size(AV_PIX_FMT_YUV420P, width, height, 32); // hardcoded hack
+  imagesize = av_image_get_buffer_size(pixelFormat, width, height, 32);
 
   Debug(2, "New camera id: %d width: %d line size: %d height: %d colours: %d subpixelorder: %d capture: %d, size: %llu",
         monitor->Id(), width, linesize, height, colours, subpixelorder, capture, imagesize);
