@@ -290,22 +290,32 @@ bool DecoderThread::Decode() {
 
   packet->transfer_hwframe(monitor_->mVideoCodecContext);
   if (packet->in_frame && !packet->image) {
-    // Handle hardware-accelerated frames
-    //`packet->transfer_hwframe(monitor_->mVideoCodecContext);
+    // Use the decoded frame's native pixel format directly instead of
+    // converting to Monitor.Colours (e.g. RGBA). The camera's native format
+    // (typically YUV420P for h264, YUVJ422P for MJPEG) is kept through the
+    // pipeline. This avoids wasteful format conversions and reduces shared
+    // memory usage.
+    unsigned int native_colours, native_subpixelorder;
+    AVPixelFormat native_fmt = static_cast<AVPixelFormat>(packet->in_frame->format);
+    if (!zm_colours_from_pixformat(native_fmt, native_colours, native_subpixelorder)) {
+      // Unknown format — fall back to converting to the camera's configured format
+      Debug(1, "Unknown in_frame format %d %s, converting to camera format",
+            native_fmt, av_get_pix_fmt_name(native_fmt));
+      native_colours = monitor_->camera->Colours();
+      native_subpixelorder = monitor_->camera->SubpixelOrder();
+    }
 
-    if (!packet->image) {
-      packet->image = new Image(monitor_->camera_width, monitor_->camera_height, monitor_->camera->Colours(), monitor_->camera->SubpixelOrder());
+    packet->image = new Image(monitor_->camera_width, monitor_->camera_height, native_colours, native_subpixelorder);
 
-      bool have_converter = monitor_->convert_context || monitor_->setupConvertContext(packet->in_frame.get(), packet->image);
-      if (have_converter) {
-        if (!packet->image->Assign(packet->in_frame.get(), monitor_->convert_context)) {
-          delete packet->image;
-          packet->image = nullptr;
-        }
-      } else {
+    bool have_converter = monitor_->convert_context || monitor_->setupConvertContext(packet->in_frame.get(), packet->image);
+    if (have_converter) {
+      if (!packet->image->Assign(packet->in_frame.get(), monitor_->convert_context)) {
         delete packet->image;
         packet->image = nullptr;
       }
+    } else {
+      delete packet->image;
+      packet->image = nullptr;
     }
   }
 
