@@ -75,7 +75,8 @@ VideoStore::VideoStore(
   reorder_queue_size(0),
   last_fragment_offset_(0),
   last_fragment_start_dts_(AV_NOPTS_VALUE),
-  init_segment_end_(0) {
+  init_segment_end_(0),
+  write_packet_failed_(false) {
   FFMPEGInit();
   swscale.init();
   opkt = av_packet_ptr{av_packet_alloc()};
@@ -744,17 +745,23 @@ VideoStore::~VideoStore() {
   if (oc->pb) {
     flush_codecs();
 
-    // Flush Queues
-    Debug(4, "Flushing interleaved queues");
-    av_interleaved_write_frame(oc, nullptr);
-
-    Debug(1, "Writing trailer");
-    /* Write the trailer before close */
     int rc;
-    if ((rc = av_write_trailer(oc)) < 0) {
-      Error("Error writing trailer %s", av_err2str(rc));
+    // Skip trailer writes if a prior write_packet failed — muxer state may be
+    // inconsistent and these calls can trigger an internal ffmpeg abort.
+    if (!write_packet_failed_) {
+      // Flush Queues
+      Debug(4, "Flushing interleaved queues");
+      av_interleaved_write_frame(oc, nullptr);
+
+      Debug(1, "Writing trailer");
+      /* Write the trailer before close */
+      if ((rc = av_write_trailer(oc)) < 0) {
+        Error("Error writing trailer %s", av_err2str(rc));
+      } else {
+        Debug(3, "Success Writing trailer");
+      }
     } else {
-      Debug(3, "Success Writing trailer");
+      Warning("Skipping interleaved flush and trailer due to prior write failure");
     }
 
     // When will we not be using a file ?
@@ -1664,6 +1671,11 @@ int VideoStore::writeAudioFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
 }  // end int VideoStore::writeAudioFramePacket(AVPacket *ipkt)
 
 int VideoStore::write_packet(AVPacket *pkt, AVStream *stream) {
+  if (write_packet_failed_) {
+    // Muxer may be in an inconsistent state after a prior failure.
+    // Further av_interleaved_write_frame calls can trigger ffmpeg's internal abort().
+    return AVERROR(EINVAL);
+  }
   pkt->pos = -1;
   pkt->stream_index = stream->index;
   ZM_DUMP_PACKET(pkt, "packet in write_packet");
@@ -1763,6 +1775,7 @@ int VideoStore::write_packet(AVPacket *pkt, AVStream *stream) {
   int ret = av_interleaved_write_frame(oc, pkt);
   if (ret != 0) {
     Error("Error writing packet: %s", av_make_error_string(ret).c_str());
+    write_packet_failed_ = true;
   } else {
     Debug(4, "Success writing packet");
   }

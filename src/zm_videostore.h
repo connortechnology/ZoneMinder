@@ -102,6 +102,10 @@ class VideoStore {
   int64_t last_fragment_start_dts_; // DTS of first video keyframe in current fragment
   int64_t init_segment_end_;        // byte offset where init segment (ftyp+moov) ends
 
+  // Sticky flag: once av_interleaved_write_frame fails, muxer state may be
+  // inconsistent and a subsequent call can trigger an internal ffmpeg abort.
+  bool write_packet_failed_;
+
   bool setup_resampler();
   int write_packet(AVPacket *pkt, AVStream *stream);
 
