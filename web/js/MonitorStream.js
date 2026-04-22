@@ -82,9 +82,49 @@ function MonitorStream(monitorData) {
   };
 
   this.img_onerror = function() {
-    console.log('Image stream has been stopped! stopping streamCmd');
+    const stream = this.getElement();
+    const failedSrc = stream ? stream.src : '';
+    console.log('Image stream has been stopped! stopping streamCmd. src was: '+failedSrc);
     this.streamCmdTimer = clearInterval(this.streamCmdTimer);
+    // Clear src so the browser stops auto-retrying the multipart stream.
+    // multipart/x-mixed-replace triggers an internal reload loop in Chrome
+    // when the connection drops before any frame is received.
+    if (stream) {
+      stream.src = '';
+      stream.removeAttribute('src');
+    }
     this.writeTextInfoBlock("Error", {showImg: false});
+
+    if (!failedSrc) return;
+    // Classify the failure with a single non-streaming fetch so we can
+    // recover from a stale auth hash without spinning on the MJPEG stream.
+    const classifyUrl = failedSrc.replace(/mode=jpeg/i, 'mode=single');
+    fetch(classifyUrl, {credentials: 'include', cache: 'no-store'})
+        .then((response) => {
+          if (response.status === 401 || response.status === 403) {
+            const srcAuthMatch = failedSrc.match(/auth=(\w+)/i);
+            const srcAuthWasCurrent = srcAuthMatch && srcAuthMatch[1] === auth_hash;
+            if (srcAuthWasCurrent) {
+              console.error('zms returned '+response.status+' with current auth_hash; not retrying monitor '+this.id);
+            } else {
+              console.log('zms returned '+response.status+' with stale auth_hash; refreshing and restarting monitor '+this.id);
+              this.refreshAuthAndRestart();
+            }
+          } else if (response.status === 404) {
+            console.error('zms returned 404 for monitor '+this.id+' — giving up. url: '+failedSrc);
+          } else if (!response.ok) {
+            console.warn('zms returned '+response.status+' for monitor '+this.id);
+          }
+        })
+        .catch((err) => {
+          console.log('classify fetch failed for monitor '+this.id+': '+err);
+        });
+  };
+  this.refreshAuthAndRestart = function() {
+    const this_ = this;
+    refreshAuthHash(function() {
+      this_.restart(this_.currentChannelStream, 500);
+    });
   };
   this.img_onload = function() {
     if (!this.streamCmdTimer) {

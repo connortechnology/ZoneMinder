@@ -520,6 +520,41 @@ if ( currentView != 'none' && currentView != 'login' ) {
   }
 } // end if ( currentView != 'none' && currentView != 'login' )
 
+// Refresh auth_hash/auth_relay by hitting the navBar status endpoint, then
+// invoke onDone regardless of outcome. Pages that restart streams after
+// backgrounding should call this first so start() rebuilds the img src
+// with a current hash, avoiding the img_onerror→classify→recover round-trip.
+//
+// The request intentionally omits the auth hash — if the client's auth_relay
+// is stale we don't want to send a known-bad param. Auth rides on the session
+// cookie (xhrFields.withCredentials); if the session has also expired we'll
+// get 401 and reload to login.
+function refreshAuthHash(onDone) {
+  $j.ajax({
+    url: thisUrl + '?view=request&request=status&entity=navBar',
+    dataType: 'json',
+    xhrFields: {withCredentials: true}
+  })
+      .done(function(data) {
+        if (data) {
+          if (data.auth && data.auth !== auth_hash) {
+            console.log('refreshed auth_hash from '+auth_hash+' to '+data.auth);
+            auth_hash = data.auth;
+          }
+          if (data.auth_relay) auth_relay = data.auth_relay;
+        }
+        if (typeof onDone === 'function') onDone();
+      })
+      .fail(function(jqxhr, textStatus, error) {
+        console.log('Auth refresh failed: '+textStatus+' '+error);
+        if (error === 'Unauthorized' || jqxhr.status === 401 || jqxhr.status === 403) {
+          window.location.reload();
+          return;
+        }
+        if (typeof onDone === 'function') onDone();
+      });
+}
+
 //Shows a message if there is an error in the streamObj or the stream doesn't exist.  Returns true if error, false otherwise.
 function checkStreamForErrors(funcName, streamObj) {
   if ( !streamObj ) {

@@ -471,22 +471,7 @@ function startVisibleMonitors() {
 }
 
 function refreshAuthAndStartMonitors() {
-  $j.getJSON(thisUrl + '?view=request&request=status&entity=navBar' + (auth_relay ? '&' + auth_relay : ''))
-      .done(function(data) {
-        if (data) {
-          if (data.auth) {
-            auth_hash = data.auth;
-          }
-          if (data.auth_relay) {
-            auth_relay = data.auth_relay;
-          }
-        }
-        startVisibleMonitors();
-      })
-      .fail(function() {
-        // Even if refresh fails, try to start with whatever auth we have
-        startVisibleMonitors();
-      });
+  refreshAuthHash(startVisibleMonitors);
 }
 
 function reloadWebSite(ndx) {
