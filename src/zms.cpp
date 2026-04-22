@@ -259,7 +259,12 @@ int main(int argc, const char *argv[], char **envp) {
       fputs("HTTP/1.0 403 Forbidden\r\n\r\n", stdout);
 
       const char *referer = getenv("HTTP_REFERER");
-      Warning("Unable to authenticate user from %s", referer);
+      const char *remote_addr = getenv("REMOTE_ADDR");
+      Warning("Unable to authenticate user '%s' auth='%s' monitor=%d event=%" PRIu64
+              " referer=%s remote_addr=%s",
+              username.c_str(), auth, monitor_id, event_id,
+              referer ? referer : "(none)",
+              remote_addr ? remote_addr : "(none)");
       return exit_zm(0);
     }
     if ( !ValidateAccess(user, monitor_id) ) {

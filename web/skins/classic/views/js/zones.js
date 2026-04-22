@@ -61,11 +61,14 @@ document.onvisibilitychange = () => {
       }
     }, 15*1000);
   } else {
-    //Start monitors when show page
-    for (let i = 0, length = monitorData.length; i < length; i++) {
-      if (!monitors[i].started) {
-        monitors[i].start();
+    //Start monitors when show page — refresh auth first so the img src
+    //rebuilds with a current hash (avoids a stale-hash reject on resume).
+    refreshAuthHash(function() {
+      for (let i = 0, length = monitorData.length; i < length; i++) {
+        if (!monitors[i].started) {
+          monitors[i].start();
+        }
       }
-    }
+    });
   }
 };
