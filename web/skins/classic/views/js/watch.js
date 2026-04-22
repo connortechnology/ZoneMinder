@@ -1416,8 +1416,13 @@ document.onvisibilitychange = () => {
     if (monitorStream && prevStateStarted == 'played' && !idleTimeoutTriggered) {
       prevStateStarted = null;
       onPlay(); //Set the correct state of the player buttons.
-      monitorStream.start(monitorStream.currentChannelStream);
-      monitorsSetScale(monitorId);
+      // Refresh auth_hash before start() so the img src gets a current hash;
+      // otherwise after a long hide the page-load hash may be stale and zms
+      // will reject the stream, leaving the user to see a brief Error state.
+      refreshAuthHash(function() {
+        monitorStream.start(monitorStream.currentChannelStream);
+        monitorsSetScale(monitorId);
+      });
     //} else if (prevStateStarted != 'paused') {
     } else if (monitorStream && monitorStream.element && ((monitorStream.zmsState == 'paused') || (monitorStream.element.video && monitorStream.element.video.paused) || monitorStream.element.paused)) {
       prevStateStarted = null;

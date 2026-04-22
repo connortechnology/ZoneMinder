@@ -121,21 +121,9 @@ function MonitorStream(monitorData) {
   };
   this.refreshAuthAndRestart = function() {
     const this_ = this;
-    $j.getJSON(this.url + '?view=request&request=status&entity=navBar' + (auth_relay ? '&' + auth_relay : ''))
-        .done(function(data) {
-          if (data) {
-            if (data.auth && data.auth !== auth_hash) {
-              console.log('refreshed auth_hash from '+auth_hash+' to '+data.auth);
-              auth_hash = data.auth;
-            }
-            if (data.auth_relay) auth_relay = data.auth_relay;
-          }
-          this_.restart(this_.currentChannelStream, 500);
-        })
-        .fail(function(jqxhr, textStatus, error) {
-          console.log('Auth refresh failed: '+textStatus+' '+error);
-          if (error === 'Unauthorized') window.location.reload();
-        });
+    refreshAuthHash(function() {
+      this_.restart(this_.currentChannelStream, 500);
+    });
   };
   this.img_onload = function() {
     if (!this.streamCmdTimer) {
