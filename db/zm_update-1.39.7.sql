@@ -1,0 +1,44 @@
+--
+-- Consolidate Event_Summaries maintenance into event_update_trigger /
+-- event_delete_trigger on Events. Drop the cascade triggers on
+-- Events_Hour/Day/Week/Month so that a single Event operation produces a
+-- single UPDATE against Event_Summaries (was 5), eliminating the lock
+-- contention that caused deadlocks on bulk DELETE FROM Events_Hour by
+-- zmstats.pl.
+--
+-- Run one-time resync of the summary columns from actual counts/sums
+-- before recreating the triggers, so the transition doesn't leave stale
+-- values behind.
+--
+
+DROP TRIGGER IF EXISTS Events_Hour_delete_trigger;
+DROP TRIGGER IF EXISTS Events_Hour_update_trigger;
+DROP TRIGGER IF EXISTS Events_Day_delete_trigger;
+DROP TRIGGER IF EXISTS Events_Day_update_trigger;
+DROP TRIGGER IF EXISTS Events_Week_delete_trigger;
+DROP TRIGGER IF EXISTS Events_Week_update_trigger;
+DROP TRIGGER IF EXISTS Events_Month_delete_trigger;
+DROP TRIGGER IF EXISTS Events_Month_update_trigger;
+
+DROP TRIGGER IF EXISTS event_update_trigger;
+DROP TRIGGER IF EXISTS event_delete_trigger;
+
+-- Resync Event_Summaries from ground truth before re-enabling the new triggers.
+UPDATE Event_Summaries es
+LEFT JOIN (SELECT MonitorId, COUNT(*) c, COALESCE(SUM(DiskSpace), 0) s FROM Events_Hour  GROUP BY MonitorId) h  ON h.MonitorId  = es.MonitorId
+LEFT JOIN (SELECT MonitorId, COUNT(*) c, COALESCE(SUM(DiskSpace), 0) s FROM Events_Day   GROUP BY MonitorId) d  ON d.MonitorId  = es.MonitorId
+LEFT JOIN (SELECT MonitorId, COUNT(*) c, COALESCE(SUM(DiskSpace), 0) s FROM Events_Week  GROUP BY MonitorId) w  ON w.MonitorId  = es.MonitorId
+LEFT JOIN (SELECT MonitorId, COUNT(*) c, COALESCE(SUM(DiskSpace), 0) s FROM Events_Month GROUP BY MonitorId) m  ON m.MonitorId  = es.MonitorId
+SET
+  es.HourEvents          = COALESCE(h.c, 0),
+  es.HourEventDiskSpace  = COALESCE(h.s, 0),
+  es.DayEvents           = COALESCE(d.c, 0),
+  es.DayEventDiskSpace   = COALESCE(d.s, 0),
+  es.WeekEvents          = COALESCE(w.c, 0),
+  es.WeekEventDiskSpace  = COALESCE(w.s, 0),
+  es.MonthEvents         = COALESCE(m.c, 0),
+  es.MonthEventDiskSpace = COALESCE(m.s, 0);
+
+-- The CREATE TRIGGER statements live in db/triggers.sql and will be
+-- re-sourced by zmupdate.pl's normal trigger refresh step.
+source /usr/local/share/zoneminder/db/triggers.sql

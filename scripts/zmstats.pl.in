@@ -87,6 +87,10 @@ while (!$zm_terminate) {
   my $monitor_ids = $dbh->selectcol_arrayref('SELECT MonitorId FROM Monitor_Status WHERE UpdatedOn < timestamp(DATE_SUB(NOW(), INTERVAL 1 MINUTE))');
   zmDbDo('DELETE FROM Monitor_Status WHERE MonitorId IN ('.join(',', map { '?' } @$monitor_ids).')', @$monitor_ids) if $monitor_ids and @$monitor_ids;
 
+  # Prune aged rows from Events_Hour/Day/Week/Month. Cascade triggers on
+  # these tables have been removed (see db/zm_update-1.39.7.sql), so the
+  # corresponding Event_Summaries counters are resynced below from
+  # COUNT(*) / SUM(DiskSpace). This is also self-healing against drift.
   my $event_ids = $dbh->selectcol_arrayref('SELECT EventId FROM Events_Hour WHERE StartDateTime < DATE_SUB(NOW(), INTERVAL 1 hour)');
   zmDbDo('DELETE FROM Events_Hour WHERE EventId IN ('.join(',', map { '?' } @$event_ids).')', @$event_ids) if $event_ids and @$event_ids;
 
@@ -98,6 +102,22 @@ while (!$zm_terminate) {
 
   $event_ids = $dbh->selectcol_arrayref('SELECT EventId FROM Events_Month WHERE StartDateTime < DATE_SUB(NOW(), INTERVAL 1 month)');
   zmDbDo('DELETE FROM Events_Month WHERE EventId IN ('.join(',', map { '?' } @$event_ids).')', @$event_ids) if $event_ids and @$event_ids;
+
+  zmDbDo(q{
+    UPDATE Event_Summaries es
+    LEFT JOIN (SELECT MonitorId, COUNT(*) c, COALESCE(SUM(DiskSpace), 0) s FROM Events_Hour  GROUP BY MonitorId) h ON h.MonitorId = es.MonitorId
+    LEFT JOIN (SELECT MonitorId, COUNT(*) c, COALESCE(SUM(DiskSpace), 0) s FROM Events_Day   GROUP BY MonitorId) d ON d.MonitorId = es.MonitorId
+    LEFT JOIN (SELECT MonitorId, COUNT(*) c, COALESCE(SUM(DiskSpace), 0) s FROM Events_Week  GROUP BY MonitorId) w ON w.MonitorId = es.MonitorId
+    LEFT JOIN (SELECT MonitorId, COUNT(*) c, COALESCE(SUM(DiskSpace), 0) s FROM Events_Month GROUP BY MonitorId) m ON m.MonitorId = es.MonitorId
+    SET es.HourEvents          = COALESCE(h.c, 0),
+        es.HourEventDiskSpace  = COALESCE(h.s, 0),
+        es.DayEvents           = COALESCE(d.c, 0),
+        es.DayEventDiskSpace   = COALESCE(d.s, 0),
+        es.WeekEvents          = COALESCE(w.c, 0),
+        es.WeekEventDiskSpace  = COALESCE(w.s, 0),
+        es.MonthEvents         = COALESCE(m.c, 0),
+        es.MonthEventDiskSpace = COALESCE(m.s, 0)
+  });
 
   # Prune the Logs table if required (excluding AUDIT entries)
   if ( $Config{ZM_LOG_DATABASE_LIMIT} ) {
