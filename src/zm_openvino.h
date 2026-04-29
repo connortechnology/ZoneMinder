@@ -63,10 +63,10 @@ class OpenVINO {
     av_frame_ptr scaled_frame;
     SwsContext *sw_scale_ctx = nullptr;
 
-    // Letterbox scale factors used to undo the resize on detected boxes.
-    float scale = 1.0f;
-    int pad_x = 0;
-    int pad_y = 0;
+    // Last source-frame -> model-input scale, used to map detected boxes
+    // back to source coordinates. Set in send_frame, read in receive_detections.
+    float scale_x = 1.0f;
+    float scale_y = 1.0f;
   };
 
   OpenVINO();
