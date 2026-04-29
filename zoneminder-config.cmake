@@ -12,6 +12,7 @@
 #cmakedefine HAVE_MEMX_H 1
 #cmakedefine HAVE_MX_ACCL_H 1
 #cmakedefine HAVE_QUADRA 1
+#cmakedefine HAVE_OPENVINO 1
 #cmakedefine HAVE_UCONTEXT_H 1
 #cmakedefine HAVE_SYS_SENDFILE_H 1
 #cmakedefine HAVE_SYS_SYSCALL_H 1

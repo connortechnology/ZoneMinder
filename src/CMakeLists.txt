@@ -38,6 +38,7 @@ set(ZM_BIN_SRC_FILES
   zm_mx_accl.cpp
   zm_memx_yolo_core.cpp
   zm_memx_yolov8.cpp
+  zm_openvino.cpp
   zm_monitor.cpp
   zm_monitor_monitorlink.cpp
   zm_monitor_rtsp2web.cpp

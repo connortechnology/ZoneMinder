@@ -421,6 +421,21 @@ else()
   message(STATUS "NETINT Quadra (xcoder) support: No")
 endif()
 
+# Intel OpenVINO inference runtime (CPU/GPU/NPU). Archive installs are not in
+# CMake's default search path; pass -DOpenVINO_DIR=... or source the toolkit's
+# setupvars.sh before configuring.
+find_package(OpenVINO QUIET COMPONENTS Runtime)
+if(OpenVINO_FOUND)
+  set(HAVE_OPENVINO 1)
+  list(APPEND ZM_BIN_LIBS openvino::runtime)
+  set(optlibsfound "${optlibsfound} OpenVINO")
+  message(STATUS "Intel OpenVINO support: Yes (${OpenVINO_VERSION})")
+else()
+  set(HAVE_OPENVINO 0)
+  set(optlibsnotfound "${optlibsnotfound} OpenVINO")
+  message(STATUS "Intel OpenVINO support: No")
+endif()
+
 # jpeg
 find_package(JPEG)
 if(JPEG_FOUND)

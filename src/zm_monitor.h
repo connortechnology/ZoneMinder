@@ -58,6 +58,9 @@ extern "C" {
 #if HAVE_MX_ACCL_H
 #include "zm_mx_accl.h"
 #endif
+#if HAVE_OPENVINO
+#include "zm_openvino.h"
+#endif
 
 class Group;
 class MonitorLinkExpression;
@@ -113,6 +116,7 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
     OBJECT_DETECTION_QUADRA,
     OBJECT_DETECTION_UVICORN,
     OBJECT_DETECTION_MX_ACCL,
+    OBJECT_DETECTION_OPENVINO,
   } ObjectDetectionOption;
 
   typedef enum {
@@ -823,6 +827,10 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   MxAccl *mx_accl;
   MxAccl::Job *mx_accl_job;
 #endif
+#if HAVE_OPENVINO
+  OpenVINO *openvino;
+  OpenVINO::Job *openvino_job;
+#endif
   nlohmann::json last_detections;
   int last_detection_count;
 
@@ -1137,6 +1145,9 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   std::pair<int, std::string> Analyse_Quadra(std::shared_ptr<ZMPacket> packet);
 #if HAVE_MX_ACCL_H
   std::pair<int, std::string> Analyse_MxAccl(std::shared_ptr<ZMPacket> packet);
+#endif
+#if HAVE_OPENVINO
+  std::pair<int, std::string> Analyse_OpenVINO(std::shared_ptr<ZMPacket> packet);
 #endif
   struct transfer
 {
