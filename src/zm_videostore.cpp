@@ -1450,9 +1450,11 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
     do {
       zm_dump_video_frame(frame.get(), "sending video frame");
       if (frame->format != video_out_ctx->pix_fmt) {
-        Error("Frame format %d %s doesn't match encoder format %d %s",
+        Error("Frame format %d %s doesn't match encoder format %d %s — refusing to send (would crash encoder)",
               frame->format, av_get_pix_fmt_name(static_cast<AVPixelFormat>(frame->format)),
               video_out_ctx->pix_fmt, av_get_pix_fmt_name(video_out_ctx->pix_fmt));
+        video_encoder_failed = true;
+        return AVERROR(EINVAL);
       }
       int ret = avcodec_send_frame(video_out_ctx, frame.get());
       if (ret < 0) {
