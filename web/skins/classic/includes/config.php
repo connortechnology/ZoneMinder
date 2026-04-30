@@ -25,6 +25,13 @@ $Go2RTCTypes = array(
   'HLS' => 'HLS',
   'MJPEG' => 'MJPEG'
 );
+
+$whatDisplay = array(
+  'OnlyVideo' => translate('Only video'),
+  'OnlyAudioVisualization' => translate('Only audio visualization'),
+  'VideoAudioVisualization' => translate('Video and audio visualization'),
+);
+
 $RTSP2WebTypes = array(
   'HLS' => 'HLS',
   'MSE' => 'MSE',

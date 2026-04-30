@@ -2553,7 +2553,9 @@ int Monitor::Analyse() {
     }  // end if ( trigger_data->trigger_state != TRIGGER_OFF )
 
     if (packet->codec_type == AVMEDIA_TYPE_VIDEO) {
-      packetqueue.clearPackets(packet);
+      if (packetqueue.should_try_clear(packet->keyframe)) {
+        packetqueue.clearPackets(packet);
+      }
 
       unsigned int index = (shared_data->last_analysis_index+1) % image_buffer_count;
       if (
