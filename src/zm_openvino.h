@@ -77,7 +77,8 @@ class OpenVINO {
   // device: "GPU" / "CPU" / "AUTO" / "" (defaults to GPU then AUTO).
   bool setup(const std::string &model_file,
              const std::string &device = "",
-             float confidence = 0.5f);
+             float confidence = 0.5f,
+             float iou_threshold = 0.45f);
 
   Job *get_job();
 
@@ -98,6 +99,7 @@ class OpenVINO {
   int input_height_ = 0;
 
   float confidence_ = 0.5f;
+  float iou_threshold_ = 0.45f;
 
   ObjectClasses object_classes_;
 

@@ -115,6 +115,30 @@ TEST_CASE("yolov8_onnx_postprocess: filters detections below confidence threshol
   REQUIRE(out.front().class_index == 7);
 }
 
+TEST_CASE("yolov8_onnx_postprocess: iou_thresh controls NMS suppression") {
+  const int num_classes = 80;
+  const int num_anchors = 8400;
+  // Two same-class boxes with ~46% IOU. With a strict 0.30 threshold both
+  // should survive; with a lax 0.99 threshold both still survive (no overlap
+  // exceeds 0.99); with a moderate 0.40 threshold the lower-scoring one is
+  // dropped. This proves the iou_thresh argument actually flows through.
+  std::vector<SyntheticBox> boxes = {
+      {10, 0, 0.50f, 100.0f, 100.0f, 100.0f, 100.0f},
+      {11, 0, 0.90f, 150.0f, 150.0f, 100.0f, 100.0f},  // ~14% IOU at moderate offset
+  };
+  std::vector<float> tensor = BuildTensor(num_classes, num_anchors, boxes);
+
+  std::queue<BBox> strict;
+  yolov8_onnx_postprocess(tensor.data(), 4 + num_classes, num_anchors,
+                          /*conf*/ 0.25f, /*iou*/ 0.05f, strict);
+  REQUIRE(strict.size() == 1);  // strict iou: lower-scoring box gets suppressed
+
+  std::queue<BBox> lax;
+  yolov8_onnx_postprocess(tensor.data(), 4 + num_classes, num_anchors,
+                          /*conf*/ 0.25f, /*iou*/ 0.95f, lax);
+  REQUIRE(lax.size() == 2);  // lax iou: both boxes survive
+}
+
 TEST_CASE("yolov8_onnx_postprocess: NMS keeps the higher-score duplicate") {
   const int num_classes = 80;
   const int num_anchors = 8400;

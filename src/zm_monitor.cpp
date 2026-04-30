@@ -2743,7 +2743,8 @@ std::pair<int, std::string> Monitor::Analyse_OpenVINO(std::shared_ptr<ZMPacket> 
 
   if (!openvino and mVideoCodecContext) {
     openvino = new OpenVINO();
-    if (!openvino->setup(staticConfig.DIR_MODELS+"/"+objectdetection_model, "", objectdetection_object_threshold)) {
+    if (!openvino->setup(staticConfig.DIR_MODELS+"/"+objectdetection_model, "",
+                          objectdetection_object_threshold, objectdetection_nms_threshold)) {
       Warning("Failed setting up OpenVINO");
       delete openvino;
       openvino = nullptr;

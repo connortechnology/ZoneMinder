@@ -55,8 +55,10 @@ OpenVINO::~OpenVINO() {
 
 bool OpenVINO::setup(const std::string &model_file,
                      const std::string &device,
-                     float confidence) {
+                     float confidence,
+                     float iou_threshold) {
   confidence_ = confidence;
+  iou_threshold_ = iou_threshold;
 
   Debug(1, "OpenVINO loading %s", model_file.c_str());
   try {
@@ -231,7 +233,7 @@ nlohmann::json OpenVINO::receive_detections(Job *job, float object_threshold) {
 
   std::queue<BBox> bboxes;
   yolov8_onnx_postprocess(out.data<const float>(), num_channels, num_anchors,
-                          object_threshold, /*iou*/ 0.45f, bboxes);
+                          object_threshold, iou_threshold_, bboxes);
 
   while (!bboxes.empty()) {
     BBox b = bboxes.front();
