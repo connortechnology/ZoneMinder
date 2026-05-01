@@ -2568,8 +2568,9 @@ int Monitor::Analyse() {
 
       unsigned int index = (shared_data->last_analysis_index+1) % image_buffer_count;
       if (
-          objectdetection == OBJECT_DETECTION_QUADRA 
-          || objectdetection == OBJECT_DETECTION_MX_ACCL 
+          objectdetection == OBJECT_DETECTION_QUADRA
+          || objectdetection == OBJECT_DETECTION_MX_ACCL
+          || objectdetection == OBJECT_DETECTION_OPENVINO
           || objectdetection == OBJECT_DETECTION_UVICORN
           ) {
         // Only do these if it's a video packet.
@@ -2626,7 +2627,8 @@ int Monitor::Analyse() {
         shared_data->last_read_index = index;
         shared_data->analysis_image_count = analysis_image_count;
       } else {
-        Warning("Unknown value for Object_Detection");
+        Warning("Unknown value for Object_Detection: %d (monitor %u, packet %d)",
+                static_cast<int>(objectdetection), id, packet->image_index);
       }
     } else {
       Debug(3, "Not video, not clearing packets");
