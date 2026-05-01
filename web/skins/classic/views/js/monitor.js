@@ -965,14 +965,15 @@ function ObjectDetection_onChange(od_select) {
     $j('#ObjectDetectionModel').hide();
     $j('#ObjectDetectionObjectThreshold').hide();
     $j('#ObjectDetectionNMSThreshold').hide();
-  } else if (od == 'quadra' || od == 'memx' || od == 'mx_accl') {
+  } else if (od == 'quadra' || od == 'memx' || od == 'mx_accl' || od == 'openvino' || od == 'speedai') {
     $j('#ObjectDetectionModel').show();
     $j('#ObjectDetectionObjectThreshold').show();
     $j('#ObjectDetectionNMSThreshold').show();
     const od_model_select = od_select.form.elements['newMonitor[ObjectDetectionModel]'];
 
     od_model_select.innerHTML = '';
-    for (const [key, value] of Object.entries(od_models[od])) {
+    const choices = od_models[od] || {};
+    for (const [key, value] of Object.entries(choices)) {
       const opt = document.createElement('option');
       opt.value = key; // the index
       opt.innerHTML = value;

@@ -1146,11 +1146,10 @@ echo htmlSelect('newMonitor[Decoder]', $decoders, $monitor->Decoder());
             } else {
               ZM\Debug("Unkown extension in model $model");
             }
-            if ($monitor->ObjectDetection() == 'none') {
-              $models['none'][$model] = $model;
-            }
           }
-          echo htmlSelect('newMonitor[ObjectDetectionModel]', $models[$monitor->ObjectDetection()], $monitor->ObjectDetectionModel());
+          $od = $monitor->ObjectDetection();
+          $current_models = isset($models[$od]) ? $models[$od] : [];
+          echo htmlSelect('newMonitor[ObjectDetectionModel]', $current_models, $monitor->ObjectDetectionModel());
         } # end if ZM_DIR_MODELS
 ?>
             </li>
