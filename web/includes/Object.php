@@ -377,12 +377,13 @@ class ZM_Object {
       }
     );
 
+    global $dbConn;
+
     if ( $this->Id() ) {
       $fields = array_keys($fields);
       $sql = 'UPDATE `'.$table.'` SET '.implode(', ', array_map(function($field) {return '`'.$field.'`=?';}, $fields)).' WHERE Id=?';
       $values = array_map(function($field){ return $this->$field;}, $fields);
       $values[] = $this->{'Id'};
-      if (dbQuery($sql, $values)) return true;
     } else {
       unset($fields['Id']);
       $fields = array_keys($fields);
@@ -396,13 +397,26 @@ class ZM_Object {
       $filtered = array_filter($fields, function($field){ return ( (!$this->$field()) or ($this->$field() != 'NOW()'));});
       $mapped = array_map(function($field){return $this->$field();}, $filtered);
       $values = array_values($mapped);
-      if (dbQuery($sql, $values)) {
-        $this->{'Id'} = dbInsertId();
-        return true;
-      }
     }
-    $this->_last_error = dbError($sql);
-    return false;
+
+    // Run the query directly so we can capture the PDOException at the call
+    // site. dbQuery() swallows the exception, which loses the message by the
+    // time the caller asks via dbError(). This matters for warning-level
+    // conditions like data truncation (SQLSTATE 01000) that PDO surfaces as
+    // exceptions but where errorInfo() ends up empty afterward.
+    try {
+      $stmt = $dbConn->prepare($sql);
+      $stmt->execute($values);
+      if (!$this->Id()) {
+        $this->{'Id'} = $dbConn->lastInsertId();
+      }
+      return true;
+    } catch (PDOException $e) {
+      $this->_last_error = $e->getMessage();
+      ZM\Error("SQL-ERR '".$e->getMessage()."', statement was '".$sql.
+        "' params:" . ($values ? implode(',', $values) : ''));
+      return false;
+    }
   } // end function save
 
   public function insert($new_values = null) {
