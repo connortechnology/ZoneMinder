@@ -153,7 +153,8 @@ int OpenVINO::send_packet(Job *job, std::shared_ptr<ZMPacket> packet) {
 int OpenVINO::send_frame(Job *job, AVFrame *frame) {
   if (!job || !frame) return -1;
 
-  const SystemTimePoint t0 = std::chrono::system_clock::now();
+  using Clock = std::chrono::steady_clock;
+  const auto t_scale_begin = Clock::now();
 
   // Stretch sws_scale to model input. We deliberately don't letterbox on the
   // first cut — the rescale factors below undo the stretch on detected boxes,
@@ -175,6 +176,8 @@ int OpenVINO::send_frame(Job *job, AVFrame *frame) {
   job->scale_x = static_cast<float>(input_width_)  / frame->width;
   job->scale_y = static_cast<float>(input_height_) / frame->height;
 
+  const auto t_normalize_begin = Clock::now();
+
   // Build NCHW float input: planar R, G, B in [0, 1].
   ov::Tensor input_tensor(ov::element::f32,
                           {1, 3, static_cast<size_t>(input_height_),
@@ -194,6 +197,8 @@ int OpenVINO::send_frame(Job *job, AVFrame *frame) {
     }
   }
 
+  const auto t_infer_begin = Clock::now();
+
   try {
     job->infer_request.set_input_tensor(input_tensor);
     job->infer_request.infer();
@@ -202,11 +207,28 @@ int OpenVINO::send_frame(Job *job, AVFrame *frame) {
     return -1;
   }
 
-  const SystemTimePoint t1 = std::chrono::system_clock::now();
-  if (t1 - t0 > Milliseconds(200)) {
-    Warning("OpenVINO inference slow: %.3fs", FPSeconds(t1 - t0).count());
-  } else {
-    Debug(1, "OpenVINO inference: %.3fs", FPSeconds(t1 - t0).count());
+  const auto t_infer_end = Clock::now();
+
+  const uint64_t scale_us = std::chrono::duration_cast<std::chrono::microseconds>(
+      t_normalize_begin - t_scale_begin).count();
+  const uint64_t normalize_us = std::chrono::duration_cast<std::chrono::microseconds>(
+      t_infer_begin - t_normalize_begin).count();
+  const uint64_t infer_us = std::chrono::duration_cast<std::chrono::microseconds>(
+      t_infer_end - t_infer_begin).count();
+
+  job->stats.count++;
+  job->stats.scale_us     += scale_us;
+  job->stats.normalize_us += normalize_us;
+  job->stats.infer_us     += infer_us;
+  job->stats.infer_us_min = std::min(job->stats.infer_us_min, infer_us);
+  job->stats.infer_us_max = std::max(job->stats.infer_us_max, infer_us);
+
+  Debug(2, "OpenVINO frame: scale=%.2fms normalize=%.2fms infer=%.2fms",
+        scale_us / 1000.0, normalize_us / 1000.0, infer_us / 1000.0);
+
+  if (infer_us > 200000) {
+    Warning("OpenVINO inference slow: %.2fms (scale=%.2fms normalize=%.2fms)",
+            infer_us / 1000.0, scale_us / 1000.0, normalize_us / 1000.0);
   }
   return 1;
 }
@@ -231,9 +253,39 @@ nlohmann::json OpenVINO::receive_detections(Job *job, float object_threshold) {
   const int num_channels = static_cast<int>(shape[1]);
   const int num_anchors  = static_cast<int>(shape[2]);
 
+  using Clock = std::chrono::steady_clock;
+  const auto t_post_begin = Clock::now();
+
   std::queue<BBox> bboxes;
   yolov8_onnx_postprocess(out.data<const float>(), num_channels, num_anchors,
                           object_threshold, iou_threshold_, bboxes);
+
+  const auto t_post_end = Clock::now();
+  const uint64_t post_us = std::chrono::duration_cast<std::chrono::microseconds>(
+      t_post_end - t_post_begin).count();
+  job->stats.post_us += post_us;
+
+  // Periodic per-Job summary so users can see whether OpenVINO is keeping up
+  // without enabling per-frame Debug(2) on every monitor. 60s window — long
+  // enough to be cheap, short enough to surface degradations quickly.
+  const auto now = std::chrono::system_clock::now();
+  if (job->stats.window_start == std::chrono::system_clock::time_point{}) {
+    job->stats.window_start = now;
+  } else if (now - job->stats.window_start >= std::chrono::seconds(60)
+             && job->stats.count > 0) {
+    const double n = static_cast<double>(job->stats.count);
+    Info("OpenVINO stats over %llu frames: "
+         "scale=%.2fms norm=%.2fms infer=%.2fms (min=%.2fms max=%.2fms) post=%.2fms",
+         static_cast<unsigned long long>(job->stats.count),
+         job->stats.scale_us     / 1000.0 / n,
+         job->stats.normalize_us / 1000.0 / n,
+         job->stats.infer_us     / 1000.0 / n,
+         job->stats.infer_us_min / 1000.0,
+         job->stats.infer_us_max / 1000.0,
+         job->stats.post_us      / 1000.0 / n);
+    job->stats = Job::Stats{};
+    job->stats.window_start = now;
+  }
 
   while (!bboxes.empty()) {
     BBox b = bboxes.front();

@@ -25,6 +25,9 @@
 
 #ifdef HAVE_OPENVINO
 
+#include <chrono>
+#include <cstdint>
+#include <limits>
 #include <list>
 #include <memory>
 #include <mutex>
@@ -67,6 +70,21 @@ class OpenVINO {
     // back to source coordinates. Set in send_frame, read in receive_detections.
     float scale_x = 1.0f;
     float scale_y = 1.0f;
+
+    // Rolling per-phase timings (microseconds). Reset every summary window so
+    // averages reflect recent behavior rather than the lifetime of the
+    // process. infer_us_min/max are tracked across the same window.
+    struct Stats {
+      uint64_t count = 0;
+      uint64_t scale_us = 0;
+      uint64_t normalize_us = 0;
+      uint64_t infer_us = 0;
+      uint64_t post_us = 0;
+      uint64_t infer_us_min = std::numeric_limits<uint64_t>::max();
+      uint64_t infer_us_max = 0;
+      std::chrono::system_clock::time_point window_start{};
+    };
+    Stats stats;
   };
 
   OpenVINO();
