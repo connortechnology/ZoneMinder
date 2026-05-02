@@ -194,6 +194,7 @@ Manual testing required. Test endpoints with curl/browser. Verify JSON responses
 ```bash
 sudo zmupdate.pl --check              # Check for updates
 sudo zmupdate.pl                      # Apply migrations
+sudo zmupdate.pl -f                   # Apply configuration entry changes
 ```
 
 When creating migrations: test upgrade path AND verify fresh install matches migrated schema.
