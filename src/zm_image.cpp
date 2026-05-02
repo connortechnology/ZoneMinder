@@ -831,7 +831,15 @@ void Image::AssignDirect(const AVFrame *frame) {
   linesize = frame->linesize[0];
   allocation = size = av_image_get_buffer_size(static_cast<AVPixelFormat>(frame->format), frame->width, frame->height, 32);
   imagePixFormat = static_cast<AVPixelFormat>(frame->format);
-  zm_colours_from_pixformat(imagePixFormat, colours, subpixelorder);
+  // Derive ZM colours/subpixelorder from the AVPixelFormat. On failure put
+  // the Image into a known invalid state instead of silently keeping stale
+  // values, since the assigned buffer's layout no longer matches.
+  if (!zm_colours_from_pixformat(imagePixFormat, colours, subpixelorder)) {
+    Error("AssignDirect: unsupported pixel format %d on frame %dx%d", frame->format, frame->width, frame->height);
+    imagePixFormat = AV_PIX_FMT_NONE;
+    colours = 0;
+    subpixelorder = 0;
+  }
   holdbuffer = true;
   buffertype = ZM_BUFTYPE_DONTFREE;
   pixels = width * height;
