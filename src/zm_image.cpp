@@ -774,15 +774,26 @@ uint8_t* Image::WriteBuffer(
   }
 
   if ( p_width != width || p_height != height || p_colours != colours || p_subpixelorder != subpixelorder ) {
-    width = p_width;
-    height = p_height;
-    colours = p_colours;
-    linesize = p_width * p_colours;
-    subpixelorder = p_subpixelorder;
-    pixels = height*width;
-
-    AVPixelFormat format = imagePixFormat = AVPixFormat();
-    unsigned int newsize = av_image_get_buffer_size(static_cast<AVPixelFormat>(format), width, height, 32);
+    // Derive size/linesize from the AVPixelFormat. Using p_width * p_colours
+    // is wrong for planar formats: with the GRAY8/YUV420P alias collision,
+    // p_colours=1 for YUV420P/YUV422P, but those formats need ~1.5x/2x more
+    // bytes for the chroma planes.
+    int av_size = av_image_get_buffer_size(p_pixfmt, p_width, p_height, 32);
+    if (av_size < 0) {
+      Error("WriteBuffer: av_image_get_buffer_size failed for fmt=%d %ux%u", p_pixfmt, p_width, p_height);
+      return nullptr;
+    }
+    // FFALIGN to 32 to match what av_image_get_buffer_size with align=32
+    // assumes for the buffer layout, and what sws_scale writes when it
+    // produces this format/width pair. Using the unaligned natural linesize
+    // would mismatch the buffer's actual row stride and cause diagonal-shift
+    // artefacts in any consumer that walks the buffer at Image::linesize stride.
+    int av_linesize = FFALIGN(av_image_get_linesize(p_pixfmt, p_width, 0), 32);
+    if (av_linesize < 0) {
+      Error("WriteBuffer: av_image_get_linesize failed for fmt=%d width=%u", p_pixfmt, p_width);
+      return nullptr;
+    }
+    unsigned int newsize = static_cast<unsigned int>(av_size);
 
     if ( buffer == nullptr ) {
       AllocImgBuffer(newsize);
@@ -798,16 +809,14 @@ uint8_t* Image::WriteBuffer(
         }
       }
     }
-    size = newsize;
-  } else {
     width = p_width;
     height = p_height;
     colours = p_colours;
-    linesize = p_width * p_colours;
+    linesize = static_cast<unsigned int>(av_linesize);
     subpixelorder = p_subpixelorder;
     imagePixFormat = p_pixfmt;
     pixels = height*width;
-    imagePixFormat = AVPixFormat();
+    size = newsize;
   }  // end if need to re-alloc buffer
 
   if ( imagePixFormat == AV_PIX_FMT_YUV420P or imagePixFormat == AV_PIX_FMT_YUVJ420P) {
@@ -867,21 +876,32 @@ void Image::AssignDirect(
     return;
   }
 
-  if (zm_pixformat_from_colours(p_colours, p_subpixelorder) == AV_PIX_FMT_NONE) {
+  AVPixelFormat new_pix_fmt = zm_pixformat_from_colours(p_colours, p_subpixelorder);
+  if (new_pix_fmt == AV_PIX_FMT_NONE) {
     Error("Attempt to directly assign buffer with unexpected colours per pixel: %d", p_colours);
     return;
   }
 
-  width = p_width;
-  height = p_height;
-  colours = p_colours;
-  subpixelorder = p_subpixelorder;
-  imagePixFormat = AVPixFormat();
-  size_t new_buffer_size = static_cast<size_t>(av_image_get_buffer_size(imagePixFormat, width, height, 32)); // hardcoded hack
+  // p_width * p_height * p_colours undercounts planar formats (YUV420P needs
+  // ~1.5x; with the GRAY8 alias colours=1 here would otherwise treat it as
+  // GRAY8 size W*H). Use av_image_* so the size and linesize match what the
+  // pixel format actually requires.
+  int av_size = av_image_get_buffer_size(new_pix_fmt, p_width, p_height, 32);
+  // FFALIGN the linesize to 32 to match the buffer's actual row stride
+  // (av_image_get_buffer_size with align=32 assumes this layout, and
+  // sws_scale writes in this layout). Storing the unaligned natural linesize
+  // would cause downstream consumers that walk the buffer at Image::linesize
+  // stride to drift sideways every row.
+  int av_linesize = FFALIGN(av_image_get_linesize(new_pix_fmt, p_width, 0), 32);
+  if (av_size < 0 || av_linesize < 0) {
+    Error("AssignDirect: av_image sizing failed for %s %ux%u", av_get_pix_fmt_name(new_pix_fmt), p_width, p_height);
+    return;
+  }
+  size_t new_buffer_size = static_cast<size_t>(av_size);
 
   if ( buffer_size < new_buffer_size ) {
-    Error("Attempt to directly assign buffer from an undersized buffer of size: %dx%dx%d=%zu, needed %dx%d*%d colours = %zu",
-          width, height, colours, buffer_size, p_width, p_height, p_colours, new_buffer_size);
+    Error("Attempt to directly assign buffer from an undersized buffer of size: %zu, needed %dx%d %s = %zu",
+          buffer_size, p_width, p_height, av_get_pix_fmt_name(new_pix_fmt), new_buffer_size);
     return;
   }
 
@@ -892,7 +912,7 @@ void Image::AssignDirect(
     } else {
       /* Copy into the held buffer */
       if ( new_buffer != buffer ) {
-        (*fptr_imgbufcpy)(buffer, new_buffer, size);
+        (*fptr_imgbufcpy)(buffer, new_buffer, new_buffer_size);
       }
       /* Free the new buffer */
       DumpBuffer(new_buffer, p_buffertype);
@@ -905,8 +925,12 @@ void Image::AssignDirect(
     buffer = new_buffer;
   }
 
-  imagePixFormat = zm_pixformat_from_colours(colours, subpixelorder);
-  linesize = FFALIGN(av_image_get_linesize(imagePixFormat, width, 0), 32);
+  width = p_width;
+  height = p_height;
+  colours = p_colours;
+  linesize = static_cast<unsigned int>(av_linesize);
+  subpixelorder = p_subpixelorder;
+  imagePixFormat = new_pix_fmt;
   pixels = width * height;
   size = new_buffer_size;
   update_function_pointers();
@@ -979,12 +1003,12 @@ void Image::Assign(
 }
 
 void Image::Assign(const Image &image) {
-  unsigned int new_size = av_image_get_buffer_size(image.AVPixFormat(), image.Width(), image.Height(), 32); // hardcoded hack
-    //av_image_get_buffer_size(image.AVPixFormat(), image.Width(), image.Height(), 8); // hardcoded hack
-  //Debug(1, "Assign %dx%dx%d %s=%u", image.Width(), image.Height(), image.AVPixFormat(), av_get_pix_fmt_name(image.AVPixFormat()), new_size);
-  Debug(4, "Assign %dx%d %d %s=%u old size %u", image.Width(), image.Height(), image.AVPixFormat(),
-      av_get_pix_fmt_name(image.AVPixFormat()), new_size, size);
-  //unsigned int new_size = image.height * image.linesize;
+  // image.size is the AVPixelFormat-aware buffer size (av_image_get_buffer_size,
+  // including chroma planes for planar YUV); image.height * image.linesize is
+  // only the Y plane for planar formats and would silently leave U/V planes
+  // uninitialised in the destination — producing a Cb=Cr=0 "solid green" image
+  // when the dest is later interpreted as YCbCr.
+  unsigned int new_size = image.size;
 
   if (image.buffer == nullptr) {
     Error("Attempt to assign image with an empty buffer");
@@ -1003,7 +1027,7 @@ void Image::Assign(const Image &image) {
 
     if ( holdbuffer && buffer ) {
       if ( new_size > allocation ) {
-        Error("Held buffer is undersized allocation: %lu for assigned buffer %d", allocation, new_size);
+        Error("Held buffer is undersized for assigned buffer (need %u, have %lu)", new_size, allocation);
         return;
       }
     } else {
@@ -1025,18 +1049,24 @@ void Image::Assign(const Image &image) {
     update_function_pointers();
   }
 
-  // Always ensure size matches the source image, even if the format-change
-  // block above was skipped (e.g. due to stale size from AVPixFormat setter)
-  if (size != new_size) {
-    if (holdbuffer && new_size > allocation) {
-      Error("Held buffer allocation %lu too small for new size %u", allocation, new_size);
-      return;
+  if ( image.buffer != buffer ) {
+    if (image.linesize > linesize) {
+      // This branch is only reached when dimensions and colours/subpixelorder
+      // match but linesize disagrees. Copy the Y/primary plane line by line;
+      // planar chroma planes are not handled here.
+      Debug(1, "Must copy line by line due to different line size %d != %d", image.linesize, linesize);
+      uint8_t *src_ptr = image.buffer;
+      uint8_t *dst_ptr = buffer;
+      for (unsigned int i = 0; i < image.height; i++) {
+        (*fptr_imgbufcpy)(dst_ptr, src_ptr, image.linesize);
+        src_ptr += image.linesize;
+        dst_ptr += linesize;
+      }
+    } else {
+      Debug(4, "Doing full copy line size %d == %d, %u bytes", image.linesize, linesize, size);
+      (*fptr_imgbufcpy)(buffer, image.buffer, size);
     }
-    size = new_size;
   }
-
-  if ( image.buffer != buffer )
-    (*fptr_imgbufcpy)(buffer, image.buffer, size);
 }
 
 Image *Image::HighlightEdges(
@@ -1493,6 +1523,10 @@ bool Image::WriteJpeg(const std::string &filename,
     fclose(outfile);
     return false;
 #endif
+  } else if (imagePixFormat == AV_PIX_FMT_YUV420P || imagePixFormat == AV_PIX_FMT_YUVJ420P
+          || imagePixFormat == AV_PIX_FMT_YUV422P || imagePixFormat == AV_PIX_FMT_YUVJ422P) {
+    cinfo->input_components = 3;
+    cinfo->in_color_space = JCS_YCbCr;
   } else {
     /* Assume RGB24/BGR24 */
     cinfo->input_components = 3;
@@ -1507,17 +1541,8 @@ bool Image::WriteJpeg(const std::string &filename,
       fclose(outfile);
       return false;
 #endif
-    } else if (zm_is_yuv420(imagePixFormat)) {
-      cinfo->in_color_space = JCS_YCbCr;
     } else {
       /* Assume RGB */
-      /*
-      #ifdef JCS_EXTENSIONS
-      cinfo->out_color_space = JCS_EXT_RGB;
-      #else
-      cinfo->out_color_space = JCS_RGB;
-      #endif
-      */
       cinfo->in_color_space = JCS_RGB;
     }
   }  // end format dispatch
@@ -1563,21 +1588,42 @@ bool Image::WriteJpeg(const std::string &filename,
     jpeg_write_marker(cinfo, EXIF_CODE, (const JOCTET *) exiftimes, sizeof(exiftimes));
   }
 
-  if (zm_is_yuv420(imagePixFormat)) {
-    std::vector<uint8_t> tmprowbuf(width * 3);
-    JSAMPROW row_pointer = &tmprowbuf[0];  /* pointer to a single row */
+  if (imagePixFormat == AV_PIX_FMT_YUV420P || imagePixFormat == AV_PIX_FMT_YUVJ420P
+   || imagePixFormat == AV_PIX_FMT_YUV422P || imagePixFormat == AV_PIX_FMT_YUVJ422P) {
+    // Planar YUV: interleave Y/U/V plane rows into per-scanline YCbCr triples.
+    // The previous code here unpacked the buffer as if it were packed YUYV
+    // 4:2:2, which read way past the W*H*1.5 YUV420P buffer end on every
+    // frame — a latent crash that became reachable when image_buffer was
+    // pinned to YUV420P. Use av_image_fill_arrays for plane offsets so this
+    // works for both 4:2:0 and 4:2:2 layouts.
+    uint8_t *plane[4] = {nullptr, nullptr, nullptr, nullptr};
+    int plane_linesizes[4] = {0, 0, 0, 0};
+    if (av_image_fill_arrays(plane, plane_linesizes, buffer, imagePixFormat, width, height, 32) < 0) {
+      Error("WriteJpeg: av_image_fill_arrays failed for %s", av_get_pix_fmt_name(imagePixFormat));
+      jpeg_abort_compress(cinfo);
+      fl.l_type = F_UNLCK;
+      fcntl(raw_fd, F_SETLK, &fl);
+      fclose(outfile);
+      return false;
+    }
+    const bool is_422 = (imagePixFormat == AV_PIX_FMT_YUV422P || imagePixFormat == AV_PIX_FMT_YUVJ422P);
+    const unsigned chroma_v_shift = is_422 ? 0u : 1u;
+
+    std::vector<uint8_t> tmprow(static_cast<size_t>(width) * 3);
+    JSAMPROW row_ptr = tmprow.data();
+
     while (cinfo->next_scanline < cinfo->image_height) {
-      unsigned i, j;
-      unsigned offset = cinfo->next_scanline * cinfo->image_width * 2; //offset to the correct row
-      for (i = 0, j = 0; i < cinfo->image_width * 2; i += 4, j += 6) { //input strides by 4 bytes, output strides by 6 (2 pixels)
-        tmprowbuf[j + 0] = buffer[offset + i + 0]; // Y (unique to this pixel)
-        tmprowbuf[j + 1] = buffer[offset + i + 1]; // U (shared between pixels)
-        tmprowbuf[j + 2] = buffer[offset + i + 3]; // V (shared between pixels)
-        tmprowbuf[j + 3] = buffer[offset + i + 2]; // Y (unique to this pixel)
-        tmprowbuf[j + 4] = buffer[offset + i + 1]; // U (shared between pixels)
-        tmprowbuf[j + 5] = buffer[offset + i + 3]; // V (shared between pixels)
+      const unsigned y = cinfo->next_scanline;
+      const unsigned cy = y >> chroma_v_shift;
+      const uint8_t *yrow = plane[0] + static_cast<size_t>(y) * plane_linesizes[0];
+      const uint8_t *urow = plane[1] + static_cast<size_t>(cy) * plane_linesizes[1];
+      const uint8_t *vrow = plane[2] + static_cast<size_t>(cy) * plane_linesizes[2];
+      for (unsigned x = 0; x < width; ++x) {
+        tmprow[x * 3 + 0] = yrow[x];
+        tmprow[x * 3 + 1] = urow[x >> 1];
+        tmprow[x * 3 + 2] = vrow[x >> 1];
       }
-      jpeg_write_scanlines(cinfo, &row_pointer, 1);
+      jpeg_write_scanlines(cinfo, &row_ptr, 1);
     }
   } else {
     JSAMPROW row_pointer = buffer;  /* pointer to a single row */
@@ -1833,8 +1879,11 @@ bool Image::EncodeJpeg(JOCTET *outbuffer, size_t *outbuffer_size, int quality_ov
   cinfo->image_width = width;   /* image width and height, in pixels */
   cinfo->image_height = height;
 
-  if (zm_bytes_per_pixel(imagePixFormat) == 1) {
-    // GRAY8 and planar YUV formats: libjpeg encodes the Y-plane as grayscale
+  const bool is_yuv_planar =
+      (imagePixFormat == AV_PIX_FMT_YUV420P || imagePixFormat == AV_PIX_FMT_YUVJ420P
+       || imagePixFormat == AV_PIX_FMT_YUV422P || imagePixFormat == AV_PIX_FMT_YUVJ422P);
+
+  if (imagePixFormat == AV_PIX_FMT_GRAY8) {
     cinfo->input_components = 1;
     cinfo->in_color_space = JCS_GRAYSCALE;
   } else if (zm_is_rgb32(imagePixFormat)) {
@@ -1858,6 +1907,9 @@ bool Image::EncodeJpeg(JOCTET *outbuffer, size_t *outbuffer_size, int quality_ov
     jpeg_abort_compress(cinfo);
     return false;
 #endif
+  } else if (is_yuv_planar) {
+    cinfo->input_components = 3;
+    cinfo->in_color_space = JCS_YCbCr;
   } else {
     /* Assume RGB24/BGR24 */
     cinfo->input_components = 3;
@@ -1871,13 +1923,6 @@ bool Image::EncodeJpeg(JOCTET *outbuffer, size_t *outbuffer_size, int quality_ov
 #endif
     } else {
       /* Assume RGB */
-      /*
-      #ifdef JCS_EXTENSIONS
-      cinfo->out_color_space = JCS_EXT_RGB;
-      #else
-      cinfo->out_color_space = JCS_RGB;
-      #endif
-       */
       cinfo->in_color_space = JCS_RGB;
     }
   } // end format dispatch
@@ -1888,10 +1933,44 @@ bool Image::EncodeJpeg(JOCTET *outbuffer, size_t *outbuffer_size, int quality_ov
 
   jpeg_start_compress(cinfo, TRUE);
 
-  JSAMPROW row_pointer = buffer;
-  while ( cinfo->next_scanline < cinfo->image_height ) {
-    jpeg_write_scanlines(cinfo, &row_pointer, 1);
-    row_pointer += linesize;
+  if (is_yuv_planar) {
+    // Planar YUV: interleave Y/U/V plane rows into per-scanline YCbCr triples
+    // for libjpeg's JCS_YCbCr input. av_image_fill_arrays computes plane
+    // pointers and per-plane linesizes from the AVPixelFormat, so this works
+    // for both 4:2:0 (YUV420P/YUVJ420P) and 4:2:2 (YUV422P/YUVJ422P) without
+    // hand-coded plane offsets.
+    uint8_t *plane[4] = {nullptr, nullptr, nullptr, nullptr};
+    int plane_linesizes[4] = {0, 0, 0, 0};
+    if (av_image_fill_arrays(plane, plane_linesizes, buffer, imagePixFormat, width, height, 32) < 0) {
+      Error("EncodeJpeg: av_image_fill_arrays failed for %s", av_get_pix_fmt_name(imagePixFormat));
+      jpeg_abort_compress(cinfo);
+      return false;
+    }
+    const bool is_422 = (imagePixFormat == AV_PIX_FMT_YUV422P || imagePixFormat == AV_PIX_FMT_YUVJ422P);
+    const unsigned chroma_v_shift = is_422 ? 0u : 1u;  // 4:2:0 halves vertical too
+
+    std::vector<uint8_t> tmprow(static_cast<size_t>(width) * 3);
+    JSAMPROW row_ptr = tmprow.data();
+
+    while (cinfo->next_scanline < cinfo->image_height) {
+      const unsigned y = cinfo->next_scanline;
+      const unsigned cy = y >> chroma_v_shift;
+      const uint8_t *yrow = plane[0] + static_cast<size_t>(y) * plane_linesizes[0];
+      const uint8_t *urow = plane[1] + static_cast<size_t>(cy) * plane_linesizes[1];
+      const uint8_t *vrow = plane[2] + static_cast<size_t>(cy) * plane_linesizes[2];
+      for (unsigned x = 0; x < width; ++x) {
+        tmprow[x * 3 + 0] = yrow[x];
+        tmprow[x * 3 + 1] = urow[x >> 1];  // chroma is 2x horizontal subsampled in 4:2:0/4:2:2
+        tmprow[x * 3 + 2] = vrow[x >> 1];
+      }
+      jpeg_write_scanlines(cinfo, &row_ptr, 1);
+    }
+  } else {
+    JSAMPROW row_pointer = buffer;
+    while ( cinfo->next_scanline < cinfo->image_height ) {
+      jpeg_write_scanlines(cinfo, &row_pointer, 1);
+      row_pointer += linesize;
+    }
   }
 
   jpeg_finish_compress(cinfo);
@@ -3544,23 +3623,29 @@ void Image::Flip( bool leftright ) {
 void Image::Scale(const unsigned int new_width, const unsigned int new_height) {
   //if (width == new_width and height == new_height) return;
 
-  // Why larger than we need?
-  //linesize = FFALIGN(av_image_get_linesize(pixelformat, new_width, 0), 32);
   AVPixelFormat format = AVPixFormat();
-  size_t scale_buffer_size = static_cast<size_t>( size = av_image_get_buffer_size(format, new_width, new_height, 32));
-  Debug(1, "Scale buffer size %zu %dx%d %d", scale_buffer_size, new_width, new_height, format);
+  // (new_width+1)*(new_height+1)*colours undercounts planar formats: for
+  // YUV420P, colours=1 due to the GRAY8 alias, but the buffer needs ~1.5x
+  // for chroma. Use av_image_get_buffer_size so this works for any
+  // AVPixelFormat. SWScale::Convert checks the buffer size and errors
+  // out if undersized.
+  int new_size = av_image_get_buffer_size(format, new_width, new_height, 32);
+  if (new_size < 0) {
+    Error("Scale: av_image_get_buffer_size failed for %s %ux%u", av_get_pix_fmt_name(format), new_width, new_height);
+    return;
+  }
+  size_t scale_buffer_size = static_cast<size_t>(new_size);
   uint8_t* scale_buffer = AllocBuffer(scale_buffer_size);
 
   SWScale swscale;
   swscale.init();
-  swscale.Convert( buffer, allocation,
-                   scale_buffer,
-                   scale_buffer_size,
-                   format, format,
-                   width,
-                   height,
-                   new_width,
-                   new_height);
+  if (swscale.Convert(buffer, allocation, scale_buffer, scale_buffer_size,
+                      format, format, width, height, new_width, new_height) < 0) {
+    Error("Scale: sws_scale conversion failed (%ux%u %s -> %ux%u)",
+          width, height, av_get_pix_fmt_name(format), new_width, new_height);
+    DumpBuffer(scale_buffer, ZM_BUFTYPE_ZM);
+    return;
+  }
   AssignDirect(new_width, new_height, colours, subpixelorder, scale_buffer, scale_buffer_size, ZM_BUFTYPE_ZM);
 }
 
@@ -3573,84 +3658,13 @@ void Image::Scale(const unsigned int factor) {
     return;
   }
 
+  // Delegate to the (new_width, new_height) variant, which uses sws_scale.
+  // The previous hand-rolled pixel-doubling/decimation loops here did not
+  // understand planar YUV layouts (only the Y plane was scaled, the U/V
+  // planes were dropped), so a YUV420P image came out garbled.
   unsigned int new_width = (width*factor)/ZM_SCALE_BASE;
   unsigned int new_height = (height*factor)/ZM_SCALE_BASE;
   Scale(new_width, new_height);
-  return;
-
-  // Why larger than we need?
-  AVPixelFormat format = AVPixFormat();
-  size_t scale_buffer_size = static_cast<size_t>( size = av_image_get_buffer_size(format, new_width, new_height, 32));
-
-  uint8_t* scale_buffer = AllocBuffer(scale_buffer_size);
-
-  if ( factor > ZM_SCALE_BASE ) {
-    unsigned char *pd = scale_buffer;
-    unsigned int wc = width*colours;
-    unsigned int nwc = new_width*colours;
-    unsigned int h_count = ZM_SCALE_BASE/2;
-    unsigned int last_h_index = 0;
-    unsigned int last_w_index = 0;
-    for ( unsigned int y = 0; y < height; y++ ) {
-      unsigned char *ps = &buffer[y*wc];
-      unsigned int w_count = ZM_SCALE_BASE/2;
-      last_w_index = 0;
-      for ( unsigned int x = 0; x < width; x++ ) {
-        w_count += factor;
-        unsigned int w_index = w_count/ZM_SCALE_BASE;
-        for (unsigned int f = last_w_index; f < w_index; f++ ) {
-          for ( unsigned int c = 0; c < colours; c++ ) {
-            *pd++ = *(ps+c);
-          }
-        }
-        ps += colours;
-        last_w_index = w_index;
-      }
-      h_count += factor;
-      unsigned int h_index = h_count/ZM_SCALE_BASE;
-      for ( unsigned int f = last_h_index+1; f < h_index; f++ ) {
-        memcpy(pd, pd-nwc, nwc);
-        pd += nwc;
-      }
-      last_h_index = h_index;
-    }  // end foreach line
-    new_width = last_w_index;
-    new_height = last_h_index;
-  } else {
-    unsigned char *pd = scale_buffer;
-    unsigned int wc = width*colours;
-    unsigned int h_count = factor/2;
-    unsigned int last_h_index = 0;
-    unsigned int last_w_index = 0;
-    for ( unsigned int y = 0; y < height; y++ ) {
-      h_count += factor;
-      unsigned int h_index = h_count/ZM_SCALE_BASE;
-      if ( h_index > last_h_index ) {
-        unsigned int w_count = factor/2;
-        unsigned int w_index;
-        last_w_index = 0;
-
-        unsigned char *ps = &buffer[y*wc];
-        for ( unsigned int x = 0; x < width; x++ ) {
-          w_count += factor;
-          w_index = w_count/ZM_SCALE_BASE;
-
-          if ( w_index > last_w_index ) {
-            for ( unsigned int c = 0; c < colours; c++ ) {
-              *pd++ = *ps++;
-            }
-          } else {
-            ps += colours;
-          }
-          last_w_index = w_index;
-        }
-      }
-      last_h_index = h_index;
-    }
-    new_width = last_w_index;
-    new_height = last_h_index;
-  }  // end foreach line
-  AssignDirect(new_width, new_height, colours, subpixelorder, scale_buffer, scale_buffer_size, ZM_BUFTYPE_ZM);
 }
 
 void Image::Deinterlace_Discard() {
