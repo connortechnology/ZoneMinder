@@ -6,11 +6,124 @@
 -- contention that caused deadlocks on bulk DELETE FROM Events_Hour by
 -- zmstats.pl.
 --
--- Run one-time resync of the summary columns from actual counts/sums
--- before recreating the triggers, so the transition doesn't leave stale
--- values behind.
+-- This migration is also responsible for unwinding the short-lived
+-- views+SWR experiment (1.39.6 on some branches): if the bucket tables
+-- exist as views and Event_Summaries was replaced by the SWR snapshot
+-- machinery, drop all of that and rebuild as plain tables before the
+-- resync UPDATE runs.
 --
 
+-- 1. Tear down SWR infrastructure (no-op if it was never installed).
+DROP EVENT IF EXISTS `Event_Summaries_Refresh_Event`;
+DROP PROCEDURE IF EXISTS `Refresh_Summaries_SWR`;
+DROP TABLE IF EXISTS `Event_Summaries_Metadata`;
+DROP TABLE IF EXISTS `Event_Summaries_New`;
+DROP TABLE IF EXISTS `Event_Summaries_Old`;
+DROP VIEW IF EXISTS `VIEW_Event_Summaries`;
+
+-- 2. Drop the bucket views so we can put real tables back underneath.
+--    DROP VIEW is a no-op when the name is already a base table.
+DROP VIEW IF EXISTS `Events_Hour`;
+DROP VIEW IF EXISTS `Events_Day`;
+DROP VIEW IF EXISTS `Events_Week`;
+DROP VIEW IF EXISTS `Events_Month`;
+DROP VIEW IF EXISTS `Events_Archived`;
+
+-- 3. Make sure the bucket tables and Event_Summaries exist as real
+--    tables. CREATE TABLE IF NOT EXISTS leaves an existing table alone.
+CREATE TABLE IF NOT EXISTS `Events_Hour` (
+  `EventId` BIGINT unsigned NOT NULL,
+  `MonitorId` int(10) unsigned NOT NULL,
+  `StartDateTime` datetime default NULL,
+  `DiskSpace` bigint default NULL,
+  PRIMARY KEY (`EventId`),
+  KEY `Events_Hour_MonitorId_idx` (`MonitorId`),
+  KEY `Events_Hour_StartDateTime_idx` (`StartDateTime`)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS `Events_Day` (
+  `EventId` BIGINT unsigned NOT NULL,
+  `MonitorId` int(10) unsigned NOT NULL,
+  `StartDateTime` datetime default NULL,
+  `DiskSpace` bigint default NULL,
+  PRIMARY KEY (`EventId`),
+  KEY `Events_Day_MonitorId_idx` (`MonitorId`),
+  KEY `Events_Day_StartDateTime_idx` (`StartDateTime`)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS `Events_Week` (
+  `EventId` BIGINT unsigned NOT NULL,
+  `MonitorId` int(10) unsigned NOT NULL,
+  `StartDateTime` datetime default NULL,
+  `DiskSpace` bigint default NULL,
+  PRIMARY KEY (`EventId`),
+  KEY `Events_Week_MonitorId_idx` (`MonitorId`),
+  KEY `Events_Week_StartDateTime_idx` (`StartDateTime`)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS `Events_Month` (
+  `EventId` BIGINT unsigned NOT NULL,
+  `MonitorId` int(10) unsigned NOT NULL,
+  `StartDateTime` datetime default NULL,
+  `DiskSpace` bigint default NULL,
+  PRIMARY KEY (`EventId`),
+  KEY `Events_Month_MonitorId_idx` (`MonitorId`),
+  KEY `Events_Month_StartDateTime_idx` (`StartDateTime`)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS `Events_Archived` (
+  `EventId` BIGINT unsigned NOT NULL,
+  `MonitorId` int(10) unsigned NOT NULL,
+  `DiskSpace` bigint default NULL,
+  PRIMARY KEY (`EventId`),
+  KEY `Events_Archived_MonitorId_idx` (`MonitorId`)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS `Event_Summaries` (
+  `MonitorId` int(10) unsigned NOT NULL,
+  `TotalEvents` int(10) default NULL,
+  `TotalEventDiskSpace` bigint default NULL,
+  `HourEvents` int(10) default NULL,
+  `HourEventDiskSpace` bigint default NULL,
+  `DayEvents` int(10) default NULL,
+  `DayEventDiskSpace` bigint default NULL,
+  `WeekEvents` int(10) default NULL,
+  `WeekEventDiskSpace` bigint default NULL,
+  `MonthEvents` int(10) default NULL,
+  `MonthEventDiskSpace` bigint default NULL,
+  `ArchivedEvents` int(10) default NULL,
+  `ArchivedEventDiskSpace` bigint default NULL,
+  PRIMARY KEY (`MonitorId`)
+) ENGINE=InnoDB;
+
+-- 4. Backfill the bucket tables and Event_Summaries from Events. INSERT
+--    IGNORE skips rows already present, so this is idempotent and safe
+--    when the tables were already populated.
+INSERT IGNORE INTO `Events_Hour` (EventId, MonitorId, StartDateTime, DiskSpace)
+  SELECT Id, MonitorId, StartDateTime, DiskSpace FROM Events
+  WHERE StartDateTime >= (NOW() - INTERVAL 1 HOUR);
+
+INSERT IGNORE INTO `Events_Day` (EventId, MonitorId, StartDateTime, DiskSpace)
+  SELECT Id, MonitorId, StartDateTime, DiskSpace FROM Events
+  WHERE StartDateTime >= (NOW() - INTERVAL 1 DAY);
+
+INSERT IGNORE INTO `Events_Week` (EventId, MonitorId, StartDateTime, DiskSpace)
+  SELECT Id, MonitorId, StartDateTime, DiskSpace FROM Events
+  WHERE StartDateTime >= (NOW() - INTERVAL 7 DAY);
+
+INSERT IGNORE INTO `Events_Month` (EventId, MonitorId, StartDateTime, DiskSpace)
+  SELECT Id, MonitorId, StartDateTime, DiskSpace FROM Events
+  WHERE StartDateTime >= (NOW() - INTERVAL 1 MONTH);
+
+INSERT IGNORE INTO `Events_Archived` (EventId, MonitorId, DiskSpace)
+  SELECT Id, MonitorId, DiskSpace FROM Events
+  WHERE Archived = 1;
+
+INSERT IGNORE INTO `Event_Summaries` (MonitorId)
+  SELECT DISTINCT MonitorId FROM Events;
+
+-- 5. Drop the old per-bucket cascade triggers and the old event
+--    triggers; db/triggers.sql will reinstall the consolidated versions.
 DROP TRIGGER IF EXISTS Events_Hour_delete_trigger;
 DROP TRIGGER IF EXISTS Events_Hour_update_trigger;
 DROP TRIGGER IF EXISTS Events_Day_delete_trigger;
@@ -23,22 +136,27 @@ DROP TRIGGER IF EXISTS Events_Month_update_trigger;
 DROP TRIGGER IF EXISTS event_update_trigger;
 DROP TRIGGER IF EXISTS event_delete_trigger;
 
--- Resync Event_Summaries from ground truth before re-enabling the new triggers.
+-- 6. Resync Event_Summaries from ground truth before re-enabling the new triggers.
 UPDATE Event_Summaries es
 LEFT JOIN (SELECT MonitorId, COUNT(*) c, COALESCE(SUM(DiskSpace), 0) s FROM Events_Hour  GROUP BY MonitorId) h  ON h.MonitorId  = es.MonitorId
 LEFT JOIN (SELECT MonitorId, COUNT(*) c, COALESCE(SUM(DiskSpace), 0) s FROM Events_Day   GROUP BY MonitorId) d  ON d.MonitorId  = es.MonitorId
 LEFT JOIN (SELECT MonitorId, COUNT(*) c, COALESCE(SUM(DiskSpace), 0) s FROM Events_Week  GROUP BY MonitorId) w  ON w.MonitorId  = es.MonitorId
 LEFT JOIN (SELECT MonitorId, COUNT(*) c, COALESCE(SUM(DiskSpace), 0) s FROM Events_Month GROUP BY MonitorId) m  ON m.MonitorId  = es.MonitorId
+LEFT JOIN (SELECT MonitorId, COUNT(*) c, COALESCE(SUM(DiskSpace), 0) s FROM Events_Archived         GROUP BY MonitorId) a  ON a.MonitorId  = es.MonitorId
+LEFT JOIN (SELECT MonitorId, COUNT(*) c, COALESCE(SUM(DiskSpace), 0) s FROM Events                  GROUP BY MonitorId) t  ON t.MonitorId  = es.MonitorId
 SET
-  es.HourEvents          = COALESCE(h.c, 0),
-  es.HourEventDiskSpace  = COALESCE(h.s, 0),
-  es.DayEvents           = COALESCE(d.c, 0),
-  es.DayEventDiskSpace   = COALESCE(d.s, 0),
-  es.WeekEvents          = COALESCE(w.c, 0),
-  es.WeekEventDiskSpace  = COALESCE(w.s, 0),
-  es.MonthEvents         = COALESCE(m.c, 0),
-  es.MonthEventDiskSpace = COALESCE(m.s, 0);
+  es.HourEvents              = COALESCE(h.c, 0),
+  es.HourEventDiskSpace      = COALESCE(h.s, 0),
+  es.DayEvents               = COALESCE(d.c, 0),
+  es.DayEventDiskSpace       = COALESCE(d.s, 0),
+  es.WeekEvents              = COALESCE(w.c, 0),
+  es.WeekEventDiskSpace      = COALESCE(w.s, 0),
+  es.MonthEvents             = COALESCE(m.c, 0),
+  es.MonthEventDiskSpace     = COALESCE(m.s, 0),
+  es.ArchivedEvents          = COALESCE(a.c, 0),
+  es.ArchivedEventDiskSpace  = COALESCE(a.s, 0),
+  es.TotalEvents             = COALESCE(t.c, 0),
+  es.TotalEventDiskSpace     = COALESCE(t.s, 0);
 
--- The CREATE TRIGGER statements live in db/triggers.sql and will be
--- re-sourced by zmupdate.pl's normal trigger refresh step.
+-- 7. Reinstall the consolidated event_update_trigger / event_delete_trigger.
 source @PKGDATADIR@/db/triggers.sql
