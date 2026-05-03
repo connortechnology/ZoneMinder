@@ -32,6 +32,15 @@ delimiter //
  * - Propagates DiskSpace changes to Events_Hour/Day/Week/Month rows
  * - Uses ROW_COUNT() per bucket so aged-out events don't over-adjust counters
  * - Handles Archived transitions and Archived DiskSpace updates
+ *
+ * Lock-acquisition order (same for BEFORE / AFTER triggers since InnoDB
+ * X-locks the matched Events row during WHERE evaluation, before the
+ * trigger body fires):
+ *   Events[Id] -> buckets[Id] -> Event_Summaries[MonitorId]
+ * event_delete_trigger does the same. zmstats.pl follows the matching
+ * prefix (bucket DELETEs then UPDATE Event_Summaries) and crucially does
+ * NOT pre-lock Event_Summaries — pre-locking ES would invert against the
+ * trigger body order and reintroduce deadlocks against filter/zma.
  * ============================================================================ */
 DROP TRIGGER IF EXISTS event_update_trigger//
 
