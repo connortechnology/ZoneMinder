@@ -926,64 +926,119 @@ FROM `Frames` WHERE `EventId`=?';
   } # end if ZM_LOG_AUDIT_DATABASE_LIMIT
   $loop = $continuous;
 
-  my $eventcounts_sql = '
-  UPDATE `Event_Summaries` SET
-  `TotalEvents`=(SELECT COUNT(`Id`) FROM `Events` WHERE `MonitorId`=`Event_Summaries`.`MonitorId`),
-  `TotalEventDiskSpace`=(SELECT SUM(`DiskSpace`) FROM `Events` WHERE `MonitorId`=`Event_Summaries`.`MonitorId` AND `DiskSpace` IS NOT NULL),
-  `ArchivedEvents`=(SELECT COUNT(`Id`) FROM `Events` WHERE `MonitorId`=`Event_Summaries`.`MonitorId` AND `Archived`=1),
-  `ArchivedEventDiskSpace`=(SELECT SUM(`DiskSpace`) FROM `Events` WHERE `MonitorId`=`Event_Summaries`.`MonitorId` AND `Archived`=1 AND `DiskSpace` IS NOT NULL)
-  ';
+  # Resync Event_Summaries from ground truth in Events + bucket tables.
+  #
+  # Previous implementation used multi-table UPDATEs (UPDATE Event_Summaries
+  # INNER JOIN (... FROM Events_Hour ...)) and correlated subqueries against
+  # Events. Both patterns make MariaDB take S-locks on the joined/sub-queried
+  # rows for the duration of the UPDATE statement, regardless of isolation
+  # level — which deadlocks against event_update_trigger / event_delete_trigger
+  # holding X-locks on those same bucket rows.
+  #
+  # Snapshot all five aggregations with plain SELECTs (consistent reads, no
+  # row locks), merge them per MonitorId, then issue one single-row UPDATE
+  # per monitor against Event_Summaries. Each UPDATE only X-locks the one ES
+  # row it targets and reads no other table, so it can't form a cycle with
+  # the trigger writers.
+  {
+    my %agg;
 
-  ZoneMinder::Database::zmDbDo($eventcounts_sql);
-  aud_print('Finished updating TotalEvents, ArchivedEvents');
+    my $events_rows = $dbh->selectall_arrayref(q{
+      SELECT MonitorId,
+             COUNT(Id),
+             COALESCE(SUM(CASE WHEN DiskSpace IS NOT NULL THEN DiskSpace ELSE 0 END), 0),
+             COUNT(CASE WHEN Archived = 1 THEN 1 END),
+             COALESCE(SUM(CASE WHEN Archived = 1 AND DiskSpace IS NOT NULL THEN DiskSpace ELSE 0 END), 0)
+      FROM Events
+      GROUP BY MonitorId
+    });
+    if ($dbh->err()) {
+      Error("zmaudit Events aggregate failed: ".$dbh->errstr());
+    } else {
+      for my $r (@$events_rows) {
+        $agg{$r->[0]}{total_c}    = $r->[1];
+        $agg{$r->[0]}{total_s}    = $r->[2];
+        $agg{$r->[0]}{archived_c} = $r->[3];
+        $agg{$r->[0]}{archived_s} = $r->[4];
+      }
+    }
 
-  my $eventcounts_hour_sql = '
-  UPDATE `Event_Summaries` INNER JOIN (
-  SELECT  `MonitorId`, COUNT(*) AS `HourEvents`, SUM(COALESCE(`DiskSpace`,0)) AS `HourEventDiskSpace`
-  FROM `Events_Hour` GROUP BY `MonitorId`
-  ) AS `E` ON `E`.`MonitorId`=`Event_Summaries`.`MonitorId` SET
-  `Event_Summaries`.`HourEvents` = `E`.`HourEvents`,
-  `Event_Summaries`.`HourEventDiskSpace` = `E`.`HourEventDiskSpace`
-  ';
-  ZoneMinder::Database::zmDbDo($eventcounts_hour_sql);
-  aud_print("Finished updating HourEvents");
+    foreach my $bucket (
+      ['Events_Hour',  'h'],
+      ['Events_Day',   'd'],
+      ['Events_Week',  'w'],
+      ['Events_Month', 'm'],
+    ) {
+      my ($table, $key) = @$bucket;
+      my $rows = $dbh->selectall_arrayref(
+        "SELECT MonitorId, COUNT(*), COALESCE(SUM(DiskSpace), 0) FROM $table GROUP BY MonitorId"
+      );
+      if ($dbh->err()) {
+        Error("zmaudit $table aggregate failed: ".$dbh->errstr());
+        next;
+      }
+      for my $r (@$rows) {
+        $agg{$r->[0]}{$key.'_c'} = $r->[1];
+        $agg{$r->[0]}{$key.'_s'} = $r->[2];
+      }
+    }
 
+    # Include monitors that have an Event_Summaries row but no Events rows so
+    # we still zero them out instead of leaving stale counters.
+    my $existing = $dbh->selectcol_arrayref('SELECT MonitorId FROM Event_Summaries');
+    if ($dbh->err()) {
+      Error("zmaudit Event_Summaries enumerate failed: ".$dbh->errstr());
+    } else {
+      $agg{$_} ||= {} for @$existing;
+    }
 
-  my $eventcounts_day_sql = '
-  UPDATE `Event_Summaries` INNER JOIN (
-  SELECT  `MonitorId`, COUNT(*) AS `DayEvents`, SUM(COALESCE(`DiskSpace`,0)) AS `DayEventDiskSpace`
-  FROM `Events_Day` GROUP BY `MonitorId`
-  ) AS `E` ON `E`.`MonitorId`=`Event_Summaries`.`MonitorId` SET
-  `Event_Summaries`.`DayEvents` = `E`.`DayEvents`,
-  `Event_Summaries`.`DayEventDiskSpace` = `E`.`DayEventDiskSpace`
-  ';
-  ZoneMinder::Database::zmDbDo($eventcounts_day_sql);
-  aud_print("Finished updating DayEvents");
+    for my $mid (sort { $a <=> $b } keys %agg) {
+      my $a = $agg{$mid};
+      ZoneMinder::Database::zmDbDo(
+        'UPDATE Event_Summaries SET '.
+          'TotalEvents=?, TotalEventDiskSpace=?, '.
+          'ArchivedEvents=?, ArchivedEventDiskSpace=?, '.
+          'HourEvents=?, HourEventDiskSpace=?, '.
+          'DayEvents=?, DayEventDiskSpace=?, '.
+          'WeekEvents=?, WeekEventDiskSpace=?, '.
+          'MonthEvents=?, MonthEventDiskSpace=? '.
+        'WHERE MonitorId=?',
+        $a->{total_c}    // 0, $a->{total_s}    // 0,
+        $a->{archived_c} // 0, $a->{archived_s} // 0,
+        $a->{h_c}        // 0, $a->{h_s}        // 0,
+        $a->{d_c}        // 0, $a->{d_s}        // 0,
+        $a->{w_c}        // 0, $a->{w_s}        // 0,
+        $a->{m_c}        // 0, $a->{m_s}        // 0,
+        $mid
+      );
+    }
+    aud_print('Finished resyncing Event_Summaries from Events + bucket tables');
+  }
 
-  my $eventcounts_week_sql = '
-  UPDATE `Event_Summaries` INNER JOIN (
-  SELECT  `MonitorId`, COUNT(*) AS `WeekEvents`, SUM(COALESCE(`DiskSpace`,0)) AS `WeekEventDiskSpace`
-  FROM `Events_Week` GROUP BY `MonitorId`
-  ) AS `E` ON `E`.`MonitorId`=`Event_Summaries`.`MonitorId` SET
-  `Event_Summaries`.`WeekEvents` = `E`.`WeekEvents`,
-  `Event_Summaries`.`WeekEventDiskSpace` = `E`.`WeekEventDiskSpace`
-  ';
-  ZoneMinder::Database::zmDbDo($eventcounts_week_sql);
-  aud_print("Finished updating WeekEvents");
-
-  my $eventcounts_month_sql = '
-  UPDATE `Event_Summaries` INNER JOIN (
-  SELECT  `MonitorId`, COUNT(*) AS `MonthEvents`, SUM(COALESCE(`DiskSpace`,0)) AS `MonthEventDiskSpace`
-  FROM `Events_Month` GROUP BY `MonitorId`
-  ) AS `E` ON `E`.`MonitorId`=`Event_Summaries`.`MonitorId` SET
-  `Event_Summaries`.`MonthEvents` = `E`.`MonthEvents`,
-  `Event_Summaries`.`MonthEventDiskSpace` = `E`.`MonthEventDiskSpace`
-  ';
-  ZoneMinder::Database::zmDbDo($eventcounts_month_sql);
-  aud_print("Finished updating MonthEvents");
-
-  ZoneMinder::Database::zmDbDo('UPDATE Storage SET DiskSpace=(SELECT SUM(DiskSpace) FROM Events WHERE StorageId=Storage.Id)');
-  aud_print("Finished updating Storage DiskSpace");
+  # Storage DiskSpace resync: same trap. Snapshot per-Storage sums via plain
+  # SELECT, then UPDATE Storage one row at a time.
+  {
+    my $rows = $dbh->selectall_arrayref(
+      'SELECT StorageId, COALESCE(SUM(DiskSpace), 0) FROM Events GROUP BY StorageId'
+    );
+    if ($dbh->err()) {
+      Error('zmaudit Storage aggregate failed: '.$dbh->errstr());
+    } else {
+      my %disk = map { $_->[0] => $_->[1] } grep { defined $_->[0] } @$rows;
+      my $storage_ids = $dbh->selectcol_arrayref('SELECT Id FROM Storage');
+      if ($dbh->err()) {
+        Error('zmaudit Storage enumerate failed: '.$dbh->errstr());
+      } else {
+        for my $sid (@$storage_ids) {
+          ZoneMinder::Database::zmDbDo(
+            'UPDATE Storage SET DiskSpace=? WHERE Id=?',
+            $disk{$sid} // 0, $sid
+          );
+        }
+      }
+    }
+    aud_print('Finished updating Storage DiskSpace');
+  }
 
   sleep($Config{ZM_AUDIT_CHECK_INTERVAL}) if $continuous;
 };
