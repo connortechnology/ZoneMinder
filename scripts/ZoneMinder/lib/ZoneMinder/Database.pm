@@ -263,15 +263,28 @@ sub _sql_with_bind_values {
 }
 
 # Basic execution of $dbh->do but with some pretty logging of the sql on error.
+# Auto-retries on deadlock (errno 1213) only when AutoCommit is on, since
+# inside a caller-managed transaction the caller has to rebuild the whole TX.
 sub zmDbDo {
-	my $sql = shift;
-  my $rows = $dbh->do($sql, undef, @_);
-	if ( ! defined $rows ) {
-		Error('Failed '._sql_with_bind_values($sql, @_).' : '.$dbh->errstr());
-  } elsif ( ZoneMinder::Logger::logLevel() > INFO ) {
+  my $sql = shift;
+  my @params = @_;
+  my $max_attempts = $dbh->{AutoCommit} ? 5 : 1;
+  my $rows;
+  for ( my $attempt = 1; $attempt <= $max_attempts; $attempt++ ) {
+    $rows = $dbh->do($sql, undef, @params);
+    last if defined $rows;
+    if ( ($dbh->err() // 0) == 1213 and $attempt < $max_attempts ) {
+      Debug("Deadlock on '"._sql_with_bind_values($sql, @params)."' attempt $attempt/$max_attempts, retrying");
+      select(undef, undef, undef, 0.05 * (1 << $attempt) + rand(0.05));
+      next;
+    }
+    Error('Failed '._sql_with_bind_values($sql, @params).' : '.$dbh->errstr());
+    last;
+  }
+  if ( defined $rows and ZoneMinder::Logger::logLevel() > INFO ) {
     ($rows) = $rows =~ /^(.*)$/; # de-taint
-    Debug('Succeeded '._sql_with_bind_values($sql, @_)." : $rows rows affected");
-	}
+    Debug('Succeeded '._sql_with_bind_values($sql, @params)." : $rows rows affected");
+  }
   return $rows;
 }
 
