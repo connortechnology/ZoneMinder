@@ -116,9 +116,21 @@ FOR EACH ROW
 
 drop procedure if exists update_storage_stats//
 
+/* ============================================================================
+ * Lock-acquisition order for the Events update/delete triggers (and for the
+ * scripts that touch the same tables). InnoDB X-locks the matched Events row
+ * during WHERE evaluation, before either BEFORE or AFTER trigger bodies fire,
+ * so the order is the same regardless of trigger timing:
+ *   Events[Id] -> Events_Hour/Day/Week/Month[EventId] -> Event_Summaries[MonitorId]
+ * zmstats.pl prune+resync follows the matching prefix (bucket DELETEs then
+ * UPDATE Event_Summaries) and crucially does NOT pre-lock Event_Summaries —
+ * pre-locking ES would invert against the trigger body order and reintroduce
+ * deadlocks against filter / zma writers. The bucket update/delete triggers
+ * also propagate into Event_Summaries[MonitorId] in the same direction.
+ * ============================================================================ */
 drop trigger if exists event_update_trigger//
 
-CREATE TRIGGER event_update_trigger AFTER UPDATE ON Events 
+CREATE TRIGGER event_update_trigger AFTER UPDATE ON Events
 FOR EACH ROW
 BEGIN
   declare diff BIGINT default 0;
