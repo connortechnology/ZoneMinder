@@ -396,16 +396,18 @@ bool VideoStore::open() {
 
         zm_dump_codec(video_out_ctx);
         if ((ret = avcodec_open2(video_out_ctx, video_out_codec, &opts)) < 0) {
+          // In auto mode, every failure here is a fallback step — promote to
+          // Info so the trail is visible without enabling debug logging.
           if (wanted_encoder != "" and wanted_encoder != "auto") {
             Warning("Can't open video codec (%s) %s",
                     video_out_codec->name,
                     av_make_error_string(ret).c_str()
                    );
           } else {
-            Debug(1, "Can't open video codec (%s) %s",
-                  video_out_codec->name,
-                  av_make_error_string(ret).c_str()
-                 );
+            Info("Can't open video codec (%s) %s — trying next",
+                 video_out_codec->name,
+                 av_make_error_string(ret).c_str()
+                );
           }
           video_out_codec = nullptr;
         }
@@ -417,6 +419,7 @@ bool VideoStore::open() {
         av_dict_free(&opts);
 
         if (video_out_codec) {
+          Info("Selected video encoder %s", video_out_codec->name);
           zm_dump_codec(video_out_ctx);
           break;
         }

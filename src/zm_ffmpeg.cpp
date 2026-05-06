@@ -145,6 +145,14 @@ std::list<const CodecData*> get_encoder_data(const std::string &wanted_codec, co
       Debug(1, "Didn't find codec for %s", chosen_codec_data->codec_name);
       continue;
     }
+    // libaom-av1 is not viable for live capture — it runs at <2 fps even at
+    // 640x480 and triggers internal asserts when the encoder backs up. Only
+    // include it when the user has selected it explicitly.
+    if ((wanted_encoder.empty() or wanted_encoder == "auto") and
+        std::string(chosen_codec_data->codec_name) == "libaom-av1") {
+      Debug(1, "Skipping libaom-av1 in auto mode (not real-time viable)");
+      continue;
+    }
     results.push_back(chosen_codec_data);
   }
   return results;
