@@ -189,10 +189,18 @@ MYSQL_RES *zmDbRow::fetch(const std::string &query) {
   return result_set;
 }
 
-/* performs SQL queries.  Will repeat if error is LOCK_WAIT_TIMEOUT
+/* performs SQL queries.  Retries on lock contention (deadlock victim or
+ * lock-wait timeout) up to kMaxContentionRetries with exponential backoff.
  * We assume that in general our SQL is properly formed, so errors will
  * be due to external factors.
  */
+
+static constexpr int kMaxContentionRetries = 5;
+
+// 50ms * 2^attempt + up to 50ms jitter. attempt 1 ~= 100ms, attempt 5 ~= 1.6s.
+static useconds_t contention_backoff_us(int attempt) {
+  return 50000u * (1u << attempt) + (rand() % 50000);
+}
 
 int zmDbDo(const std::string &query) {
   std::lock_guard<std::mutex> lck(db_mutex);
@@ -203,8 +211,11 @@ int zmDbDo(const std::string &query) {
   Logger::Level oldLevel = logger->databaseLevel();
   logger->databaseLevel(Logger::NOLOG);
 
+  int contention_retries = 0;
+
   while ((rc = mysql_query(&dbconn, query.c_str())) and !zm_terminate) {
     std::string reason = mysql_error(&dbconn);
+    unsigned int err = mysql_errno(&dbconn);
     Debug(1, "Failed running sql query %s, thread_id: %lu, %d %s", query.c_str(), db_thread_id, rc, reason.c_str());
 
     if (mysql_ping(&dbconn)) {
@@ -217,14 +228,23 @@ int zmDbDo(const std::string &query) {
         logger->databaseLevel(oldLevel);
         return 0;
       }
-    } else {
-      // Not a connection error
-      Error("Can't run query %s: %d %s", query.c_str(), rc, reason.c_str());
-      if (mysql_errno(&dbconn) != ER_LOCK_WAIT_TIMEOUT) {
-        logger->databaseLevel(oldLevel);
-        return rc;
-      }
-    } // end if !connected
+      continue;
+    }
+
+    // Not a connection error. Retry lock contention with backoff; otherwise give up.
+    if ((err == ER_LOCK_DEADLOCK or err == ER_LOCK_WAIT_TIMEOUT)
+        and contention_retries < kMaxContentionRetries) {
+      contention_retries++;
+      useconds_t us = contention_backoff_us(contention_retries);
+      Debug(1, "Lock contention (errno=%u) on '%s', retry %d/%d after %u us",
+            err, query.c_str(), contention_retries, kMaxContentionRetries, us);
+      usleep(us);
+      continue;
+    }
+
+    Error("Can't run query %s: %d %s", query.c_str(), rc, reason.c_str());
+    logger->databaseLevel(oldLevel);
+    return rc;
   }
 
   Debug(1, "Success running sql query %s, thread_id: %lu", query.c_str(), db_thread_id);
