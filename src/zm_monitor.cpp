@@ -3451,7 +3451,7 @@ int Monitor::OpenDecoder() {
 
       mVideoCodecContext = avcodec_alloc_context3(mVideoCodec);
       avcodec_parameters_to_context(mVideoCodecContext, mVideoStream->codecpar);
-      mVideoCodecContext->framerate = mVideoStream->r_frame_rate;
+      mVideoCodecContext->framerate = get_sane_framerate(mVideoStream);
 
 #ifdef CODEC_FLAG2_FAST
       // Apparently if the stream has b-frames, this is bad.  

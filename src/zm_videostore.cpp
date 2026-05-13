@@ -309,13 +309,12 @@ bool VideoStore::open() {
 
         // When encoding, we are going to use the timestamp values instead of packet pts/dts
         video_out_ctx->time_base = AV_TIME_BASE_Q;
-        // Set framerate from input context or stream
-        if (video_in_ctx && video_in_ctx->framerate.num) {
+        // Set framerate from input context or stream. video_in_ctx->framerate
+        // has already been sanitized upstream in Monitor::Decode().
+        if (video_in_ctx && video_in_ctx->framerate.num > 0) {
           video_out_ctx->framerate = video_in_ctx->framerate;
-        } else if (video_in_stream && video_in_stream->r_frame_rate.num) {
-          video_out_ctx->framerate = video_in_stream->r_frame_rate;
-        } else if (video_in_stream && video_in_stream->avg_frame_rate.num) {
-          video_out_ctx->framerate = video_in_stream->avg_frame_rate;
+        } else {
+          video_out_ctx->framerate = get_sane_framerate(video_in_stream);
         }
         Debug(1, "Setting framerate to %d/%d", video_out_ctx->framerate.num, video_out_ctx->framerate.den);
         video_out_ctx->codec_id = chosen_codec_data->codec_id;

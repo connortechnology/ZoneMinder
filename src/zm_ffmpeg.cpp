@@ -627,6 +627,22 @@ enum AVPixelFormat fix_deprecated_pix_fmt(enum AVPixelFormat fmt) {
   }
 }
 
+static bool framerate_is_sane(AVRational r) {
+  if (r.num <= 0 || r.den <= 0) return false;
+  double fps = av_q2d(r);
+  return fps > 0.1 && fps <= 240.0;
+}
+
+AVRational get_sane_framerate(const AVStream *stream) {
+  if (!stream) return {0, 1};
+  if (framerate_is_sane(stream->r_frame_rate)) return stream->r_frame_rate;
+  if (framerate_is_sane(stream->avg_frame_rate)) return stream->avg_frame_rate;
+  Debug(1, "Stream framerate implausible: r_frame_rate=%d/%d avg_frame_rate=%d/%d",
+        stream->r_frame_rate.num, stream->r_frame_rate.den,
+        stream->avg_frame_rate.num, stream->avg_frame_rate.den);
+  return {0, 1};
+}
+
 bool is_video_stream(const AVStream * stream) {
   if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
     return true;
