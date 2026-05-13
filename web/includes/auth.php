@@ -549,6 +549,12 @@ if (ZM_OPT_USE_AUTH) {
           unset($_SESSION['AuthHash'.$remoteAddr]);
         }
         $_SESSION['username'] = $user->Username();
+      } else {
+        # Stale/invalid auth hash in URL: fall back to session if one exists.
+        # Why: post-login redirects can carry a hash generated before the new
+        # session; without this fallback the request is treated as unauthenticated
+        # and we bounce back to login, producing an auth loop.
+        $user = userFromSession();
       }
     } else if (!(empty($_REQUEST['user']) or empty($_REQUEST['pass']))) {
       # The shortened versions are used in auth_relay = PLAIN
