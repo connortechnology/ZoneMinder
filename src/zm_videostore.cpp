@@ -1434,8 +1434,11 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
 
     // Drain any pending packets from the encoder before sending a new frame.
     // VAAPI encoders can accumulate output packets; not draining before send
-    // can exhaust the internal surface pool and trigger an abort.
-    {
+    // can exhaust the internal surface pool and trigger an abort. Skip on a
+    // fresh context — NetInt Quadra returns EIO (-5) and logs "encoder read
+    // retval -5" if receive_packet is called before the first send_frame
+    // opens the xcoder session.
+    if (video_encoded) {
       AVPacket *drain_pkt = av_packet_alloc();
       while (drain_pkt) {
         int drain_ret = avcodec_receive_packet(video_out_ctx, drain_pkt);
