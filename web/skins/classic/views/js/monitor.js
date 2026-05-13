@@ -971,12 +971,16 @@ function ObjectDetection_onChange(od_select) {
     $j('#ObjectDetectionNMSThreshold').show();
     const od_model_select = od_select.form.elements['newMonitor[ObjectDetectionModel]'];
 
+    const previous = od_model_select.value;
     od_model_select.innerHTML = '';
     for (const [key, value] of Object.entries(od_models[od])) {
       const opt = document.createElement('option');
       opt.value = key; // the index
       opt.innerHTML = value;
       od_model_select.append(opt);
+    }
+    if (previous && Object.prototype.hasOwnProperty.call(od_models[od], previous)) {
+      od_model_select.value = previous;
     }
   } else {
     console.log('unknown object detection:', od);
