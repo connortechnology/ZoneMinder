@@ -1307,6 +1307,21 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
       } // end if no in_frame
     } // end if no out_frame
 
+    // If decode failed upstream (e.g. NetInt Quadra EIO from av_hwframe_transfer_data
+    // nulled zm_packet->in_frame in zm_packet.cpp), none of the branches above
+    // populated `frame`. Skip this packet rather than handing AV_PIX_FMT_NONE to
+    // the encoder's hwframe uploader — NI rejects it with EINVAL and the daemon
+    // marks the encoder permanently failed on what is really a single-frame glitch.
+    if (frame->format == AV_PIX_FMT_NONE || !frame->buf[0]) {
+      Debug(1,
+            "No usable input frame for packet (in_frame=%p out_frame=%p hw_frame=%p ai_frame=%p) — skipping encode",
+            (void*)zm_packet->in_frame.get(),
+            (void*)zm_packet->out_frame.get(),
+            (void*)zm_packet->hw_frame.get(),
+            (void*)zm_packet->ai_frame.get());
+      return 0;
+    }
+
     zm_dump_video_frame(frame.get(), "frame before hwaccel check");
     Debug(1, "Encoder: pix_fmt=%d %s sw_pix_fmt=%d %s, frame format=%d %s, hw_frames_ctx=%p, color_range=%d",
           video_out_ctx->pix_fmt, av_get_pix_fmt_name(video_out_ctx->pix_fmt),
