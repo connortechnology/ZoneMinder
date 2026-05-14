@@ -90,6 +90,7 @@ if (isset($_REQUEST['showZones'])) {
 $codecs = array(
   'auto'  => translate('Auto'),
   'MP4'   => translate('MP4'),
+  'MP4HLS'=> ['Name'=> 'MP4 HLS', 'disabled'=> (!file_exists($Event->Path() . '/index.m3u8'))],
   'MJPEG' => translate('MJPEG'),
 );
 $codec = 'auto';
@@ -101,8 +102,8 @@ if (isset($_REQUEST['codec'])) {
 } else {
   $codec = $monitor->DefaultCodec();
 }
-if (!isset($codecs[$codec])) {
-  ZM\Warning("Invalid value for Codec: $codec, reverting to auto");
+if (!isset($codecs[$codec]) || (is_array(($codecs[$codec])) && $codecs[$codec]['disabled'])) {
+  if (!isset($codecs[$codec])) ZM\Warning("Invalid value for Codec: $codec, reverting to auto");
   $codec = 'auto';
   unset($_SESSION['zmEventCodec'.$Event->MonitorId()]);
 }
@@ -203,7 +204,7 @@ if ( $Event->Id() and !file_exists($Event->Path()) )
 ?>
 
 <!-- BEGIN HEADER -->
-    <div class="d-flex flex-row flex-wrap justify-content-between px-3 py-1">
+    <div id="header" class="d-flex flex-row flex-wrap justify-content-between px-3 py-1">
       <div id="toolbar" >
         <button id="backBtn" class="btn btn-normal" data-toggle="tooltip" data-placement="top" title="<?php echo translate('Back') ?>" disabled><i class="fa fa-arrow-left"></i></button>
         <button id="refreshBtn" class="btn btn-normal" data-toggle="tooltip" data-placement="top" title="<?php echo translate('Refresh') ?>" ><i class="fa fa-refresh"></i></button>
@@ -213,7 +214,7 @@ if ( $Event->Id() and !file_exists($Event->Path()) )
         <button id="editBtn" class="btn btn-normal" data-toggle="tooltip" data-placement="top" title="<?php echo translate('Edit') ?>" disabled><i class="fa fa-pencil"></i></button>
         <button id="exportBtn" class="btn btn-normal" data-toggle="tooltip" data-placement="top" title="<?php echo translate('Export') ?>"><i class="fa fa-external-link"></i></button>
         <a id="downloadBtn" class="btn btn-normal" href="<?php echo $Event->getStreamSrc(array('mode'=>'mp4'),'&amp;')?>"
-          title="<?php echo translate('Download'). ' ' . $Event->DefaultVideo() ?>"
+          title="<?php echo translate('Download'). ' ' . (($Event->DefaultVideo() === 'index.m3u8') ? translate('video') . " " . translate('file') : $Event->DefaultVideo()) ?>"
           download
           <?php echo $Event->DefaultVideo() ? '' : 'style="display:none;"' ?>
 ><i class="fa fa-download"></i></a>
@@ -240,22 +241,22 @@ if ( $Event->Id() and !file_exists($Event->Path()) )
       <div class="d-flex flex-row">
         <div id="replayControl">
           <label for="replayMode"><?php echo translate('Replay') ?></label>
-          <?php echo htmlSelect('replayMode', $replayModes, $replayMode, array('data-on-change'=>'changeReplayMode','id'=>'replayMode')); ?>
+          <?php echo htmlSelect('replayMode', $replayModes, $replayMode, array('data-on-change'=>'changeReplayMode','id'=>'replayMode','class'=>'chosen')); ?>
         </div>
         <div id="scaleControl">
           <label for="scale"><?php echo translate('Scale') ?></label>
-          <?php echo htmlSelect('scale', $scales, $scaleSelected, array('data-on-change'=>'changeScale','id'=>'scale')); ?>
+          <?php echo htmlSelect('scale', $scales, $scaleSelected, array('data-on-change'=>'changeScale','id'=>'scale','class'=>'chosen')); ?>
         </div>
           <div id="streamQualityControl"<?php echo $video_tag ? ' style="display: none;"':'' ?>>
           <label for="streamQuality"><?php echo translate('Stream quality') ?></label>
-          <?php echo htmlSelect('streamQuality', $streamQuality, $streamQualitySelected, array('data-on-change'=>'changeStreamQuality','id'=>'streamQuality')); ?>
+          <?php echo htmlSelect('streamQuality', $streamQuality, $streamQualitySelected, array('data-on-change'=>'changeStreamQuality','id'=>'streamQuality','class'=>'chosen')); ?>
         </div>
         <div id="codecControl">
           <label for="codec"><?php echo translate('Codec') ?></label>
-          <?php echo htmlSelect('codec', $codecs, $codec, array('data-on-change'=>'changeCodec','id'=>'codec')); ?>
+          <?php echo htmlSelect('codec', $codecs, $codec, array('data-on-change'=>'changeCodec','id'=>'codec','class'=>'chosen')); ?>
         </div>
         <div id="whatDisplayControl">
-          <label for="whatDisplay"><?php if (defined('AUDIO_MOTION_ENABLED') && AUDIO_MOTION_ENABLED) echo translate('What display') ?></label>
+          <label for="whatDisplay"><?php if (defined('AUDIO_MOTION_ENABLED') && AUDIO_MOTION_ENABLED) echo translate('Show') ?></label>
 <?php 
             $whatDisplayOptions = [
               'Default'=>translate('Default'),
@@ -313,7 +314,7 @@ if (defined('ZM_OPT_USE_GEOLOCATION') and ZM_OPT_USE_GEOLOCATION) {
 }
 ?>
 
-              <div id="frames">
+              <div id="frames" class="flex-col-3">
 <?php 
 if (file_exists($Event->Path().'/alarm.jpg')) {
   echo '
@@ -357,7 +358,7 @@ if (file_exists($Event->Path().'/objdetect.jpg')) {
 <?php
 if ($video_tag) {
   // Use HLS byte-range playback if m3u8 manifest exists on disk
-  $has_hls = str_ends_with($Event->DefaultVideo(), '.m3u8')
+  $has_hls = (($codec == 'MP4HLS') || str_ends_with($Event->DefaultVideo(), '.m3u8'))
     && file_exists($Event->Path() . '/index.m3u8');
   if ($has_hls) {
     $Server = $Event->Server();

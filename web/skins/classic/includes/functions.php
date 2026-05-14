@@ -1277,6 +1277,7 @@ function getOptionsHTML($forLeftBar = false, $customLabel = null) {
     'roles',
     'groups',
     'control',
+    'encoderTemplates',
     'privacy',
     'MQTT',
     'telemetry',
@@ -2023,7 +2024,7 @@ function xhtmlFooter() {
   $skinJsFile = getSkinFile('js/skin.js');
 ?>
   <script nonce="<?php echo $cspNonce; ?>" src="<?php echo cache_bust($skinJsFile) ?>"></script>
-<?php if ( in_array( $basename, array( 'watch', 'montage', 'event' ) ) ) { ?>
+<?php if ( in_array( $basename, array( 'watch', 'montage', 'event', 'monitor' ) ) ) { ?>
   <script nonce="<?php echo $cspNonce; ?>" type="module" src="skins/<?php echo $skin ?>/js/audioMotionAnalyzer.js"></script>
 <?php } ?>
   </body>
@@ -2070,17 +2071,6 @@ class ZM_Menu {
       array_push($categoriesOptionsInDB, $category_row['Category']);
     }
     self::addCategoryToOptionsMenu($categoriesOptionsInDB, $categoryDisplayOrder);
-  }
-}
-
-if (!function_exists('mb_ucfirst')) { // Available in PHP >= 8.4
-  function mb_ucfirst($str, $encoding='UTF-8') {
-    if (extension_loaded('mbstring')) {
-      $result = mb_strtoupper(mb_substr($str, 0, 1, $encoding)) . mb_substr($str, 1, null, $encoding);
-    } else {
-      $result = (ucfirst($str));
-    }
-    return $result;
   }
 }
 

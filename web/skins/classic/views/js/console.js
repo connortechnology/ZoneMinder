@@ -245,7 +245,7 @@ function processRows(rows) {
         functionHtml += 'Object Detecting: '+row.ObjectDetection + '<br/>';
       }
       if (row.ONVIF_Event_Listener) {
-        functionHtml += ' Use ONVIF Events<br/>';
+        functionHtml += ' Use ONVIF \'' + row.ONVIF_Event_Listener + '\'<br/>';
       }
       if (row.Recording && row.Recording != 'None') {
         functionHtml += 'Recording: ' + row.Recording + '<br/>';

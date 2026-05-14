@@ -44,6 +44,11 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 endif()
 set(CMAKE_C_FLAGS_OPTIMISED "-O3 -fopenmp")
 set(CMAKE_CXX_FLAGS_OPTIMISED "-O3 -fopenmp")
+# Profile: release-level optimization, plus debug symbols and frame pointers
+# so perf/flamegraph can walk stacks accurately. Use with:
+#   cmake -DCMAKE_BUILD_TYPE=Profile ..
+set(CMAKE_C_FLAGS_PROFILE "-O2 -g -fno-omit-frame-pointer -fopenmp")
+set(CMAKE_CXX_FLAGS_PROFILE "-O2 -g -fno-omit-frame-pointer -fopenmp")
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
 set(CMAKE_CXX_STANDARD 17)
