@@ -42,9 +42,11 @@ function fixQuadraJson($text) {
     '/"([\w]+)"\s*:\s*([^\s"\[\]{},](?:[^,\]\}]*[^\s,\]\}])?)(\s*[,}\]])/',
     function ($matches) {
       $value = trim($matches[2]);
-      // Leave valid JSON literals alone
-      if (preg_match('/^-?\d+$/', $value)) return $matches[0];
-      if (preg_match('/^-?\d+\.\d+$/', $value)) return $matches[0];
+      // Leave valid JSON literals alone. JSON disallows leading zeros on
+      // numbers, so "0690" (an all-digit hex SID emitted by ni_rsrc_mon)
+      // must NOT be treated as a JSON integer — it falls through to quoting.
+      if (preg_match('/^-?(?:0|[1-9]\d*)$/', $value)) return $matches[0];
+      if (preg_match('/^-?(?:0|[1-9]\d*)\.\d+$/', $value)) return $matches[0];
       if (in_array($value, ['true', 'false', 'null'])) return $matches[0];
       return '"'.$matches[1].'": "'.$value.'"'.$matches[3];
     },
