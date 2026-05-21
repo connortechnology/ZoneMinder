@@ -395,15 +395,17 @@ sub delete {
 
     my $in_transaction = $ZoneMinder::Database::dbh->{AutoCommit} ? 0 : 1;
 
-    # event_delete_trigger fires BEFORE DELETE on Events; after the
-    # accompanying triggers.sql change, event_update_trigger now also fires
-    # BEFORE UPDATE. That gives every Events writer the same lock acquisition
-    # order: buckets[Id] -> Event_Summaries[MonitorId] -> Events[Id] (the
-    # outer DML row last). zmstats.pl runs at the same RC isolation and takes
-    # bucket-row X-locks first, then UPDATE Event_Summaries, which is the
-    # same prefix order — so no cycle is possible across filter / zma /
-    # zmstats. Do NOT pre-lock Event_Summaries here: that puts ES before
-    # buckets and re-introduces the inversion against zma's UPDATE path.
+    # InnoDB X-locks the matched Events row during WHERE evaluation, before
+    # either BEFORE or AFTER trigger bodies fire, so the lock acquisition
+    # order is the same regardless of trigger timing:
+    #   Events[Id] -> Events_Hour/Day/Week/Month[EventId] -> Event_Summaries[MonitorId]
+    # event_delete_trigger (BEFORE DELETE on Events) and event_update_trigger
+    # (AFTER UPDATE on Events) both propagate into the bucket tables, whose
+    # own triggers then UPDATE Event_Summaries — that's the canonical chain.
+    # zmstats.pl prune+resync follows the matching prefix (bucket DELETEs
+    # then UPDATE Event_Summaries) and crucially does NOT pre-lock
+    # Event_Summaries: that would put ES before buckets and re-introduce the
+    # inversion against zma's UPDATE path.
     #
     # READ COMMITTED drops the next-key/gap locks that two concurrent filter
     # workers deleting adjacent EventIds in the bucket tables would otherwise
@@ -411,29 +413,37 @@ sub delete {
     # to be re-issued before each begin_work (and is skipped when the caller
     # is managing the TX).
     #
-    # Retry on errno 1213 only when we own the TX; if the caller is managing
-    # one, bail and let them decide.
+    # Retry on deadlock (MariaDB ER_LOCK_DEADLOCK = 1213) only when we own
+    # the TX; if the caller is managing one, bail and let them decide.
     my $attempt = 0;
     my $max_attempts = 5;
     while (1) {
       $attempt++;
       if (!$in_transaction) {
-        ZoneMinder::Database::zmDbDo('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+        # Use $dbh->do directly, NOT zmDbDo: zmDbDo's success Debug would
+        # write to the Logs table on this same $dbh, and that INSERT would
+        # become the "next transaction" that consumes the isolation level
+        # directive — silently dropping our delete TX back to the default.
+        $ZoneMinder::Database::dbh->do('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
         $ZoneMinder::Database::dbh->begin_work();
       }
 
       # Order: Stats -> Event_Data -> Frames -> Events (least to greatest reference depth)
       my $err = 0;
-      foreach my $stmt (
-        ['DELETE FROM Stats WHERE EventId=?',      $$event{Id}],
-        ['DELETE FROM Event_Data WHERE EventId=?', $$event{Id}],
-        ['DELETE FROM Frames WHERE EventId=?',     $$event{Id}],
-        ['DELETE FROM Events WHERE Id=?',          $$event{Id}],
+      my $errstr = '';
+      foreach my $sql (
+        'DELETE FROM Stats WHERE EventId=?',
+        'DELETE FROM Event_Data WHERE EventId=?',
+        'DELETE FROM Frames WHERE EventId=?',
+        'DELETE FROM Events WHERE Id=?',
       ) {
-        my ($sql, @bind) = @$stmt;
-        ZoneMinder::Database::zmDbDo($sql, @bind);
+        ZoneMinder::Database::zmDbDo($sql, $$event{Id});
         $err = $ZoneMinder::Database::dbh->err() // 0;
-        last if $err;
+        if ($err) {
+          # Capture before rollback, which can clear errstr on some drivers.
+          $errstr = $ZoneMinder::Database::dbh->errstr() // '';
+          last;
+        }
       }
 
       if (!$err) {
@@ -442,7 +452,12 @@ sub delete {
       }
 
       $ZoneMinder::Database::dbh->rollback() if !$in_transaction;
-      if ($in_transaction or $err != 1213 or $attempt >= $max_attempts) {
+      if ($in_transaction or $err != 1213 or $attempt >= $max_attempts) { # 1213 = ER_LOCK_DEADLOCK
+        # Surface the final failure ourselves — zmDbDo suppresses its Error
+        # log on 1213 inside a caller-managed TX (we own the retry), and the
+        # exhausted-retries case would otherwise return silently.
+        Error("Failed deleting event $$event{Id} after $attempt attempt(s): err=$err $errstr")
+          if $err;
         return;
       }
       Debug("Deadlock deleting event $$event{Id} attempt $attempt/$max_attempts, retrying");
