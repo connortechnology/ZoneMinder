@@ -254,15 +254,24 @@ bool DecoderThread::Decode() {
       }
       send_count_++;
 
-      // Warn when average decode rate can't keep up with capture fps
-      int fps = static_cast<int>(monitor_->get_capture_fps());
-      double budget_us = (fps > 0) ? 1e6 / fps : 0;
+      // Warn when average decode rate can't keep up with the camera's frame
+      // rate. Prefer the stream-declared rate (r_frame_rate / avg_frame_rate)
+      // because the measured capture_fps spikes during backlog drains after
+      // a stall — that transient burst rate is not what the decoder needs to
+      // keep up with in steady state. Fall back to capture_fps only when the
+      // stream doesn't report a plausible rate.
+      AVRational stream_rate = get_sane_framerate(monitor_->GetVideoStream());
+      double fps_d = (stream_rate.num > 0 && stream_rate.den > 0)
+                       ? av_q2d(stream_rate)
+                       : monitor_->get_capture_fps();
+      int fps = static_cast<int>(fps_d);
+      double budget_us = (fps_d > 0) ? 1e6 / fps_d : 0;
       if ((fps > 0) && (send_count_ >= fps) && (avg_send_us_ > budget_us)) {
-        Warning("send_packet avg %.1fms exceeds frame budget %.1fms (capture %dfps). Queue %zu, keyframe interval %d",
+        Warning("send_packet avg %.1fms exceeds frame budget %.1fms (stream %dfps). Queue %zu, keyframe interval %d",
             avg_send_us_ / 1000.0, budget_us / 1000.0, fps,
             monitor_->decoder_queue.size(), monitor_->packetqueue.get_max_keyframe_interval());
       } else {
-        Debug(3, "send_packet %d took %.3fs (avg %.1fms), capture %dfps",
+        Debug(3, "send_packet %d took %.3fs (avg %.1fms), stream %dfps",
             packet->image_index, send_us / 1e6, avg_send_us_ / 1000.0, fps);
       }
 
