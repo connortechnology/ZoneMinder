@@ -1964,13 +1964,22 @@ void Monitor::UpdateFPS() {
   // audio packets. Also only do the update at most 1/sec
   if (elapsed > Seconds(1)) {
     // # of images per interval / the amount of time it took
-    double new_capture_fps = (shared_data->capture_image_count - last_capture_image_count) / elapsed.count();
+    double sample_capture_fps = (shared_data->capture_image_count - last_capture_image_count) / elapsed.count();
+    // Smooth capture_fps with a long-window EMA so transient bursts (e.g.
+    // backlog drains after a network stall, where the capture loop reads
+    // many seconds of buffered packets back-to-back) don't poison downstream
+    // budget/throttle decisions, the SHM value, or the DB Monitor_Status row.
+    // UpdateFPS runs ~once per second, so alpha=0.05 gives a ~20-second window.
+    constexpr double capture_fps_alpha = 0.05;
+    double new_capture_fps = (shared_data->capture_fps > 0.0)
+        ? capture_fps_alpha * sample_capture_fps + (1.0 - capture_fps_alpha) * shared_data->capture_fps
+        : sample_capture_fps;
     uint32 new_camera_bytes = camera->Bytes();
     uint32 new_capture_bandwidth =
       static_cast<uint32>((new_camera_bytes - last_camera_bytes) / elapsed.count());
     double new_analysis_fps = (shared_data->analysis_image_count <= 0) ? 0 : (shared_data->analysis_image_count - last_motion_frame_count) / elapsed.count();
 
-    Debug(4, "FPS: capture count %d - last capture count %d = %d now:%lf, last %lf, elapsed %lf = capture: %lf fps analysis: %lf fps",
+    Debug(4, "FPS: capture count %d - last capture count %d = %d now:%lf, last %lf, elapsed %lf = capture: %lf (sample %lf) fps analysis: %lf fps",
         shared_data->capture_image_count,
         last_capture_image_count,
         shared_data->capture_image_count - last_capture_image_count,
@@ -1978,6 +1987,7 @@ void Monitor::UpdateFPS() {
         FPSeconds(last_fps_time.time_since_epoch()).count(),
         elapsed.count(),
         new_capture_fps,
+        sample_capture_fps,
         new_analysis_fps);
 
     if ( fps_report_interval and
