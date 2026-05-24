@@ -82,6 +82,10 @@ function MonitorStream(monitorData) {
     this.bottomElement = e;
   };
 
+  this.MAX_AUTH_REFRESH_ATTEMPTS = 3;
+  this.authRefreshAttempts = 0;
+  this.authRefreshTimer = null;
+
   this.img_onerror = function() {
     const stream = this.getElement();
     const failedSrc = stream ? stream.src : '';
@@ -94,9 +98,16 @@ function MonitorStream(monitorData) {
       stream.src = '';
       stream.removeAttribute('src');
     }
-    this.writeTextInfoBlock("Error", {showImg: false});
 
-    if (!failedSrc) return;
+    if (!failedSrc) {
+      this.writeTextInfoBlock("Error", {showImg: false});
+      return;
+    }
+    if (this.authRefreshAttempts >= this.MAX_AUTH_REFRESH_ATTEMPTS) {
+      console.error('zms reconnect attempts exhausted for monitor '+this.id);
+      this.writeTextInfoBlock("Error", {showImg: false});
+      return;
+    }
     // Classify the failure with a single non-streaming fetch so we can
     // recover from a stale auth hash without spinning on the MJPEG stream.
     const classifyUrl = failedSrc.replace(/mode=jpeg/i, 'mode=single');
@@ -107,18 +118,27 @@ function MonitorStream(monitorData) {
             const srcAuthWasCurrent = srcAuthMatch && srcAuthMatch[1] === auth_hash;
             if (srcAuthWasCurrent) {
               console.error('zms returned '+response.status+' with current auth_hash; not retrying monitor '+this.id);
+              this.writeTextInfoBlock("Error", {showImg: false});
             } else {
-              console.log('zms returned '+response.status+' with stale auth_hash; refreshing and restarting monitor '+this.id);
-              this.refreshAuthAndRestart();
+              this.authRefreshAttempts++;
+              const backoffMs = 2000 * Math.pow(2, this.authRefreshAttempts - 1); // 2s, 4s, 8s
+              console.log('zms returned '+response.status+' with stale auth_hash; refreshing and reconnecting monitor '+
+                this.id+' in '+backoffMs+'ms (attempt '+this.authRefreshAttempts+'/'+this.MAX_AUTH_REFRESH_ATTEMPTS+')');
+              this.writeTextInfoBlock("Reconnecting...");
+              if (this.authRefreshTimer) clearTimeout(this.authRefreshTimer);
+              this.authRefreshTimer = setTimeout(() => this.refreshAuthAndRestart(), backoffMs);
             }
           } else if (response.status === 404) {
             console.error('zms returned 404 for monitor '+this.id+' — giving up. url: '+failedSrc);
+            this.writeTextInfoBlock("Error", {showImg: false});
           } else if (!response.ok) {
             console.warn('zms returned '+response.status+' for monitor '+this.id);
+            this.writeTextInfoBlock("Error", {showImg: false});
           }
         })
         .catch((err) => {
           console.log('classify fetch failed for monitor '+this.id+': '+err);
+          this.writeTextInfoBlock("Error", {showImg: false});
         });
   };
   this.refreshAuthAndRestart = function() {
@@ -128,6 +148,11 @@ function MonitorStream(monitorData) {
     });
   };
   this.img_onload = function() {
+    this.authRefreshAttempts = 0;
+    if (this.authRefreshTimer) {
+      clearTimeout(this.authRefreshTimer);
+      this.authRefreshTimer = null;
+    }
     if (!this.streamCmdTimer) {
       console.log('Image stream has loaded! starting streamCmd for monitor ID='+this.id+' connKey='+this.connKey+' in '+statusRefreshTimeout + 'ms');
       this.streamCmdQuery(); // This is to get an instant status update
@@ -1312,7 +1337,12 @@ function MonitorStream(monitorData) {
 
           const delayString = secsToTime(this.status.delay);
 
-          if (this.status.paused == true) {
+          if (this.status.stopped == true) {
+            $j('#modeValue'+this.id).text('Stopped');
+            $j('#rate'+this.id).addClass('hidden');
+            $j('#delay'+this.id).addClass('hidden');
+            $j('#level'+this.id).addClass('hidden');
+          } else if (this.status.paused == true) {
             $j('#modeValue'+this.id).text('Paused');
             $j('#rate'+this.id).addClass('hidden');
             $j('#delayValue'+this.id).text(delayString);
