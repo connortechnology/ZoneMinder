@@ -1719,6 +1719,7 @@ int VideoStore::write_packet(AVPacket *pkt, AVStream *stream) {
     write_packet_failed_ = true;
   } else {
     Debug(4, "Success writing packet");
+    packets_written++;
   }
 
   // HLS fragment tracking: with movflags=frag_keyframe, the muxer flushes the
@@ -1774,10 +1775,16 @@ void VideoStore::finalize() {
     }
   }
 
-  // Skip trailer writes if a prior write_packet failed — muxer state may be
-  // inconsistent and these calls can trigger an internal ffmpeg abort.
+  // Skip trailer writes if a prior write_packet failed or if no packets were
+  // ever written — muxer state may be inconsistent (short-lived events with
+  // hw encoders that never drained a packet hit this) and these calls can
+  // trigger an internal ffmpeg abort inside av_write_trailer.
   int rc = 0;
-  if (!write_packet_failed_) {
+  if (write_packet_failed_) {
+    Warning("Skipping codec flush, interleaved flush and trailer due to prior write failure");
+  } else if (packets_written == 0) {
+    Warning("Skipping codec flush, interleaved flush and trailer: no packets ever written to muxer");
+  } else {
     flush_codecs();
 
     Debug(4, "Flushing interleaved queues");
@@ -1790,8 +1797,6 @@ void VideoStore::finalize() {
     } else {
       Debug(3, "Success Writing trailer");
     }
-  } else {
-    Warning("Skipping codec flush, interleaved flush and trailer due to prior write failure");
   }
 
   // After av_write_trailer, the file contains init+fragments_1..N + mfra trailer.
