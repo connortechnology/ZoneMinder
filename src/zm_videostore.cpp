@@ -1409,19 +1409,15 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
     // can exhaust the internal surface pool and trigger an abort. Skip on a
     // fresh context — NetInt Quadra returns EIO (-5) and logs "encoder read
     // retval -5" if receive_packet is called before the first send_frame
-    // opens the xcoder session.
+    // opens the xcoder session. NetInt Quadra AV1 has multi-frame reorder
+    // latency, so the packets we drain here are the previous frames' output —
+    // they MUST be written to the muxer, not discarded.
     if (video_encoded) {
-      AVPacket *drain_pkt = av_packet_alloc();
-      while (drain_pkt) {
-        int drain_ret = avcodec_receive_packet(video_out_ctx, drain_pkt);
-        if (drain_ret == 0) {
-          Debug(3, "Drained buffered packet from encoder before send");
-          av_packet_unref(drain_pkt);
-          continue;
-        }
-        break;
+      while (!zm_terminate) {
+        int drain_ret = receive_and_write_video_packet();
+        if (drain_ret < 0) break;
+        Debug(3, "Drained buffered packet from encoder before send");
       }
-      av_packet_free(&drain_pkt);
     }
 
     do {
@@ -1440,13 +1436,9 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
           video_encoder_failed = true;
           return ret;
         } else {
-          Debug(3, "Got EAGAIN, draining encoder");
-          // Drain one packet and retry
-          AVPacket *eagain_pkt = av_packet_alloc();
-          if (eagain_pkt) {
-            avcodec_receive_packet(video_out_ctx, eagain_pkt);
-            av_packet_free(&eagain_pkt);
-          }
+          Debug(3, "send_frame EAGAIN, draining one packet to free a slot");
+          // Drain one packet (and write it) to make room, then retry the send.
+          receive_and_write_video_packet();
         }
       } else {
         video_encoded = true;
@@ -1455,7 +1447,7 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
     } while (!zm_terminate);
 
     while (!zm_terminate) {
-      int ret = avcodec_receive_packet(video_out_ctx, opkt.get());
+      int ret = receive_and_write_video_packet();
       if (ret < 0) {
         int64_t encode_us = std::chrono::duration_cast<Microseconds>(
             std::chrono::steady_clock::now() - encode_start).count();
@@ -1481,28 +1473,6 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
         }
         return ret;
       }
-      pkt_guard.acquire(opkt);
-      ZM_DUMP_PACKET(opkt, "packet returned by codec");
-
-      // Need to adjust pts/dts values from codec time to stream time
-      if (opkt->pts != AV_NOPTS_VALUE)
-        opkt->pts = av_rescale_q(opkt->pts, video_out_ctx->time_base, video_out_stream->time_base);
-      if (opkt->dts != AV_NOPTS_VALUE)// and opkt->dts > 0)
-        opkt->dts = av_rescale_q(opkt->dts, video_out_ctx->time_base, video_out_stream->time_base);
-      Debug(1, "Timebase conversions using %d/%d -> %d/%d",
-            video_out_ctx->time_base.num,
-            video_out_ctx->time_base.den,
-            video_out_stream->time_base.num,
-            video_out_stream->time_base.den);
-      ZM_DUMP_PACKET(opkt, "packet returned by codec after timebase conversions");
-
-      if (video_last_pts != AV_NOPTS_VALUE) {
-        opkt->duration = opkt->pts - video_last_pts;
-        Debug(1, "Duration %" PRId64 " from pts %" PRId64 " - last %" PRId64, opkt->duration, opkt->pts, video_last_pts);
-        if (opkt->duration < 0) opkt->duration = 0;
-      }
-      video_last_pts = opkt->pts;
-      write_packet(opkt.get(), video_out_stream);
     } // end while receive_packet
   } else { // Passthrough
     AVPacket *ipkt = zm_packet->packet.get();
@@ -1648,6 +1618,24 @@ int VideoStore::writeAudioFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
 
   return 0;
 }  // end int VideoStore::writeAudioFramePacket(AVPacket *ipkt)
+
+int VideoStore::receive_and_write_video_packet() {
+  av_packet_ptr opkt{av_packet_alloc()};
+  if (!opkt) return AVERROR(ENOMEM);
+  int ret = avcodec_receive_packet(video_out_ctx, opkt.get());
+  if (ret < 0) return ret;
+  ZM_DUMP_PACKET(opkt, "packet returned by codec");
+  if (opkt->pts != AV_NOPTS_VALUE)
+    opkt->pts = av_rescale_q(opkt->pts, video_out_ctx->time_base, video_out_stream->time_base);
+  if (opkt->dts != AV_NOPTS_VALUE)
+    opkt->dts = av_rescale_q(opkt->dts, video_out_ctx->time_base, video_out_stream->time_base);
+  if (video_last_pts != AV_NOPTS_VALUE) {
+    opkt->duration = opkt->pts - video_last_pts;
+    if (opkt->duration < 0) opkt->duration = 0;
+  }
+  video_last_pts = opkt->pts;
+  return write_packet(opkt.get(), video_out_stream);
+}
 
 int VideoStore::write_packet(AVPacket *pkt, AVStream *stream) {
   if (write_packet_failed_) {

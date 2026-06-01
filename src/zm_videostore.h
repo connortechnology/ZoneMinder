@@ -117,6 +117,12 @@ class VideoStore {
 
   bool setup_resampler();
   int write_packet(AVPacket *pkt, AVStream *stream);
+  // Pull one packet from the video encoder and route it through write_packet.
+  // The ONLY correct way to drain encoder output — discarding packets here
+  // (older code did) silently breaks recording on any encoder with non-zero
+  // reorder latency, because every shown frame ends up coming out during the
+  // next iteration's pre-send drain instead of the post-send receive loop.
+  int receive_and_write_video_packet();
 
  public:
   VideoStore(
