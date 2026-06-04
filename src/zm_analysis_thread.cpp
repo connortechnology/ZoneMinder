@@ -74,6 +74,23 @@ void AnalysisThread::Run() {
             std::chrono::duration_cast<Microseconds>(now - last_analysis_time);
         if (elapsed < target_interval) {
           Microseconds sleep_for = target_interval - elapsed;
+          // Cap the pacing sleep so an anomalously low capture_fps reading
+          // can't paralyze us. Monitor::connect() zeroes capture_image_count
+          // on every reconnect, and UpdateFPS then computes a sample over a
+          // window that includes the dead air before the first new frame
+          // (observed: 1 frame / 2.5s -> 0.4fps). Combined with alpha=0.05
+          // EMA recovery, get_capture_fps() can sit below 5fps for 20+s
+          // after a reconnect. target_interval = 1e6/0.4 = 2.5s would let
+          // the packet queue overflow long before we wake.
+          //
+          // 30ms is a frame interval at ~33fps — under that rate the cap
+          // shortens the pace cycle (harmless, just more loop iterations
+          // because Analyse will return EAGAIN); above it the cap rarely
+          // fires under sane EMA. Worst case at 100fps the cap lets the
+          // queue grow by 3 frames per cycle before burst_lag triggers
+          // catch-up, which fits comfortably in the default queue size.
+          constexpr Microseconds kMaxPaceSleep(30'000);
+          if (sleep_for > kMaxPaceSleep) sleep_for = kMaxPaceSleep;
           Debug(4,
                 "Pacing analysis: sleeping %" PRId64
                 "us (decoder_lag=%d, fps=%.1f)",
