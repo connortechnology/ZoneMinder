@@ -287,14 +287,20 @@ int setup_hwaccel(
     Error("Failed to initialize hwaccel frame context."
         "Error code: %s", av_err2str(ret));
     av_buffer_unref(&hw_frames_ref);
-  } else {
-    codec_ctx->hw_frames_ctx = av_buffer_ref(hw_frames_ref);
-    if (!codec_ctx->hw_frames_ctx) {
-      Error("Failed to allocate hw_frames_ctx");
-      return -1;
-    }
+    // Must propagate the failure. Returning 0 here would leave codec_ctx with
+    // hw_device_ctx set but hw_frames_ctx NULL; avcodec_open2() then operates
+    // on a half-built hw context and can abort (bad free) inside encoder init
+    // instead of letting the caller fall through to the next encoder.
+    // codec_ctx->hw_device_ctx is left set; the caller frees the whole context
+    // and unrefs its own hw_device_ctx reference on the failure path.
+    return ret;
   }
+  codec_ctx->hw_frames_ctx = av_buffer_ref(hw_frames_ref);
   av_buffer_unref(&hw_frames_ref);
+  if (!codec_ctx->hw_frames_ctx) {
+    Error("Failed to allocate hw_frames_ctx");
+    return AVERROR(ENOMEM);
+  }
   av_buffer_unref(&hw_device_ctx);
 #endif
   return 0;
