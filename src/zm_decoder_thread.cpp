@@ -388,9 +388,10 @@ bool DecoderThread::Decode() {
   unsigned int index = packet->image_index % monitor_->image_buffer_count;
 
   if (packet->image) {
-    monitor_->image_buffer[index]->AVPixFormat(monitor_->image_pixelformats[index] = packet->image->AVPixFormat());
     Debug(1, "Assigning %s for index %d to %s", packet->image->toString().c_str(), index, monitor_->image_buffer[index]->toString().c_str());
-    monitor_->image_buffer[index]->Assign(*(packet->image));
+    // Route through WriteShmFrame so image_pixelformats[index] is only
+    // published once the bytes actually land in the slot (copy-then-publish).
+    monitor_->WriteShmFrame(index, packet->image);
   } else if (packet->in_frame) {
 #if AI_IN_DECODE
 

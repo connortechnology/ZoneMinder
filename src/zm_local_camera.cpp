@@ -379,7 +379,8 @@ LocalCamera::LocalCamera(
       imagePixFormat = AV_PIX_FMT_GRAY8;
       pixelFormat = AV_PIX_FMT_GRAY8;
     } else {
-      Panic("Unexpected colours: %u",colours);
+      Panic("Unexpected pixel format %d (%s); legacy colours=%u subpixelorder=%u",
+            pixelFormat, zm_get_pix_fmt_name(pixelFormat), colours, subpixelorder);
     }
     if (capture && !is_mjpeg) {
       /* Skip swscale check for MJPEG - it's compressed data handled separately */

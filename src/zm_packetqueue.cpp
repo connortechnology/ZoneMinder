@@ -428,6 +428,12 @@ void PacketQueue::stop() {
 
 void PacketQueue::clear() {
   Debug(1, "Clearing packetqueue");
+  // Move packets out under the lock, then let their destructors run after
+  // the mutex is released. Mirrors queuePacket()/clearPackets() so we don't
+  // stall other threads on expensive ZMPacket teardown (Image, AVPacket).
+  std::vector<std::shared_ptr<ZMPacket>> packets_to_destroy;
+
+  {
   std::lock_guard<std::mutex> lck(mutex);
   deleting = true;
   // Why are we notifying?
@@ -437,8 +443,6 @@ void PacketQueue::clear() {
 
   while (!pktQueue.empty()) {
     std::shared_ptr<ZMPacket> packet = pktQueue.front();
-    // Someone might have this packet, but not for very long and since we have locked the queue they won't be able to get another one
-    // Deleting this packet, doesn't require a lock.  We only need a lock if we are modifying the packet.  
     Debug(1,
           "Deleting a packet with stream index:%d image_index:%d with keyframe:%d, video frames in queue:%d max: %d, queuesize:%zu",
           packet->packet->stream_index,
@@ -449,6 +453,7 @@ void PacketQueue::clear() {
           pktQueue.size());
     packet_counts[packet->packet->stream_index] -= 1;
     pktQueue.pop_front();
+    packets_to_destroy.push_back(std::move(packet));
   }
   Debug(1, "Packetqueue is clear, deleting iterators");
 
@@ -467,6 +472,8 @@ void PacketQueue::clear() {
 
   Debug(1, "Packetqueue is clear, notifying");
   condition.notify_all();
+  } // end scope for lock_guard — mutex released here
+  // packets_to_destroy goes out of scope here, destroying packets without holding the mutex
 }  // end void PacketQueue::clear()
 
 unsigned int PacketQueue::size() {
@@ -589,11 +596,6 @@ ZMPacketLock PacketQueue::get_packet_and_increment_it(packetqueue_iterator *it) 
 
   return ZMPacketLock();
 }  // end ZMPacketLock *PacketQueue::get_packet_and_increment_it(it)
-
-void PacketQueue::unlock(ZMPacketLock *lp) {
-  delete lp;
-  condition.notify_all();
-}
 
 bool PacketQueue::increment_it(packetqueue_iterator *it, bool wait) {
   std::unique_lock<std::mutex> lck(mutex);

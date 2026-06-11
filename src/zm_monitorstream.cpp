@@ -722,7 +722,7 @@ void MonitorStream::runStream() {
       if (!was_paused) {
         int index = monitor->shared_data->last_decoder_index % monitor->image_buffer_count;
         Debug(1, "Saving paused image from index %d",index);
-        paused_image = new Image(*monitor->analysis_image_buffer[index]);
+        paused_image = new Image(*monitor->ReadShmFrame(index));
         paused_timestamp = SystemTimePoint(zm::chrono::duration_cast<Microseconds>(monitor->shared_timestamps[index]));
       }
     } else if (paused_image) {
@@ -888,15 +888,18 @@ void MonitorStream::runStream() {
             // Perhaps we should use NOW instead.
             last_frame_timestamp = SystemTimePoint(zm::chrono::duration_cast<Microseconds>(monitor->shared_timestamps[index]));
 
-            // Analysis Image can be gray scale
-            Image *send_image = (*image_buffer)[index];
+            // Route through the format-syncing helper for the ring we
+            // selected above, so the Image adopts the per-slot AVPixelFormat
+            // the writer published before its bytes are interpreted. Analysis
+            // images can be gray scale or full colour.
+            Image *send_image = (image_buffer == &monitor->image_buffer)
+                ? monitor->ReadShmFrame(index)
+                : monitor->ReadAnalysisShmFrame(index);
             Debug(1, "Sending regular image index %d, pix format is %d %s size %d",
                 index, pixformat, av_get_pix_fmt_name(pixformat), send_image->Size());
 
             std::string annotation = stringtf("image %.2d %d %s", index, new_count, (image_buffer == &monitor->image_buffer ? "Waiting for analysis engine" : ""));
             send_image->Annotate(annotation.c_str(), Vector2(0, 20), monitor->LabelSize(), kRGBWhite, kRGBTransparent);
-
-            send_image->AVPixFormat(pixformat);
 
             if (!sendFrame(send_image, last_frame_timestamp)) {
               Debug(2, "sendFrame failed, quitting.");
@@ -962,7 +965,7 @@ void MonitorStream::runStream() {
 
             temp_image_buffer[temp_index].timestamp =
               SystemTimePoint(zm::chrono::duration_cast<Microseconds>(monitor->shared_timestamps[index]));
-            monitor->image_buffer[index]->WriteJpeg(temp_image_buffer[temp_index].file_name, config.jpeg_file_quality);
+            monitor->ReadShmFrame(index)->WriteJpeg(temp_image_buffer[temp_index].file_name, config.jpeg_file_quality);
             temp_write_index = MOD_ADD(temp_write_index, 1, temp_image_buffer_count);
             if (temp_write_index == temp_read_index) {
               // Go back to live viewing
@@ -1146,10 +1149,11 @@ void MonitorStream::SingleImage(int scale) {
   }
 
   AVPixelFormat pixformat = monitor->image_pixelformats[index];
-
-  Image *snap_image = monitor->analysis_image_buffer[index];
-  snap_image->AVPixFormat(pixformat);
-  Debug(1, "Sending regular image index %d, pix format is %d %s %d", index, pixformat, av_get_pix_fmt_name(pixformat), snap_image->Size());
+  // index is last_analysis_index, so serve from the analysis ring; the
+  // helper adopts the per-slot AVPixelFormat published by the analysis
+  // process before the bytes are interpreted.
+  Image *snap_image = monitor->ReadAnalysisShmFrame(index);
+  Debug(1, "Sending regular image index %d, pix format is %d %s %d", index, pixformat, zm_get_pix_fmt_name(pixformat), snap_image->Size());
   if (!config.timestamp_on_capture) {
     monitor->TimestampImage(snap_image, SystemTimePoint(zm::chrono::duration_cast<Microseconds>(monitor->shared_timestamps[index])));
   }

@@ -14,6 +14,8 @@
 #include "zm_ffmpeg.h"
 #include "zm_rgb.h"
 
+#include <libavutil/pixdesc.h>
+
 //
 // Central pixel format conversion helpers.
 //
@@ -149,6 +151,14 @@ inline bool zm_is_rgb24(AVPixelFormat fmt) {
 
 inline bool zm_is_yuv420(AVPixelFormat fmt) {
   return fmt == AV_PIX_FMT_YUV420P || fmt == AV_PIX_FMT_YUVJ420P;
+}
+
+// av_get_pix_fmt_name returns nullptr for unknown formats (including
+// AV_PIX_FMT_NONE). Passing nullptr to a %s format specifier is undefined,
+// so always go through this wrapper when logging.
+inline const char *zm_get_pix_fmt_name(AVPixelFormat fmt) {
+  const char *name = av_get_pix_fmt_name(fmt);
+  return name ? name : "unknown";
 }
 
 #endif // ZM_PIXFORMAT_H

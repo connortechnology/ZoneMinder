@@ -264,6 +264,9 @@ Monitor::Monitor() :
   shared_analysis_timestamps(nullptr),
   shared_images(nullptr),
   shared_analysis_images(nullptr),
+  image_pixelformats(nullptr),
+  analysis_image_pixelformats(nullptr),
+  shm_slot_size(0),
   video_stream_id(-1),
   audio_stream_id(-1),
   video_fifo(nullptr),
@@ -1043,7 +1046,22 @@ bool Monitor::connect() {
     Warning("Already connected. Please call disconnect first.");
   }
   if (!camera) LoadCamera();
+  // SHM slot size must be an upper bound across every AVPixelFormat the
+  // no-conversion pipeline can transport, not just the monitor's configured
+  // colours. If the camera is configured as GRAY8 (1 byte/pixel) but the
+  // decoder hands us YUV422P (2 bytes/pixel) or RGBA (4 bytes/pixel), the
+  // capture-side Assign would fail with "Held buffer is undersized". Size
+  // the slot for the largest supported format (RGBA at 4 bytes/pixel with
+  // 32-byte alignment) and fall back to camera->ImageSize() if that probe
+  // fails, so we never shrink the slot.
   size_t image_size = camera->ImageSize();
+  int upper_bound = av_image_get_buffer_size(AV_PIX_FMT_RGBA, width, height, 32);
+  if (upper_bound > 0 && static_cast<size_t>(upper_bound) > image_size) {
+    Debug(1, "SHM slot sized for upper bound %d (was camera->ImageSize()=%zu)",
+          upper_bound, image_size);
+    image_size = static_cast<size_t>(upper_bound);
+  }
+  shm_slot_size = image_size;
   mem_size = sizeof(SharedData)
              + sizeof(TriggerData)
              + (zone_count * sizeof(int)) // Per zone scores
@@ -1052,9 +1070,16 @@ bool Monitor::connect() {
              + (image_buffer_count*sizeof(struct timeval))
              + (image_buffer_count*image_size)
              + (image_buffer_count*image_size) // analysis_images
-             + (image_buffer_count*sizeof(AVPixelFormat)) //
-             + (image_buffer_count*sizeof(AVPixelFormat)) //
-             + 64; /* Padding used to permit aligning the images buffer to 64 byte boundary */
+             + (image_buffer_count*sizeof(AVPixelFormat)) // per-slot capture pix fmt
+             + (image_buffer_count*sizeof(AVPixelFormat)) // per-slot analysis pix fmt
+             // Padding covers two independent alignment adjustments:
+             //   * up to 63 bytes to push shared_images to a 64-byte boundary
+             //   * up to alignof(AVPixelFormat)-1 bytes to push
+             //     image_pixelformats to its required alignment after the
+             //     image_size-stride run of bytes.
+             // Reserve the worst case so neither adjustment can run past the
+             // mapped region.
+             + 63 + (alignof(AVPixelFormat) - 1);
 
   Debug(1,
         "SharedData=%zu "
@@ -1199,15 +1224,42 @@ bool Monitor::connect() {
   image_buffer.resize(image_buffer_count);
   shared_analysis_images = (unsigned char *)((char *)shared_images + (image_buffer_count*image_size));
   analysis_image_buffer.resize(image_buffer_count);
-  image_pixelformats = (AVPixelFormat *)(shared_analysis_images + (image_buffer_count*image_size));
+
+  // Layout in SHM is: image_buffer_count*image_size for image_buffer slots,
+  // then image_buffer_count*image_size for analysis_image_buffer slots, THEN
+  // the image_pixelformats[image_buffer_count] array, THEN the
+  // analysis_image_pixelformats[image_buffer_count] array.
+  //
+  // image_size may not be a multiple of alignof(AVPixelFormat) (for
+  // example GRAY8 with odd width when image_size comes from
+  // camera->ImageSize()). Casting an unaligned address to AVPixelFormat*
+  // is undefined behaviour on strict-alignment ISAs (and slow even on x86),
+  // so round the offset up. mem_size reserves
+  // 63 + (alignof(AVPixelFormat) - 1) bytes of slack so the combined
+  // 64-byte alignment of shared_images and this pixformat alignment both
+  // fit inside the mapped region.
+  uintptr_t pixfmt_addr = reinterpret_cast<uintptr_t>(
+      shared_images + (2 * image_buffer_count * image_size));
+  const uintptr_t pixfmt_align = alignof(AVPixelFormat);
+  pixfmt_addr = (pixfmt_addr + pixfmt_align - 1) & ~(pixfmt_align - 1);
+  image_pixelformats = reinterpret_cast<AVPixelFormat *>(pixfmt_addr);
   analysis_image_pixelformats = image_pixelformats + image_buffer_count;
+  if (reinterpret_cast<unsigned char *>(analysis_image_pixelformats + image_buffer_count) > mem_ptr + mem_size) {
+    Warning("We will exceed memsize by %td bytes!",
+            reinterpret_cast<unsigned char *>(analysis_image_pixelformats + image_buffer_count) - (mem_ptr + mem_size));
+  }
 
   for (int32_t i = 0; i < image_buffer_count; i++) {
-    image_buffer[i] = new Image(width, height, ZM_COLOUR_YUV420P, ZM_SUBPIX_ORDER_YUV420P, &(shared_images[i*image_size]), image_size, 0);
-    //image_buffer[i] = new Image(width, height, camera->Colours(), camera->SubpixelOrder(), &(shared_images[i*image_size]));
+    // The initial format is a placeholder. The actual SHM bytes can be in
+    // any AVPixelFormat zm_pixformat supports — zmc records the per-slot
+    // format via image_pixelformats[index] in WriteShmFrame, and ReadShmFrame
+    // applies it to image_buffer[i] before each consumer access. image_size
+    // is sized above to the RGBA upper bound so any supported format fits
+    // the held SHM slot regardless of the monitor's configured colours.
+    image_buffer[i] = new Image(width, height, ZM_COLOUR_YUV420P, ZM_SUBPIX_ORDER_YUV420P,
+                                 &(shared_images[i*image_size]), image_size, 0);
     image_buffer[i]->HoldBuffer(true); /* Don't release the internal buffer or replace it with another */
     analysis_image_buffer[i] = new Image(width, height, ZM_COLOUR_YUV420P, ZM_SUBPIX_ORDER_YUV420P, &(shared_analysis_images[i*image_size]), image_size, 0);
-    //analysis_image_pixelformats[i] = AV_PIX_FMT_NONE;
     analysis_image_buffer[i]->HoldBuffer(true); /* Don't release the internal buffer or replace it with another */
   }
 
@@ -1242,6 +1294,13 @@ bool Monitor::connect() {
     shared_data->alarm_y = -1;
     shared_data->format = camera->SubpixelOrder();
     shared_data->imagesize = camera->ImageSize();
+    // memset zeroed image_pixelformats/analysis_image_pixelformats above;
+    // 0 is AV_PIX_FMT_YUV420P, not the AV_PIX_FMT_NONE sentinel readers
+    // expect for "format not yet published". Initialise explicitly.
+    for (int32_t i = 0; i < image_buffer_count; i++) {
+      image_pixelformats[i] = AV_PIX_FMT_NONE;
+      analysis_image_pixelformats[i] = AV_PIX_FMT_NONE;
+    }
     shared_data->alarm_cause[0] = 0;
     shared_data->video_fifo_path[0] = 0;
     shared_data->audio_fifo_path[0] = 0;
@@ -1264,10 +1323,6 @@ bool Monitor::connect() {
     SystemTimePoint now = std::chrono::system_clock::now();
     shared_data->heartbeat_time = std::chrono::system_clock::to_time_t(now);
 
-    for (int32_t i = 0; i < image_buffer_count; i++) {
-	    image_pixelformats[i] = image_buffer[i]->AVPixFormat();
-	    analysis_image_pixelformats[i] = analysis_image_buffer[i]->AVPixFormat();
-    }
     shared_data->valid = true;
 
     ReloadLinkedMonitors();
@@ -1327,6 +1382,14 @@ bool Monitor::connect() {
       //Debug(1, "image pixformat for %d is %s", i, av_get_pix_fmt_name((AVPixelFormat)image_pixelformats[i]));
     //}
   }
+  // image_buffer[] is constructed above with a hardcoded YUV420P placeholder
+  // format because we don't yet know which AVPixelFormat zmc has written into
+  // each SHM slot. Readers (zms, zma, etc.) MUST call ReadShmFrame() before
+  // interpreting a slot's bytes — it adopts the per-slot AVPixelFormat from
+  // image_pixelformats[] (written by zmc in WriteShmFrame) and updates the
+  // Image's imagePixFormat, colours, subpixelorder, size and linesize
+  // together. Direct image_buffer[i] access without ReadShmFrame() will
+  // mis-interpret any slot whose actual format differs from the placeholder.
 
   // We set these here because otherwise the first fps calc is meaningless
   last_fps_time = 
@@ -1456,7 +1519,20 @@ void Monitor::AddPrivacyBitmask() {
 }
 
 Image *Monitor::GetAlarmImage() {
-  return analysis_image_buffer[shared_data->last_analysis_index];
+  // The annotated analysis frames live in the analysis ring; serve the most
+  // recent one. Route the read through ReadAnalysisShmFrame so the per-slot
+  // AVPixelFormat published by the analysis process is adopted before the
+  // bytes are interpreted — otherwise a reader process (zms) would use
+  // whatever placeholder format the buffer was constructed with, producing
+  // garbled output whenever the writer used RGB24/RGBA/etc.
+  int32_t index = shared_data->last_analysis_index;
+  if ((index < 0) || (index >= image_buffer_count)) {
+    // image_buffer_count is the "not yet published" sentinel; anything else
+    // out of range is a corrupt/torn SHM value. Either way there is no
+    // analysis frame to serve.
+    return nullptr;
+  }
+  return ReadAnalysisShmFrame(index);
 }
 
 int Monitor::GetImage(int32_t index, int scale) {
@@ -1464,22 +1540,37 @@ int Monitor::GetImage(int32_t index, int scale) {
     Debug(1, "Invalid index %d passed. image_buffer_count = %d", index, image_buffer_count);
     index = shared_data->last_decoder_index;
   }
-  if (!image_buffer.size() or
-      static_cast<size_t>(index) >= image_buffer.size()) {
+  if (!image_buffer.size()) {
     Error("Image Buffer has not been allocated");
     return -1;
   }
+  // Check the sentinel BEFORE the bounds check: when last_decoder_index is
+  // still image_buffer_count (no frames written yet), index equals the
+  // sentinel which also equals image_buffer.size(), so a plain bounds
+  // check would mask the intended "no images" branch and log a misleading
+  // "buffer not allocated" error.
   if (index == image_buffer_count) {
     Error("Unable to generate image, no images in buffer");
     return 0;
   }
+  if (static_cast<size_t>(index) >= image_buffer.size()) {
+    Error("GetImage: index %d out of range (image_buffer.size() = %zu)",
+          index, image_buffer.size());
+    return -1;
+  }
 
+  // Route the slot read through ReadShmFrame so the per-slot AVPixelFormat
+  // recorded by the capture process is adopted on image_buffer[index]
+  // before its bytes are interpreted. Otherwise the JPEG would be encoded
+  // using the placeholder format set at attach time and produce garbled
+  // output whenever the slot's actual format differs.
+  Image *src = ReadShmFrame(index);
   std::string filename = stringtf("Monitor%u.jpg", id);
   // If we are going to be modifying the snapshot before writing, then we need
   // to copy it
   if ((scale != ZM_SCALE_BASE) || (!config.timestamp_on_capture)) {
     Image image;
-    image.Assign(*image_buffer[index]);
+    image.Assign(*src);
 
     if (scale != ZM_SCALE_BASE) {
       image.Scale(scale);
@@ -1492,31 +1583,40 @@ int Monitor::GetImage(int32_t index, int scale) {
     }
     return image.WriteJpeg(filename);
   } else {
-    return image_buffer[index]->WriteJpeg(filename);
+    return src->WriteJpeg(filename);
   }
 }
 
-std::shared_ptr<ZMPacket> Monitor::getSnapshot(int index) const {
+std::shared_ptr<ZMPacket> Monitor::getSnapshot(int index) {
   if ((index < 0) || (index >= image_buffer_count)) {
     index = shared_data->last_decoder_index;
   }
-  if (!image_buffer.size() or
-      static_cast<size_t>(index) >= image_buffer.size()) {
+  if (!image_buffer.size()) {
     Error("Image Buffer has not been allocated");
     return nullptr;
   }
-  if (index != image_buffer_count) {
-    std::shared_ptr<ZMPacket> packet = std::make_shared<ZMPacket> (image_buffer[index],
-                        SystemTimePoint(zm::chrono::duration_cast<Microseconds>(
-                            shared_timestamps[index])));
-    return packet;
-  } else {
+  // Sentinel before bounds: index == image_buffer_count means "no frames
+  // written yet" (last_decoder_index is still the sentinel). Without this
+  // ordering the bounds check below would fire first and log a misleading
+  // "buffer not allocated" error.
+  if (index == image_buffer_count) {
     Error("Unable to generate image, no images in buffer");
+    return nullptr;
   }
-  return nullptr;
+  if (static_cast<size_t>(index) >= image_buffer.size()) {
+    Error("getSnapshot: index %d out of range (image_buffer.size() = %zu)",
+          index, image_buffer.size());
+    return nullptr;
+  }
+  // ReadShmFrame syncs image_buffer[index] to the per-slot format that
+  // zmc wrote, so the ZMPacket consumer can read its bytes in the
+  // correct format instead of the placeholder set at attach time.
+  Image *src = ReadShmFrame(index);
+  return std::make_shared<ZMPacket>(src,
+      SystemTimePoint(zm::chrono::duration_cast<Microseconds>(shared_timestamps[index])));
 }
 
-SystemTimePoint Monitor::GetTimestamp(int index) const {
+SystemTimePoint Monitor::GetTimestamp(int index) {
   std::shared_ptr<ZMPacket> packet = getSnapshot(index);
   if (packet)
     return packet->timestamp;
@@ -1864,6 +1964,7 @@ bool Monitor::CheckSignal(const Image *image) {
   const uint8_t *buffer = image->Buffer();
   int pixels = image->Pixels();
   int width = image->Width();
+  int linesize = image->LineSize();
   AVPixelFormat pix_fmt = image->PixFormat();
 
   int index = 0;
@@ -1880,12 +1981,20 @@ bool Monitor::CheckSignal(const Image *image) {
       }
     }
 
-    if (pix_fmt == AV_PIX_FMT_GRAY8 || zm_is_yuv420(pix_fmt)) {
-      if (*(buffer+index) != grayscale_val)
+    // `index` is a pixel index in [0, width*height). Convert to (x, y) and
+    // use linesize for the row stride — buffer+index would read into per-row
+    // padding (or the wrong row) whenever linesize > width*bytes_per_pixel.
+    const int y = index / width;
+    const int x = index % width;
+
+    if (zm_bytes_per_pixel(pix_fmt) == 1) {
+      // GRAY8 plus all planar YUV variants we transport (420P/J420P/422P/J422P).
+      // For planar formats the Y plane is the first byte at each pixel index.
+      if (*(buffer + y * linesize + x) != grayscale_val)
         return true;
 
     } else if (zm_is_rgb24(pix_fmt)) {
-      const uint8_t *ptr = buffer + (index * static_cast<int>(zm_bytes_per_pixel(pix_fmt)));
+      const uint8_t *ptr = buffer + y * linesize + x * 3;
 
       if (pix_fmt == AV_PIX_FMT_BGR24) {
         if ((RED_PTR_BGRA(ptr) != red_val) || (GREEN_PTR_BGRA(ptr) != green_val) || (BLUE_PTR_BGRA(ptr) != blue_val))
@@ -1897,13 +2006,13 @@ bool Monitor::CheckSignal(const Image *image) {
       }
 
     } else if (zm_is_rgb32(pix_fmt)) {
+      const Rgb *ptr = (const Rgb *)(buffer + y * linesize + x * 4);
       if (pix_fmt == AV_PIX_FMT_ARGB || pix_fmt == AV_PIX_FMT_ABGR) {
-        if (ARGB_ABGR_ZEROALPHA(*(((const Rgb*)buffer)+index)) != ARGB_ABGR_ZEROALPHA(colour_val))
+        if (ARGB_ABGR_ZEROALPHA(*ptr) != ARGB_ABGR_ZEROALPHA(colour_val))
           return true;
       } else {
         /* Assume RGBA or BGRA */
-        if (RGBA_BGRA_ZEROALPHA(*(((const Rgb *)buffer) + index)) !=
-            RGBA_BGRA_ZEROALPHA(colour_val))
+        if (RGBA_BGRA_ZEROALPHA(*ptr) != RGBA_BGRA_ZEROALPHA(colour_val))
           return true;
       }
     }
@@ -2637,7 +2746,10 @@ int Monitor::Analyse() {
       // from the mp4. So no one will notice anyways.
       if (packet->image) {
         if ((videowriter == PASSTHROUGH) || shared_data->recording == RECORDING_NONE) {
-          if (!savejpegs) {
+          // Retain images on keyframes so that when an event opens, the pre-event
+          // packets still in the queue have at least one image to source
+          // snapshot.jpg / alarm.jpg from. Non-keyframes get freed as before.
+          if (!savejpegs && !packet->keyframe) {
             Debug(1, "Deleting image data for %d", packet->image_index);
             // Don't need raw images anymore
             delete packet->image;
@@ -3560,6 +3672,104 @@ int Monitor::OpenDecoder() {
   shared_data->camera_width = mVideoCodecContext->width;
   shared_data->camera_height = mVideoCodecContext->height;
   return 1;
+}
+
+void Monitor::WriteShmFrame(unsigned int index, Image *capture_image) {
+  // No conversion at the SHM-write side. zmc records the format the bytes
+  // were actually written in via image_pixelformats[index]; consumers in
+  // other processes (zms etc.) sync image_buffer[index] from that array
+  // before reading via ReadShmFrame, so the SHM transports any format
+  // Image can represent without a sws_scale step. This is the central
+  // no-conversion promise of the AVPixelFormat migration.
+  //
+  // Record imagePixFormat directly via PixFormat() — AVPixFormat() re-derives
+  // from the deprecated (colours, subpixelorder) pair and could propagate
+  // stale metadata.
+  //
+  // Only publish image_pixelformats[index] if Assign actually adopted the
+  // source format. Image::Assign returns void and silently leaves the
+  // destination untouched on failure (held-buffer undersize, unknown src
+  // format, etc.); publishing a new format whose bytes never landed in the
+  // slot would make readers misinterpret the previous slot contents.
+  const AVPixelFormat src_fmt = capture_image->PixFormat();
+  image_buffer[index]->Assign(*capture_image);
+  if (image_buffer[index]->PixFormat() == src_fmt) {
+    image_pixelformats[index] = src_fmt;
+  } else {
+    Warning("WriteShmFrame: slot %u assign failed (dst fmt %s != src fmt %s); "
+            "keeping previously published pixelformat",
+            index, zm_get_pix_fmt_name(image_buffer[index]->PixFormat()),
+            zm_get_pix_fmt_name(src_fmt));
+  }
+}
+
+Image *Monitor::ReadShmFrame(unsigned int index) {
+  // Adopt the per-slot format zmc recorded into image_pixelformats[]. zms
+  // (and zma, etc.) construct image_buffer[i] at attach time with whatever
+  // initial format was convenient; the actual bytes the capture daemon
+  // wrote into the slot can be in any AVPixelFormat that zm_pixformat
+  // supports, varying per-slot and across reconnections. AVPixFormat()
+  // updates imagePixFormat, colours, subpixelorder, size and linesize
+  // together so the Image object consistently interprets the SHM bytes.
+  // No-op when the slot's format already matches.
+  //
+  // image_pixelformats[] lives in SHM and is written by another process —
+  // treat it as untrusted: an uninitialised slot, a torn write, or a
+  // mismatched zmc/zms build could leave an arbitrary enum value here.
+  // Two checks before applying:
+  //   1. The format must be in our supported set; av_image_get_buffer_size
+  //      returns negative for unrecognised formats and would wrap into
+  //      Image's unsigned size/linesize.
+  //   2. The format's required buffer size must fit shm_slot_size; even a
+  //      supported format (e.g. RGBA at a larger width than expected) could
+  //      otherwise let subsequent reads/writes run past the held slot.
+  AVPixelFormat fmt = image_pixelformats[index];
+  if (fmt == AV_PIX_FMT_NONE || image_buffer[index]->PixFormat() == fmt) {
+    return image_buffer[index];
+  }
+  unsigned int probe_colours, probe_subpix;
+  if (!zm_colours_from_pixformat(fmt, probe_colours, probe_subpix)) {
+    Warning("ReadShmFrame: ignoring unsupported pixelformat %d in slot %u; keeping current %s",
+            fmt, index, zm_get_pix_fmt_name(image_buffer[index]->PixFormat()));
+    return image_buffer[index];
+  }
+  int required = av_image_get_buffer_size(fmt, width, height, 32);
+  if (required < 0 || static_cast<size_t>(required) > shm_slot_size) {
+    Warning("ReadShmFrame: format %s requires %d bytes but slot %u capacity is %zu; "
+            "keeping current %s to avoid overrun",
+            zm_get_pix_fmt_name(fmt), required, index, shm_slot_size,
+            zm_get_pix_fmt_name(image_buffer[index]->PixFormat()));
+    return image_buffer[index];
+  }
+  image_buffer[index]->AVPixFormat(fmt);
+  return image_buffer[index];
+}
+
+Image *Monitor::ReadAnalysisShmFrame(unsigned int index) {
+  // Same contract as ReadShmFrame, but for the analysis ring: adopt the
+  // per-slot format the analysis process recorded into
+  // analysis_image_pixelformats[] before interpreting the slot's bytes.
+  // The same untrusted-SHM checks apply.
+  AVPixelFormat fmt = analysis_image_pixelformats[index];
+  if (fmt == AV_PIX_FMT_NONE || analysis_image_buffer[index]->PixFormat() == fmt) {
+    return analysis_image_buffer[index];
+  }
+  unsigned int probe_colours, probe_subpix;
+  if (!zm_colours_from_pixformat(fmt, probe_colours, probe_subpix)) {
+    Warning("ReadAnalysisShmFrame: ignoring unsupported pixelformat %d in slot %u; keeping current %s",
+            fmt, index, zm_get_pix_fmt_name(analysis_image_buffer[index]->PixFormat()));
+    return analysis_image_buffer[index];
+  }
+  int required = av_image_get_buffer_size(fmt, width, height, 32);
+  if (required < 0 || static_cast<size_t>(required) > shm_slot_size) {
+    Warning("ReadAnalysisShmFrame: format %s requires %d bytes but slot %u capacity is %zu; "
+            "keeping current %s to avoid overrun",
+            zm_get_pix_fmt_name(fmt), required, index, shm_slot_size,
+            zm_get_pix_fmt_name(analysis_image_buffer[index]->PixFormat()));
+    return analysis_image_buffer[index];
+  }
+  analysis_image_buffer[index]->AVPixFormat(fmt);
+  return analysis_image_buffer[index];
 }
 
 void Monitor::applyOrientation(Image *image) {

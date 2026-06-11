@@ -408,7 +408,9 @@ Event::~Event() {
       delta_time.count(),
       frames, alarm_frames,
       tot_score, static_cast<uint32>(alarm_frames ? (tot_score / alarm_frames) : 0),
-      max_score, max_score_frame_id,
+      // max_score is initialised to -1 as an "uninitialised" sentinel; the
+      // DB column is smallint unsigned and rejects negatives, so clamp here.
+      max_score < 0 ? 0 : max_score, max_score_frame_id,
       video_file.c_str(), // defaults to ""
       video_size,
       id);
@@ -901,7 +903,7 @@ void Event::AddFrame(const std::shared_ptr<ZMPacket>&packet) {
                           alarm_frames,
                           tot_score,
                           static_cast<uint32>(alarm_frames ? (tot_score / alarm_frames) : 0),
-                          max_score,
+                          max_score < 0 ? 0 : max_score,
                           max_score_frame_id,
                           id);
       dbQueue.push(std::move(sql));

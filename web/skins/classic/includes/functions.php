@@ -1996,6 +1996,7 @@ function xhtmlFooter() {
   'js/chosen/chosen.jquery.js',
   'js/noUiSlider-15.8.1/dist/nouislider.min.js',
   'js/dateTimePicker/jquery-ui-timepicker-addon.js',
+  'js/auth-helpers.js',
   'js/Server.js',
 ), true );
 ?>
