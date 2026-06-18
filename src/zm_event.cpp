@@ -1129,6 +1129,7 @@ void Event::Run() {
       packetqueue->wait_for(Microseconds(10000));
     }
   }  // end while
+  Debug(1, "Event::Run %" PRIu64 ": exiting, terminate_=%d zm_terminate=%d", id, terminate_.load(), zm_terminate.load());
 }  // end Run()
 
 int Event::MonitorId() const {

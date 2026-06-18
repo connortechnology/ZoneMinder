@@ -18,7 +18,9 @@ set(TEST_SOURCES
   zm_crypt.cpp
   zm_font.cpp
   zm_image.cpp
+  zm_monitorstream.cpp
   zm_onvif_renewal.cpp
+  zm_onvif_wsse.cpp
   zm_pixformat.cpp
   zm_poly.cpp
   zm_time.cpp
