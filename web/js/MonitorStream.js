@@ -146,7 +146,18 @@ function MonitorStream(monitorData) {
       stream.removeAttribute('src');
     }
 
-    if (!failedSrc) {
+    // zms returns 403 on a stale auth hash (default TTL 2h). For a live multipart
+    // (mode=jpeg) <img> the browser reconnects on its own using the same baked-in
+    // src (same connkey, same expired hash), outside JS control. Once the hash
+    // expires every native reconnect 403s, storming zms with failures (typically
+    // after the capture daemon drops the stream). Capture the broken URL, then
+    // blank src *synchronously* so the browser's native retry loop stops dead;
+    // nothing reconnects until we have fetched a fresh hash below.
+    const stream = this.getElement();
+    const brokenSrc = (stream && stream.src) ? stream.src : this.url_to_zms;
+    if (stream) stream.src = '';
+
+    if (this.authRefreshAttempts >= this.MAX_AUTH_REFRESH_ATTEMPTS) {
       this.writeTextInfoBlock("Error", {showImg: false});
       return;
     }
@@ -175,24 +186,24 @@ function MonitorStream(monitorData) {
               if (this.authRefreshTimer) clearTimeout(this.authRefreshTimer);
               this.authRefreshTimer = setTimeout(() => this.refreshAuthAndRestart(), backoffMs);
             }
-          } else if (response.status === 404) {
-            console.error('zms returned 404 for monitor '+this.id+' — giving up. url: '+failedSrc);
-            this.writeTextInfoBlock("Error", {showImg: false});
-          } else if (!response.ok) {
-            console.warn('zms returned '+response.status+' for monitor '+this.id);
-            this.writeTextInfoBlock("Error", {showImg: false});
-          }
-        })
-        .catch((err) => {
-          console.log('classify fetch failed for monitor '+this.id+': '+err);
-          this.writeTextInfoBlock("Error", {showImg: false});
-        });
-  };
-  this.refreshAuthAndRestart = function() {
-    const this_ = this;
-    refreshAuthHash(function() {
-      this_.restart(this_.currentChannelStream, 500);
-    });
+            const el = self.getElement();
+            if (!el) return;
+            // Use a fresh connkey: the zms process tied to the old connkey has
+            // exited, so reusing it would race a dead socket.
+            self.connKey = self.streamCmdParms.connkey = self.statusCmdParms.connkey = self.genConnKey();
+            el.src = rebuildStreamSrc(brokenSrc, auth_hash, self.connKey);
+          })
+          .fail(function(jqxhr) {
+            // A dead session returns 401; redirect to login instead of retrying
+            // a stream that can never authenticate.
+            if (typeof authFailureAction === 'function' && authFailureAction(jqxhr.status) == 'login'
+                && typeof goToLogin === 'function') {
+              goToLogin();
+              return;
+            }
+            self.writeTextInfoBlock("Error", {showImg: false});
+          });
+    }, backoffMs);
   };
   this.img_onload = function() {
     this.authRefreshAttempts = 0;
