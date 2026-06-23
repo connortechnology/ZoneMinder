@@ -25,12 +25,6 @@ $builtinKeys = array_keys(getMenuItemFunctions());
           <i class="material-icons" title="<?php echo translate('Click and drag rows to change order') ?>">swap_vert</i>
           <span class="text"><?php echo translate('Sort') ?></span>
         </button>
-        <button type="submit" name="action" value="deletemenuitems" id="deleteMenuItemsBtn" class="btn btn-danger"
-          title="<?php echo translate('Delete selected menu entries') ?>"
-          onclick="return confirmDeleteMenuItems();"
-        ><i class="material-icons">delete</i>
-          <span class="text"><?php echo translate('Delete') ?></span>
-        </button>
         <button type="submit" name="action" value="resetmenu" class="btn btn-warning"
           title="<?php echo translate('Reset to default values') ?>"
           onclick="return confirm('<?php echo addslashes(translate('Reset menu items to defaults?')) ?>');"
@@ -45,12 +39,12 @@ $builtinKeys = array_keys(getMenuItemFunctions());
           <table class="table table-striped" id="menuItemsTable">
             <thead>
               <tr>
-                <th class="text-left"><input type="checkbox" id="selectAllMenuItems" title="<?php echo translate('Select all') ?>"<?php echo !$canEdit ? ' disabled' : '' ?>/></th>
                 <th class="text-left"><?php echo translate('Enabled') ?></th>
                 <th class="text-left"><?php echo translate('Name') ?></th>
                 <th class="text-left"><?php echo translate('Custom Label') ?></th>
                 <th class="text-left"><?php echo translate('Link') ?></th>
                 <th class="text-left"><?php echo translate('Icon') ?></th>
+                <th class="text-right"></th>
               </tr>
             </thead>
             <tbody id="menuItemsBody">
@@ -62,11 +56,6 @@ $builtinKeys = array_keys(getMenuItemFunctions());
   $isBuiltin = in_array($item->MenuKey(), $builtinKeys);
 ?>
               <tr id="menuItem-<?php echo $id ?>">
-                <td>
-                  <input type="checkbox" class="menuItemSelect" name="deleteIds[]" value="<?php echo $id ?>"
-                    <?php echo !$canEdit ? 'disabled' : '' ?>
-                  />
-                </td>
                 <td>
                   <input type="hidden" name="items[<?php echo $id ?>][Id]" value="<?php echo $id ?>"/>
                   <input type="hidden" name="items[<?php echo $id ?>][SortOrder]" class="sortOrderInput" value="<?php echo $item->SortOrder() ?>"/>
@@ -133,6 +122,13 @@ $builtinKeys = array_keys(getMenuItemFunctions());
                       <?php echo !$canEdit ? 'disabled' : '' ?>
                     />
                   </div>
+                </td>
+                <td class="text-right">
+<?php if ($canEdit) { ?>
+                  <button type="button" class="btn btn-sm btn-danger deleteMenuItemBtn" data-id="<?php echo $id ?>"
+                    title="<?php echo translate('Delete this menu entry') ?>"
+                  ><i class="material-icons">delete</i></button>
+<?php } ?>
                 </td>
               </tr>
 <?php } ?>

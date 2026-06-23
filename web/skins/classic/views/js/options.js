@@ -129,9 +129,6 @@ function addMenuItem() {
   const row =
     '<tr id="menuItem-' + rowId + '">' +
       '<td>' +
-        '<button type="button" class="btn btn-sm btn-danger removeMenuItemBtn" title="' + escapeHTML(menuItemStrings.remove) + '"><i class="material-icons">delete</i></button>' +
-      '</td>' +
-      '<td>' +
         '<input type="hidden" name="newItems[' + idx + '][SortOrder]" class="sortOrderInput" value="' + sortOrder + '"/>' +
         '<input type="checkbox" name="newItems[' + idx + '][Enabled]" value="1" checked/>' +
       '</td>' +
@@ -156,18 +153,11 @@ function addMenuItem() {
           '<input type="text" name="newItems[' + idx + '][Icon]" class="form-control form-control-sm iconNameInput" id="iconName-' + rowId + '" placeholder="" style="width:140px;"/>' +
         '</div>' +
       '</td>' +
+      '<td class="text-right">' +
+        '<button type="button" class="btn btn-sm btn-danger removeMenuItemBtn" title="' + escapeHTML(menuItemStrings.remove) + '"><i class="material-icons">delete</i></button>' +
+      '</td>' +
     '</tr>';
   $j('#menuItemsBody').append(row);
-}
-
-// Confirm before submitting the delete-selected action; block if nothing picked.
-function confirmDeleteMenuItems() {
-  const count = $j('#menuItemsBody .menuItemSelect:checked').length;
-  if (count === 0) {
-    alert(menuItemStrings.noSelection);
-    return false;
-  }
-  return confirm(menuItemStrings.confirmDelete);
 }
 
 // Re-render the icon preview cell of a menu row from its current type/name.
@@ -308,9 +298,14 @@ function initPage() {
       $j(this).closest('tr').remove();
     });
 
-    // Select-all toggles every row selection checkbox.
-    $j('#selectAllMenuItems').on('change', function() {
-      $j('#menuItemsBody .menuItemSelect').prop('checked', $j(this).prop('checked'));
+    // Delete a saved menu entry: confirm, then submit the form as a delete.
+    $j('#menuItemsBody').on('click', '.deleteMenuItemBtn', function() {
+      if (!confirm(menuItemStrings.confirmDelete)) return;
+      const id = $j(this).data('id');
+      const $form = $j(this).closest('form');
+      $form.find('input[name="action"]').val('deletemenuitems');
+      $j('<input>', {type: 'hidden', name: 'deleteIds[]', value: id}).appendTo($form);
+      $form.submit();
     });
   }
 }
