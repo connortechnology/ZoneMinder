@@ -215,6 +215,36 @@ if ( $action == 'delete' ) {
         'IconType' => $iconType,
       ]);
     }
+
+    // Insert any new menu entries added via the "Add" button.
+    if (isset($_REQUEST['newItems']) && is_array($_REQUEST['newItems'])) {
+      foreach ($_REQUEST['newItems'] as $new) {
+        $menuKey = isset($new['MenuKey']) ? trim($new['MenuKey']) : '';
+        if ($menuKey === '') continue;
+
+        $enabled = isset($new['Enabled']) ? 1 : 0;
+        $label = isset($new['Label']) ? trim($new['Label']) : null;
+        if ($label === '') $label = null;
+        $sortOrder = isset($new['SortOrder']) ? intval($new['SortOrder']) : 0;
+
+        $iconType = isset($new['IconType']) ? $new['IconType'] : 'material';
+        if (!in_array($iconType, ['material', 'fontawesome', 'image', 'none'])) $iconType = 'material';
+        $icon = isset($new['Icon']) ? trim($new['Icon']) : null;
+        if ($icon === '') $icon = null;
+
+        $newItem = new ZM\MenuItem();
+        if (!$newItem->save([
+          'MenuKey' => $menuKey,
+          'Enabled' => $enabled,
+          'Label' => $label,
+          'SortOrder' => $sortOrder,
+          'Icon' => $icon,
+          'IconType' => $iconType,
+        ])) {
+          ZM\Warning('Failed to add menu item '.$menuKey.': '.$newItem->get_last_error());
+        }
+      }
+    }
   }
   $redirect = '?view=options&tab=menu';
 } else if ($action == 'resetmenu') {

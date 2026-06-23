@@ -15,11 +15,17 @@ $canEdit = canEdit('System');
           <i class="material-icons">save</i>
           <span class="text"><?php echo translate('Save') ?></span>
         </button>
+        <button type="button" id="addMenuItemBtn" class="btn btn-secondary" data-on-click-this="addMenuItem"
+          title="<?php echo translate('Add a new menu entry') ?>">
+          <i class="material-icons">add</i>
+          <span class="text"><?php echo translate('Add') ?></span>
+        </button>
         <button type="button" id="sortMenuBtn" class="btn btn-secondary" data-on-click-this="sortMenuItems">
           <i class="material-icons" title="<?php echo translate('Click and drag rows to change order') ?>">swap_vert</i>
           <span class="text"><?php echo translate('Sort') ?></span>
         </button>
         <button type="submit" name="action" value="resetmenu" class="btn btn-warning"
+          title="<?php echo translate('Reset to default values') ?>"
           onclick="return confirm('<?php echo addslashes(translate('Reset menu items to defaults?')) ?>');"
         ><i class="material-icons">restart_alt</i>
           <span class="text"><?php echo translate('Reset') ?></span>
