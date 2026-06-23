@@ -207,12 +207,16 @@ if ( $action == 'delete' ) {
       $icon = isset($_REQUEST['items'][$id]['Icon']) ? trim($_REQUEST['items'][$id]['Icon']) : $item->Icon();
       if ($icon === '') $icon = null;
 
+      $link = isset($_REQUEST['items'][$id]['Link']) ? trim($_REQUEST['items'][$id]['Link']) : $item->Link();
+      if ($link === '') $link = null;
+
       $item->save([
         'Enabled' => $enabled,
         'Label' => $label,
         'SortOrder' => $sortOrder,
         'Icon' => $icon,
         'IconType' => $iconType,
+        'Link' => $link,
       ]);
     }
 
@@ -231,6 +235,8 @@ if ( $action == 'delete' ) {
         if (!in_array($iconType, ['material', 'fontawesome', 'image', 'none'])) $iconType = 'material';
         $icon = isset($new['Icon']) ? trim($new['Icon']) : null;
         if ($icon === '') $icon = null;
+        $link = isset($new['Link']) ? trim($new['Link']) : null;
+        if ($link === '') $link = null;
 
         $newItem = new ZM\MenuItem();
         if (!$newItem->save([
@@ -240,6 +246,7 @@ if ( $action == 'delete' ) {
           'SortOrder' => $sortOrder,
           'Icon' => $icon,
           'IconType' => $iconType,
+          'Link' => $link,
         ])) {
           ZM\Warning('Failed to add menu item '.$menuKey.': '.$newItem->get_last_error());
         }

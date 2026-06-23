@@ -2,6 +2,7 @@
 require_once('includes/MenuItem.php');
 $menuItems = ZM\MenuItem::find([], ['order' => 'SortOrder ASC']);
 $canEdit = canEdit('System');
+$builtinKeys = array_keys(getMenuItemFunctions());
 ?>
 <form name="menuItemsForm" method="post" action="?">
   <input type="hidden" name="view" value="options"/>
@@ -41,6 +42,7 @@ $canEdit = canEdit('System');
                 <th class="text-left"><?php echo translate('Enabled') ?></th>
                 <th class="text-left"><?php echo translate('Name') ?></th>
                 <th class="text-left"><?php echo translate('Custom Label') ?></th>
+                <th class="text-left"><?php echo translate('Link') ?></th>
                 <th class="text-left"><?php echo translate('Icon') ?></th>
               </tr>
             </thead>
@@ -50,6 +52,7 @@ $canEdit = canEdit('System');
   $effIcon = $item->effectiveIcon();
   $effIconType = $item->effectiveIconType();
   $hasCustomIcon = ($item->Icon() !== null && $item->Icon() !== '');
+  $isBuiltin = in_array($item->MenuKey(), $builtinKeys);
 ?>
               <tr id="menuItem-<?php echo $id ?>">
                 <td>
@@ -67,6 +70,18 @@ $canEdit = canEdit('System');
                     placeholder="<?php echo htmlspecialchars(translate($item->MenuKey())) ?>"
                     <?php echo !$canEdit ? 'disabled' : '' ?>
                   />
+                </td>
+                <td class="text-left">
+<?php if ($isBuiltin) { ?>
+                  <span class="text-muted">&mdash;</span>
+<?php } else { ?>
+                  <input type="text" name="items[<?php echo $id ?>][Link]"
+                    value="<?php echo htmlspecialchars($item->Link() ?? '') ?>"
+                    placeholder="?view=... or https://..."
+                    style="width:220px;"
+                    <?php echo !$canEdit ? 'disabled' : '' ?>
+                  />
+<?php } ?>
                 </td>
                 <td class="text-left">
                   <div class="d-flex align-items-center" style="gap:6px;">

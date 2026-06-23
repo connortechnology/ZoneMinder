@@ -139,6 +139,9 @@ function addMenuItem() {
         '<input type="text" name="newItems[' + idx + '][Label]" placeholder="' + escapeHTML(menuItemStrings.label) + '"/>' +
       '</td>' +
       '<td class="text-left">' +
+        '<input type="text" name="newItems[' + idx + '][Link]" placeholder="?view=... or https://..." style="width:220px;"/>' +
+      '</td>' +
+      '<td class="text-left">' +
         '<div class="d-flex align-items-center" style="gap:6px;">' +
           '<select name="newItems[' + idx + '][IconType]" class="form-control form-control-sm iconTypeSelect" data-item-id="' + rowId + '" style="width:auto;display:inline-block;">' +
             '<option value="material" selected>Material</option>' +

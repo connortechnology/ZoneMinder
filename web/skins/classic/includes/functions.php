@@ -459,7 +459,22 @@ function renderMenuItems($forLeftBar = false) {
     foreach ($menuItems as $item) {
       if (!$item->Enabled()) continue;
       $key = $item->MenuKey();
-      if (!isset($funcMap[$key])) continue;
+      if (!isset($funcMap[$key])) {
+        // Custom entry: render a plain link if it has a destination.
+        $link = $item->Link();
+        if ($link === null || $link === '') continue;
+        $menuIconOverride = ['icon' => $item->effectiveIcon(), 'iconType' => $item->effectiveIconType()];
+        $result .= buildMenuItem(
+          'customMenu-'.$item->Id(),
+          'menuItem-custom-'.$item->Id(),
+          $item->displayLabel(),
+          htmlspecialchars($link),
+          $item->effectiveIcon(),
+          '', '', true, $item->effectiveIconType()
+        );
+        $menuIconOverride = null;
+        continue;
+      }
 
       $funcName = $funcMap[$key];
       $customLabel = ($item->Label() !== null && $item->Label() !== '') ? $item->displayLabel() : null;
