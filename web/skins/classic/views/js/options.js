@@ -133,13 +133,13 @@ function addMenuItem() {
         '<input type="checkbox" name="newItems[' + idx + '][Enabled]" value="1" checked/>' +
       '</td>' +
       '<td class="text-left">' +
-        '<input type="text" name="newItems[' + idx + '][MenuKey]" placeholder="' + escapeHTML(menuItemStrings.menuKey) + '" required/>' +
+        '<input type="text" name="newItems[' + idx + '][MenuKey]" class="menuKeyInput" placeholder="' + escapeHTML(menuItemStrings.menuKey) + '" required/>' +
       '</td>' +
       '<td>' +
         '<input type="text" name="newItems[' + idx + '][Label]" placeholder="' + escapeHTML(menuItemStrings.label) + '"/>' +
       '</td>' +
       '<td class="text-left">' +
-        '<input type="text" name="newItems[' + idx + '][Link]" placeholder="?view=... or https://..." style="width:220px;"/>' +
+        '<input type="text" name="newItems[' + idx + '][Link]" class="linkInput" placeholder="?view=... or https://..." style="width:220px;"/>' +
       '</td>' +
       '<td class="text-left">' +
         '<div class="d-flex align-items-center" style="gap:6px;">' +
@@ -281,6 +281,14 @@ function initPage() {
     // Live-update the icon preview as the icon name is typed.
     $j('#menuItemsBody').on('input', '.iconNameInput', function() {
       updateMenuIconPreview($j(this).closest('tr'));
+    });
+
+    // Show the derived ?view= default in the Link placeholder of a new row
+    // as its MenuKey is typed (matches the built-in ?view= rule).
+    $j('#menuItemsBody').on('input', '.menuKeyInput', function() {
+      const key = $j(this).val().trim();
+      $j(this).closest('tr').find('.linkInput')
+          .attr('placeholder', key === '' ? '?view=... or https://...' : '?view=' + key);
     });
 
     // Remove an unsaved new menu entry row.

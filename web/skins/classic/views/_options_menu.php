@@ -73,11 +73,11 @@ $builtinKeys = array_keys(getMenuItemFunctions());
                 </td>
                 <td class="text-left">
 <?php if ($isBuiltin) { ?>
-                  <span class="text-muted">&mdash;</span>
+                  <span class="text-muted"><?php echo htmlspecialchars(menuItemEffectiveLink($item)) ?></span>
 <?php } else { ?>
                   <input type="text" name="items[<?php echo $id ?>][Link]"
                     value="<?php echo htmlspecialchars($item->Link() ?? '') ?>"
-                    placeholder="?view=... or https://..."
+                    placeholder="<?php echo htmlspecialchars('?view='.$item->MenuKey()) ?>"
                     style="width:220px;"
                     <?php echo !$canEdit ? 'disabled' : '' ?>
                   />
