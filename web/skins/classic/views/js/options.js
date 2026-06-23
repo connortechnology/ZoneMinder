@@ -143,6 +143,7 @@ function addMenuItem() {
       '</td>' +
       '<td class="text-left">' +
         '<div class="d-flex align-items-center" style="gap:6px;">' +
+          '<span class="menuIconPreview" id="iconPreview-' + rowId + '"></span>' +
           '<select name="newItems[' + idx + '][IconType]" class="form-control form-control-sm iconTypeSelect" data-item-id="' + rowId + '" style="width:auto;display:inline-block;">' +
             '<option value="material" selected>Material</option>' +
             '<option value="fontawesome">Font Awesome</option>' +
@@ -155,6 +156,25 @@ function addMenuItem() {
       '</td>' +
     '</tr>';
   $j('#menuItemsBody').append(row);
+}
+
+// Re-render the icon preview cell of a menu row from its current type/name.
+function updateMenuIconPreview($row) {
+  const $preview = $row.find('.menuIconPreview');
+  if (!$preview.length) return;
+  const type = $row.find('.iconTypeSelect').val();
+  const $input = $row.find('.iconNameInput');
+  let val = $input.val().trim();
+  if (type === 'fontawesome') {
+    $preview.html('<i class="fa ' + escapeHTML(val) + '"></i>');
+  } else if (type === 'image') {
+    $preview.html(val ? '<img src="' + escapeHTML(val) + '" style="width:24px;height:24px;object-fit:contain;" alt=""/>' : '');
+  } else if (type === 'none') {
+    $preview.html('');
+  } else { // material
+    if (val === '') val = $input.attr('placeholder') || 'menu';
+    $preview.html('<i class="material-icons">' + escapeHTML(val) + '</i>');
+  }
 }
 
 function sortMenuItems(button) {
@@ -255,6 +275,12 @@ function initPage() {
           nameInput.attr('placeholder', '').css('width', '140px');
         }
       }
+      updateMenuIconPreview($j(this).closest('tr'));
+    });
+
+    // Live-update the icon preview as the icon name is typed.
+    $j('#menuItemsBody').on('input', '.iconNameInput', function() {
+      updateMenuIconPreview($j(this).closest('tr'));
     });
 
     // Remove an unsaved new menu entry row.
