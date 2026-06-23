@@ -210,14 +210,22 @@ if ( $action == 'delete' ) {
       $link = isset($_REQUEST['items'][$id]['Link']) ? trim($_REQUEST['items'][$id]['Link']) : $item->Link();
       if ($link === '') $link = null;
 
-      $item->save([
+      // The MenuKey is only editable for custom (non-built-in) entries, so it
+      // is only present in the request for those rows; keep it otherwise.
+      $menuKey = isset($_REQUEST['items'][$id]['MenuKey']) ? trim($_REQUEST['items'][$id]['MenuKey']) : $item->MenuKey();
+      if ($menuKey === '') $menuKey = $item->MenuKey();
+
+      if (!$item->save([
+        'MenuKey' => $menuKey,
         'Enabled' => $enabled,
         'Label' => $label,
         'SortOrder' => $sortOrder,
         'Icon' => $icon,
         'IconType' => $iconType,
         'Link' => $link,
-      ]);
+      ])) {
+        ZM\Warning('Failed to save menu item '.$menuKey.': '.$item->get_last_error());
+      }
     }
 
     // Insert any new menu entries added via the "Add" button.
@@ -251,6 +259,17 @@ if ( $action == 'delete' ) {
           ZM\Warning('Failed to add menu item '.$menuKey.': '.$newItem->get_last_error());
         }
       }
+    }
+  }
+  $redirect = '?view=options&tab=menu';
+} else if ($action == 'deletemenuitems') {
+  if (!canEdit('System')) {
+    ZM\Warning('Need System permission to delete menu items');
+  } else if (!empty($_REQUEST['deleteIds']) && is_array($_REQUEST['deleteIds'])) {
+    $ids = array_values(array_filter(array_map('intval', $_REQUEST['deleteIds']), function($v) { return $v > 0; }));
+    if (count($ids)) {
+      $placeholders = implode(',', array_fill(0, count($ids), '?'));
+      dbQuery('DELETE FROM `Menu_Items` WHERE `Id` IN ('.$placeholders.')', $ids);
     }
   }
   $redirect = '?view=options&tab=menu';

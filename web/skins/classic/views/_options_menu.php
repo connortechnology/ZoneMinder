@@ -25,6 +25,12 @@ $builtinKeys = array_keys(getMenuItemFunctions());
           <i class="material-icons" title="<?php echo translate('Click and drag rows to change order') ?>">swap_vert</i>
           <span class="text"><?php echo translate('Sort') ?></span>
         </button>
+        <button type="submit" name="action" value="deletemenuitems" id="deleteMenuItemsBtn" class="btn btn-danger"
+          title="<?php echo translate('Delete selected menu entries') ?>"
+          onclick="return confirmDeleteMenuItems();"
+        ><i class="material-icons">delete</i>
+          <span class="text"><?php echo translate('Delete') ?></span>
+        </button>
         <button type="submit" name="action" value="resetmenu" class="btn btn-warning"
           title="<?php echo translate('Reset to default values') ?>"
           onclick="return confirm('<?php echo addslashes(translate('Reset menu items to defaults?')) ?>');"
@@ -39,6 +45,7 @@ $builtinKeys = array_keys(getMenuItemFunctions());
           <table class="table table-striped" id="menuItemsTable">
             <thead>
               <tr>
+                <th class="text-left"><input type="checkbox" id="selectAllMenuItems" title="<?php echo translate('Select all') ?>"<?php echo !$canEdit ? ' disabled' : '' ?>/></th>
                 <th class="text-left"><?php echo translate('Enabled') ?></th>
                 <th class="text-left"><?php echo translate('Name') ?></th>
                 <th class="text-left"><?php echo translate('Custom Label') ?></th>
@@ -56,6 +63,11 @@ $builtinKeys = array_keys(getMenuItemFunctions());
 ?>
               <tr id="menuItem-<?php echo $id ?>">
                 <td>
+                  <input type="checkbox" class="menuItemSelect" name="deleteIds[]" value="<?php echo $id ?>"
+                    <?php echo !$canEdit ? 'disabled' : '' ?>
+                  />
+                </td>
+                <td>
                   <input type="hidden" name="items[<?php echo $id ?>][Id]" value="<?php echo $id ?>"/>
                   <input type="hidden" name="items[<?php echo $id ?>][SortOrder]" class="sortOrderInput" value="<?php echo $item->SortOrder() ?>"/>
                   <input type="checkbox" name="items[<?php echo $id ?>][Enabled]" value="1"
@@ -63,7 +75,16 @@ $builtinKeys = array_keys(getMenuItemFunctions());
                     <?php echo !$canEdit ? 'disabled' : '' ?>
                   />
                 </td>
-                <td class="text-left"><?php echo htmlspecialchars(translate($item->MenuKey())) ?></td>
+                <td class="text-left">
+<?php if ($isBuiltin) { ?>
+                  <?php echo htmlspecialchars(translate($item->MenuKey())) ?>
+<?php } else { ?>
+                  <input type="text" name="items[<?php echo $id ?>][MenuKey]"
+                    value="<?php echo htmlspecialchars($item->MenuKey()) ?>"
+                    <?php echo !$canEdit ? 'disabled' : '' ?>
+                  />
+<?php } ?>
+                </td>
                 <td>
                   <input type="text" name="items[<?php echo $id ?>][Label]"
                     value="<?php echo htmlspecialchars($item->Label() ?? '') ?>"
