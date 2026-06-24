@@ -57,6 +57,7 @@ VideoStore::VideoStore(
   encode_count_(0),
   video_encoded(false),
   video_encoder_failed(false),
+  video_passthrough_fallback(false),
   hw_device_ctx(nullptr),
   resample_ctx(nullptr),
   fifo(nullptr),
@@ -455,22 +456,36 @@ bool VideoStore::open() {
       }  // end foreach codec
 
       if (!video_out_codec || !video_out_ctx) {
-        Error("Can't open any video codecs!");
-        return false;
-      }  // end if can't open codec
-      Debug(2, "Success opening codec");
+        // Every encoder failed to open (e.g. hardware unavailable). Rather than
+        // dropping the recording entirely, fall back to passthrough: copy the
+        // input stream and write its packets unchanged.
+        Warning("Can't open any video encoder; falling back to passthrough recording");
+        if (video_out_ctx) avcodec_free_context(&video_out_ctx);
+        video_passthrough_fallback = true;
 
-      video_out_stream = avformat_new_stream(oc, nullptr);
-      if (!video_out_stream) {
-        Error("Unable to create video out stream");
-        return false;
+        video_out_stream = avformat_new_stream(oc, nullptr);
+        if (!video_out_stream) {
+          Error("Unable to create video out stream");
+          return false;
+        }
+        avcodec_parameters_copy(video_out_stream->codecpar, video_in_stream->codecpar);
+        video_out_stream->avg_frame_rate = video_in_stream->avg_frame_rate;
+        zm_dump_stream(video_out_stream);
+      } else {
+        Debug(2, "Success opening codec");
+
+        video_out_stream = avformat_new_stream(oc, nullptr);
+        if (!video_out_stream) {
+          Error("Unable to create video out stream");
+          return false;
+        }
+        ret = avcodec_parameters_from_context(video_out_stream->codecpar, video_out_ctx);
+        if (ret < 0) {
+          Error("Could not initialize stream parameters");
+          return false;
+        }
+        zm_dump_stream(video_out_stream);
       }
-      ret = avcodec_parameters_from_context(video_out_stream->codecpar, video_out_ctx);
-      if (ret < 0) {
-        Error("Could not initialize stream parameters");
-        return false;
-      }
-      zm_dump_stream(video_out_stream);
     }  // end if copying or transcoding
   }  // end if video_in_stream
 
@@ -1125,6 +1140,10 @@ bool VideoStore::setup_resampler() {
   return true;
 }  // end bool VideoStore::setup_resampler()
 
+bool VideoStore::Encoding() const {
+  return (monitor->GetOptVideoWriter() == Monitor::ENCODE) && !video_passthrough_fallback;
+}
+
 int VideoStore::writePacket(const std::shared_ptr<ZMPacket> zm_pkt) {
   int stream_index;
   if (zm_pkt->codec_type == AVMEDIA_TYPE_VIDEO) {
@@ -1152,7 +1171,7 @@ int VideoStore::writePacket(const std::shared_ptr<ZMPacket> zm_pkt) {
   // WHen encoding, dts gets lost.  We need to sort by pts instead.
   while (rit != queue.rend()) {
     AVPacket *p = ((*rit)->packet).get();
-    if (monitor->GetOptVideoWriter() == Monitor::ENCODE and !monitor->WallClockTimestamps()) {
+    if (Encoding() and !monitor->WallClockTimestamps()) {
       if (p->pts <= av_pkt->pts) {
         ZM_DUMP_PACKET(p, "Found in order packet");
         // packets are in order, everything is fine
@@ -1212,7 +1231,7 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
   frame_count += 1;
 
   // if we have to transcode
-  if (monitor->GetOptVideoWriter() == Monitor::ENCODE) {
+  if (Encoding()) {
     Debug(3, "Have encoding video frame count (%d)", frame_count);
 
     av_frame_ptr frame(av_frame_alloc());
@@ -1513,6 +1532,12 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
     } // end while receive_packet
   } else { // Passthrough
     AVPacket *ipkt = zm_packet->packet.get();
+    if (!ipkt) {
+      // Can happen on the encode->passthrough fallback if a generated frame has
+      // no originating packet; nothing to copy through.
+      Debug(1, "Passthrough: no input packet to write, skipping");
+      return 0;
+    }
     ZM_DUMP_STREAM_PACKET(video_in_stream, ipkt, "Doing passthrough, just copy packet");
     // Just copy it because the codec is the same
     av_packet_ref(opkt.get(), ipkt);
