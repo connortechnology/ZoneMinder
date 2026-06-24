@@ -3581,9 +3581,11 @@ int Monitor::OpenDecoder() {
 
       if (!options.empty()) {
         av_dict_parse_string(&opts, options.c_str(), "=", ",", 0);
-        // reorder_queparse for avforpts, mOpcodec
+        // These are demuxer/camera-level options consumed elsewhere; strip them
+        // so the decoder doesn't report them as unrecognized.
         av_dict_set(&opts, "reorder_queue_size", nullptr, AV_DICT_MATCH_CASE);
         av_dict_set(&opts, "probesize", nullptr, AV_DICT_MATCH_CASE);
+        av_dict_set(&opts, "loop", nullptr, AV_DICT_MATCH_CASE);
       }
       if (chosen_codec_data->options_defaults) {
         AVDictionary *opts_defaults = nullptr;
