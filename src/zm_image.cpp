@@ -2788,7 +2788,10 @@ void Image::Annotate(
     uint32_t x = static_cast<uint32_t>(x0);
 
     if (zm_bytes_per_pixel(imagePixFormat) == 1) {
-      uint8 *ptr = &buffer[(y * width) + x0];
+      // Rows are linesize bytes apart, which is >= width when the buffer is
+      // padded for alignment (e.g. FFALIGN to 32); using width here would skew
+      // the text. See Image::linesize.
+      uint8 *ptr = &buffer[(y * linesize) + x0];
       for (char c : line) {
         for (uint64 cp_row : font_variant.GetCodepoint(c)) {
           if (bg_colour != kRGBTransparent) {
@@ -2800,9 +2803,9 @@ void Image::Annotate(
             *(ptr + column_idx) = fg_colour & 0xff;
             cp_row = cp_row & (cp_row - 1);
           }
-          ptr += width;
+          ptr += linesize;
         }
-        ptr -= (width * char_height);
+        ptr -= (linesize * char_height);
         ptr += char_width;
         x += char_width;
         if (x >= width) {
@@ -2811,7 +2814,7 @@ void Image::Annotate(
       }
     } else if (zm_is_rgb24(imagePixFormat)) {
       constexpr uint8 bytesPerPixel = 3;
-      uint8 *ptr = &buffer[((y * width) + x0) * bytesPerPixel];
+      uint8 *ptr = &buffer[(y * linesize) + x0 * bytesPerPixel];
 
       for (char c : line) {
         for (uint64 cp_row : font_variant.GetCodepoint(c)) {
@@ -2832,9 +2835,9 @@ void Image::Annotate(
             BLUE_PTR_RGBA(colour_ptr) = BLUE_VAL_RGBA(fg_colour);
             cp_row = cp_row & (cp_row - 1);
           }
-          ptr += width * bytesPerPixel;
+          ptr += linesize;
         }
-        ptr -= (width * char_height * bytesPerPixel);
+        ptr -= (linesize * char_height);
         ptr += char_width * bytesPerPixel;
         x += char_width;
         if (x >= width) {
@@ -2843,7 +2846,10 @@ void Image::Annotate(
       }
     } else if (zm_is_rgb32(imagePixFormat)) {
       constexpr uint8 bytesPerPixel = 4;
-      Rgb *ptr = reinterpret_cast<Rgb *>(&buffer[((y * width) + x0) * bytesPerPixel]);
+      // Row stride in Rgb units. linesize is byte-aligned (FFALIGN 32), so it is
+      // always a multiple of 4 here.
+      const unsigned int stride = linesize / bytesPerPixel;
+      Rgb *ptr = reinterpret_cast<Rgb *>(&buffer[(y * linesize) + x0 * bytesPerPixel]);
 
       for (char c : line) {
         for (uint64 cp_row : font_variant.GetCodepoint(c)) {
@@ -2856,9 +2862,9 @@ void Image::Annotate(
             *(ptr + column_idx) = fg_rgb_col;
             cp_row = cp_row & (cp_row - 1);
           }
-          ptr += width;
+          ptr += stride;
         }
-        ptr -= (width * char_height);
+        ptr -= (stride * char_height);
         ptr += char_width;
         x += char_width;
         if (x >= width) {
