@@ -3001,6 +3001,21 @@ our @options = (
     category    => 'web',
   },
   {
+    name        => 'ZM_WEB_LEFT_MENU_OPTIONS_SUBMENU',
+    default     => '1',
+    description => 'Include the Options sub-menu entries in the left menu.',
+    help        => q`
+      When the navbar is on the left, the Options menu item can expand to
+      list every Options tab (System, Config, Users, etc.) as a sub-menu.
+      Enable this to include those entries; disable it to show Options as a
+      single link with no sub-menu. This option only takes effect when
+      ZM_WEB_NAVBAR_TYPE is set to 'left'.
+      `,
+    type        => $types{boolean},
+    requires    => [ { name=>'ZM_WEB_NAVBAR_TYPE', value=>'left' } ],
+    category    => 'web',
+  },
+  {
     name        => 'ZM_WEB_BUTTON_STYLE',
     default     => 'icons+text',
     description => 'How to display toolbar buttons throughout the interface.',

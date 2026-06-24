@@ -1329,27 +1329,6 @@ function getOptionsHTML($forLeftBar = false, $customLabel = null) {
   if ( canView('System') ) {
     if ($forLeftBar) {
       global $view;
-
-      //$tab = isset($_REQUEST['tab']) ? validHtmlStr($_REQUEST['tab']) : 'system';
-      $tab = isset($_REQUEST['tab']) ? validHtmlStr($_REQUEST['tab']) : '';
-
-      $subMenuOptions = '
-      <div class="sub-menu-list">
-        <ul>
-      ';
-      foreach ($zmMenu::$submenuOptionsItems as $name=>$value) {
-        $subMenuOptions .= '
-          <li class="menu-item '.$name.' '.($tab == $name ? ' active' : '').'">
-            <a href="?view=options&amp;tab='.$name.'">
-              <span class="menu-title">'.$value.'</span>
-            </a>
-          </li>'.PHP_EOL;
-      }
-      $subMenuOptions .= '
-        </ul>
-      </div>
-      ';
-
       global $menuIconOverride;
       $optIcon = 'settings';
       $optIconType = 'material';
@@ -1358,7 +1337,32 @@ function getOptionsHTML($forLeftBar = false, $customLabel = null) {
         $optIconType = $menuIconOverride['iconType'];
       }
 
-      $result .= '
+      // Whether to expand the Options tabs as a sub-menu in the left menu.
+      // Default to included to preserve behaviour on installs that predate the option.
+      $includeSubmenu = defined('ZM_WEB_LEFT_MENU_OPTIONS_SUBMENU') ? ZM_WEB_LEFT_MENU_OPTIONS_SUBMENU : true;
+
+      if ($includeSubmenu) {
+        //$tab = isset($_REQUEST['tab']) ? validHtmlStr($_REQUEST['tab']) : 'system';
+        $tab = isset($_REQUEST['tab']) ? validHtmlStr($_REQUEST['tab']) : '';
+
+        $subMenuOptions = '
+        <div class="sub-menu-list">
+          <ul>
+        ';
+        foreach ($zmMenu::$submenuOptionsItems as $name=>$value) {
+          $subMenuOptions .= '
+            <li class="menu-item '.$name.' '.($tab == $name ? ' active' : '').'">
+              <a href="?view=options&amp;tab='.$name.'">
+                <span class="menu-title">'.$value.'</span>
+              </a>
+            </li>'.PHP_EOL;
+        }
+        $subMenuOptions .= '
+          </ul>
+        </div>
+        ';
+
+        $result .= '
 <li id="getOptionsHTML" class="menu-item sub-menu '.($view == 'options' ? ' open' : '').'">
   <a href="#<!--?view=options&amp;tab=system-->">
     <span class="menu-icon">'.renderMenuIcon($optIcon, $optIconType).'</span>
@@ -1366,6 +1370,16 @@ function getOptionsHTML($forLeftBar = false, $customLabel = null) {
   </a>
 ' . $subMenuOptions . '
 </li>'.PHP_EOL;
+      } else {
+        // Options as a single left-menu link, no expandable sub-menu.
+        $result .= '
+<li id="getOptionsHTML" class="menu-item '.($view == 'options' ? ' active' : '').'">
+  <a href="?view=options">
+    <span class="menu-icon">'.renderMenuIcon($optIcon, $optIconType).'</span>
+    <span class="menu-title">'.htmlspecialchars($label).'</span>
+  </a>
+</li>'.PHP_EOL;
+      }
     } else {
       $result .= '<li id="getOptionsHTML" class="nav-item"><a class="nav-link" href="?view=options">'.getNavbarIcon().htmlspecialchars($label).'</a></li>'.PHP_EOL;
     }
