@@ -393,8 +393,13 @@ bool VideoStore::open() {
           if (hw_device_ctx) {
             av_buffer_unref(&hw_device_ctx);
           }
+          // Must clear the codec too: it was found, but without a context this
+          // attempt is unusable. Leaving it set would pass the post-loop
+          // !video_out_codec guard with a null video_out_ctx and crash in
+          // avcodec_parameters_from_context.
+          video_out_codec = nullptr;
           continue;
-        } 
+        }
         
 #ifdef HAVE_QUADRA
         if (hw_device_ctx) {
@@ -449,7 +454,7 @@ bool VideoStore::open() {
         }
       }  // end foreach codec
 
-      if (!video_out_codec) {
+      if (!video_out_codec || !video_out_ctx) {
         Error("Can't open any video codecs!");
         return false;
       }  // end if can't open codec
