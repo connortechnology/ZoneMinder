@@ -133,6 +133,22 @@ function sortMenuItems(button) {
   button.classList.toggle('btn-success');
 }
 
+function DeleteUser() {
+  getDelConfirmModal('ConfirmDeleteUser', 'ConfirmDeleteUserTitle', 'userForm');
+}
+
+function DeleteServer() {
+  getDelConfirmModal('ConfirmDeleteServer', 'ConfirmDeleteServerTitle', 'serversForm');
+}
+
+function DeleteStorage() {
+  getDelConfirmModal('ConfirmDeleteStorage', 'ConfirmDeleteStorageTitle', 'storageForm');
+}
+
+function DeleteRole() {
+  getDelConfirmModal('ConfirmDeleteRole', 'ConfirmDeleteRoleTitle', 'roleForm');
+}
+
 function initPage() {
   const NewStorageBtn = $j('#NewStorageBtn');
   const NewServerBtn = $j('#NewServerBtn');

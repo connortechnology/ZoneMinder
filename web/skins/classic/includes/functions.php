@@ -18,6 +18,7 @@
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 // 
 
+define("AUDIO_MOTION_ENABLED", file_exists("skins/$skin/assets/audioMotion-analyzer/src/audioMotion-analyzer.js"));
 
 function xhtmlHeaders($file, $title) {
   xhtmlHeadersStart($file, $title);
@@ -1276,6 +1277,7 @@ function getOptionsHTML($forLeftBar = false, $customLabel = null) {
     'roles',
     'groups',
     'control',
+    'encoderTemplates',
     'privacy',
     'MQTT',
     'telemetry',
@@ -1994,6 +1996,7 @@ function xhtmlFooter() {
   'js/chosen/chosen.jquery.js',
   'js/noUiSlider-15.8.1/dist/nouislider.min.js',
   'js/dateTimePicker/jquery-ui-timepicker-addon.js',
+  'js/auth-helpers.js',
   'js/Server.js',
 ), true );
 ?>
@@ -2022,6 +2025,9 @@ function xhtmlFooter() {
   $skinJsFile = getSkinFile('js/skin.js');
 ?>
   <script nonce="<?php echo $cspNonce; ?>" src="<?php echo cache_bust($skinJsFile) ?>"></script>
+<?php if ( in_array( $basename, array( 'watch', 'montage', 'event', 'monitor' ) ) ) { ?>
+  <script nonce="<?php echo $cspNonce; ?>" type="module" src="skins/<?php echo $skin ?>/js/audioMotionAnalyzer.js"></script>
+<?php } ?>
   </body>
 </html>
 <?php
@@ -2066,17 +2072,6 @@ class ZM_Menu {
       array_push($categoriesOptionsInDB, $category_row['Category']);
     }
     self::addCategoryToOptionsMenu($categoriesOptionsInDB, $categoryDisplayOrder);
-  }
-}
-
-if (!function_exists('mb_ucfirst')) { // Available in PHP >= 8.4
-  function mb_ucfirst($str, $encoding='UTF-8') {
-    if (extension_loaded('mbstring')) {
-      $result = mb_strtoupper(mb_substr($str, 0, 1, $encoding)) . mb_substr($str, 1, null, $encoding);
-    } else {
-      $result = (ucfirst($str));
-    }
-    return $result;
   }
 }
 

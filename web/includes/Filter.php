@@ -116,7 +116,8 @@ class Filter extends ZM_Object {
     if ( ! isset($this->_pre_sql_conditions) ) {
       $this->_pre_sql_conditions = array();
       foreach ( $this->FilterTerms() as $term ) {
-        if ( $term->is_pre_sql() )
+        // Invalid terms add no SQL, so must not count as a condition.
+        if ( $term->is_pre_sql() and $term->valid() )
           $this->_pre_sql_conditions[] = $term;
       } # end foreach term
     }
@@ -128,7 +129,8 @@ class Filter extends ZM_Object {
     if ( ! isset($this->_post_sql_conditions) ) {
       $this->_post_sql_conditions = array();
       foreach ( $this->FilterTerms() as $term ) {
-        if ( $term->is_post_sql() )
+        // Invalid terms add no SQL, so must not count as a condition.
+        if ( $term->is_post_sql() and $term->valid() )
           $this->_post_sql_conditions[] = $term;
       } # end foreach term
     }
@@ -155,6 +157,50 @@ class Filter extends ZM_Object {
     $filter = new Filter();
     $filter->Query($new_filter['Query']);
     return $filter;
+  }
+
+  // Accepts: empty string, a bare identifier, or a comma-separated list of
+  // <Column> [IS [NOT] NULL] [ASC|DESC] expressions. Structural check only —
+  // callers that know which columns are legal should additionally whitelist
+  // them after a successful match.
+
+  // Single source of truth for the sort grammar, shared by validation and
+  // building. Each comma-separated part: <Column> [IS [NOT] NULL] [ASC|DESC].
+  const SORT_PART_RE = '/^\s*([A-Za-z][A-Za-z0-9_]*)(\s+IS\s+(?:NOT\s+)?NULL)?(\s+(?:ASC|DESC))?\s*$/i';
+
+  public static function isValidSortExpression($sf) {
+    if ($sf === '' || $sf === null) return true;
+    if (!is_string($sf)) return false;
+    foreach (explode(',', $sf) as $part) {
+      if (!preg_match(self::SORT_PART_RE, $part)) return false;
+    }
+    return true;
+  }
+
+  // Build a safe ORDER BY body (without the "ORDER BY" keyword) from a sort
+  // spec. $order is the global default direction ('ASC'|'DESC') used for parts
+  // that omit an explicit ASC/DESC. $resolve_column is callable($col): ?string
+  // returning the column's SQL (e.g. 'E.Id', 'M.Name') or null if not allowed.
+  // Returns '' if the spec is empty or any part is invalid/not allowed.
+  public static function buildSortSql($sort, $order, $resolve_column) {
+    if ($sort === '' || $sort === null) return '';
+    // Defend the "safe" contract: only ASC/DESC may reach the SQL as a default
+    // direction, regardless of what a caller passes.
+    $order = strtoupper(trim($order));
+    if ($order !== 'ASC' && $order !== 'DESC') return '';
+    $out = array();
+    foreach (explode(',', $sort) as $part) {
+      if (!preg_match(self::SORT_PART_RE, $part, $m)) return '';
+      $col_sql = call_user_func($resolve_column, $m[1]);
+      if ($col_sql === null) return '';
+      $null_expr = '';
+      if (isset($m[2]) && trim($m[2]) !== '') {
+        $null_expr = (stripos($m[2], 'NOT') !== false) ? ' IS NOT NULL' : ' IS NULL';
+      }
+      $dir = (isset($m[3]) && trim($m[3]) !== '') ? strtoupper(trim($m[3])) : $order;
+      $out[] = $col_sql.$null_expr.' '.$dir;
+    }
+    return implode(', ', $out);
   }
 
   # If no storage areas are specified in the terms, then return all
@@ -242,7 +288,18 @@ class Filter extends ZM_Object {
       $this->Query($Query);
     }
     if (isset($this->Query()['sort_field'])) {
-      return $this->{'Query'}['sort_field'];
+      $sf = $this->{'Query'}['sort_field'];
+      // Accept either a bare column name or a comma-separated list of
+      // <Column> [IS [NOT] NULL] expressions — the latter lets the NULLs-last
+      // idiom (e.g. "EndDateTime IS NOT NULL, EndDateTime") round-trip cleanly.
+      // The filter UI today only emits a single column; if/when it gains
+      // multi-column sort, the same shape will continue to validate. Anything
+      // outside this grammar is dropped so a stale URL/cookie/DB row can't
+      // leak SQL fragments into data-sort-name.
+      if (self::isValidSortExpression($sf)) {
+        return $sf;
+      }
+      Warning('Ignoring malformed Filter sort_field "'.$sf.'"');
     }
     return ZM_WEB_EVENT_SORT_FIELD;
     #return $this->defaults{'sort_field'};
@@ -1089,7 +1146,7 @@ class Filter extends ZM_Object {
   // This displays filters from the events page.
   //
   public function simple_widget() {
-    $html = '<div id="fieldsTable" class="filterTable">';
+    $html = '<div id="fieldsTable" class="filterTable controlHeader">';
     $terms = $this->terms();
     $attrTypes = $this->attrTypes();
     $opTypes = $this->opTypes();

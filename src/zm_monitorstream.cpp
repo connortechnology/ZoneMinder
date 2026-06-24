@@ -92,12 +92,14 @@ void MonitorStream::processCommand(const CmdMsg *msg) {
   switch ((MsgCommand)msg->msg_data[0]) {
   case CMD_PAUSE :
     Debug(1, "Got PAUSE command");
+    stopped = false;
     paused = true;
     delayed = true;
     last_frame_sent = now;
     break;
   case CMD_PLAY :
     Debug(1, "Got PLAY command");
+    stopped = false;
     if (paused) {
       paused = false;
       delayed = true;
@@ -106,19 +108,24 @@ void MonitorStream::processCommand(const CmdMsg *msg) {
     break;
   case CMD_VARPLAY :
     Debug(1, "Got VARPLAY command");
+    stopped = false;
     if (paused) {
       paused = false;
       delayed = true;
     }
-    replay_rate = ntohs(((unsigned char)msg->msg_data[2]<<8)|(unsigned char)msg->msg_data[1])-32768;
+    replay_rate = (((unsigned char)msg->msg_data[1]<<8)|(unsigned char)msg->msg_data[2])-VARPLAY_RATE_OFFSET;
     break;
   case CMD_STOP :
     Debug(1, "Got STOP command");
-    paused = true;
+    stopped = true;
+    paused = false;
     delayed = false;
+    step = 0;
+    send_twice = false;
     break;
   case CMD_FASTFWD :
     Debug(1, "Got FAST FWD command");
+    stopped = false;
     if (paused) {
       paused = false;
       delayed = true;
@@ -156,6 +163,7 @@ void MonitorStream::processCommand(const CmdMsg *msg) {
   }
   case CMD_SLOWFWD :
     Debug(1, "Got SLOW FWD command");
+    stopped = false;
     paused = true;
     delayed = true;
     replay_rate = ZM_RATE_BASE;
@@ -163,6 +171,7 @@ void MonitorStream::processCommand(const CmdMsg *msg) {
     break;
   case CMD_SLOWREV :
     Debug(1, "Got SLOW REV command");
+    stopped = false;
     paused = true;
     delayed = true;
     replay_rate = ZM_RATE_BASE;
@@ -170,6 +179,7 @@ void MonitorStream::processCommand(const CmdMsg *msg) {
     break;
   case CMD_FASTREV :
     Debug(1, "Got FAST REV command");
+    stopped = false;
     if (paused) {
       paused = false;
       delayed = true;
@@ -256,6 +266,7 @@ void MonitorStream::processCommand(const CmdMsg *msg) {
     int  score;
     int  analysing;
     bool analysis_image;
+    bool stopped;
   } status_data;
 
   status_data.id = monitor->Id();
@@ -291,14 +302,13 @@ void MonitorStream::processCommand(const CmdMsg *msg) {
       status_data.analysing = monitor->shared_data->analysing;
       status_data.score = monitor->shared_data->last_frame_score;
 
-      if (playback_buffer > 0)
-        status_data.buffer_level = (MOD_ADD( (temp_write_index-temp_read_index), 0, temp_image_buffer_count )*100)/temp_image_buffer_count;
-      else
-        status_data.buffer_level = 0;
+      status_data.buffer_level =
+          MonitorStreamBufferLevel(temp_write_index, temp_read_index, temp_image_buffer_count);
     }
   } // end monitor_mutex scope
   status_data.delayed = delayed;
   status_data.paused = paused;
+  status_data.stopped = stopped;
   status_data.rate = replay_rate;
   status_data.delay = FPSeconds(now - last_frame_sent).count();
   status_data.zoom = zoom;
@@ -306,13 +316,14 @@ void MonitorStream::processCommand(const CmdMsg *msg) {
   status_data.analysis_image = (frame_type == FRAME_ANALYSIS) &&
       monitor->ShmValid() &&
       (monitor->Analysing() != Monitor::ANALYSING_NONE);
-  Debug(2, "viewing fps: %.2f capture_fps: %.2f analysis_fps: %.2f Buffer Level:%d, Delayed:%d, Paused:%d, Rate:%d, delay:%.3f, Zoom:%d, Enabled:%d Forced:%d score: %d analysis_image: %d",
+  Debug(2, "viewing fps: %.2f capture_fps: %.2f analysis_fps: %.2f Buffer Level:%d, Delayed:%d, Paused:%d, Stopped:%d, Rate:%d, delay:%.3f, Zoom:%d, Enabled:%d Forced:%d score: %d analysis_image: %d",
         status_data.fps,
         status_data.capture_fps,
         status_data.analysis_fps,
         status_data.buffer_level,
         status_data.delayed,
         status_data.paused,
+        status_data.stopped,
         status_data.rate,
         status_data.delay,
         status_data.zoom,
@@ -538,11 +549,20 @@ void MonitorStream::runStream() {
     return;
   }
 
-  openComms();
-  std::thread command_processor;
-  if (connkey) {
-    command_processor = std::thread(&MonitorStream::checkCommandQueue, this);
+  if (!monitor) {
+    Error("Cannot stream monitor %d: not loaded", monitor_id);
+    if (type == STREAM_JPEG)
+      fputs("Content-Type: multipart/x-mixed-replace; boundary=" BOUNDARY "\r\n\r\n", stdout);
+    sendTextFrame("Not connected");
+    zm_terminate = true;
+    return;
   }
+
+  openComms();
+  // Declared here so it stays in scope for the join() at the end of the
+  // stream loop, but not started until the temporary buffer state below has
+  // been initialised (see the launch after the playback_buffer setup).
+  std::thread command_processor;
 
   if (type == STREAM_JPEG)
     fputs("Content-Type: multipart/x-mixed-replace; boundary=" BOUNDARY "\r\n\r\n", stdout);
@@ -639,6 +659,13 @@ void MonitorStream::runStream() {
     Debug(2, "Not using playback_buffer");
   } // end if connkey && playback_buffer
 
+  // Start the command processor only now that temp_image_buffer_count, the
+  // read/write indices and temp_image_buffer are initialised, so a command
+  // arriving early cannot observe a half-initialised stream (the original
+  // cause of the divide-by-zero in issue #4936).
+  if (connkey) {
+    command_processor = std::thread(&MonitorStream::checkCommandQueue, this);
+  }
 
   while (!zm_terminate) {
     if (feof(stdout)) {
@@ -686,6 +713,12 @@ void MonitorStream::runStream() {
       std::this_thread::sleep_for(MAX_SLEEP);
       continue;
     }
+    if (stopped) {
+      // In stopped state, do nothing except wait for a new command.
+      // Don't call setLastViewed() so we don't keep capture/decoding active unnecessarily.
+      std::this_thread::sleep_for(MAX_SLEEP);
+      continue;
+    }
     monitor->setLastViewed();
     if (frame_type == FRAME_ANALYSIS)
       monitor->setLastAnalysisViewed();
@@ -694,7 +727,7 @@ void MonitorStream::runStream() {
       if (!was_paused) {
         int index = monitor->shared_data->last_decoder_index % monitor->image_buffer_count;
         Debug(1, "Saving paused image from index %d",index);
-        paused_image = new Image(*monitor->analysis_image_buffer[index]);
+        paused_image = new Image(*monitor->ReadShmFrame(index));
         paused_timestamp = SystemTimePoint(zm::chrono::duration_cast<Microseconds>(monitor->shared_timestamps[index]));
       }
     } else if (paused_image) {
@@ -860,15 +893,18 @@ void MonitorStream::runStream() {
             // Perhaps we should use NOW instead.
             last_frame_timestamp = SystemTimePoint(zm::chrono::duration_cast<Microseconds>(monitor->shared_timestamps[index]));
 
-            // Analysis Image can be gray scale
-            Image *send_image = (*image_buffer)[index];
+            // Route through the format-syncing helper for the ring we
+            // selected above, so the Image adopts the per-slot AVPixelFormat
+            // the writer published before its bytes are interpreted. Analysis
+            // images can be gray scale or full colour.
+            Image *send_image = (image_buffer == &monitor->image_buffer)
+                ? monitor->ReadShmFrame(index)
+                : monitor->ReadAnalysisShmFrame(index);
             Debug(1, "Sending regular image index %d, pix format is %d %s size %d",
                 index, pixformat, av_get_pix_fmt_name(pixformat), send_image->Size());
 
             std::string annotation = stringtf("image %.2d %d %s", index, new_count, (image_buffer == &monitor->image_buffer ? "Waiting for analysis engine" : ""));
             send_image->Annotate(annotation.c_str(), Vector2(0, 20), monitor->LabelSize(), kRGBWhite, kRGBTransparent);
-
-            send_image->AVPixFormat(pixformat);
 
             if (!sendFrame(send_image, last_frame_timestamp)) {
               Debug(2, "sendFrame failed, quitting.");
@@ -934,7 +970,7 @@ void MonitorStream::runStream() {
 
             temp_image_buffer[temp_index].timestamp =
               SystemTimePoint(zm::chrono::duration_cast<Microseconds>(monitor->shared_timestamps[index]));
-            monitor->image_buffer[index]->WriteJpeg(temp_image_buffer[temp_index].file_name, config.jpeg_file_quality);
+            monitor->ReadShmFrame(index)->WriteJpeg(temp_image_buffer[temp_index].file_name, config.jpeg_file_quality);
             temp_write_index = MOD_ADD(temp_write_index, 1, temp_image_buffer_count);
             if (temp_write_index == temp_read_index) {
               // Go back to live viewing
@@ -1029,7 +1065,8 @@ void MonitorStream::runStream() {
       Debug(3, "Sleeping for %" PRIi64 " us",
             static_cast<int64>(std::chrono::duration_cast<Microseconds>(sleep_time).count()));
     }
-    std::this_thread::sleep_for(sleep_time);
+    if (!zm_terminate)
+      std::this_thread::sleep_for(sleep_time);
 
     if (ttl > Seconds(0) && (now - stream_start_time) > ttl) {
       Debug(2, "now - start > ttl (%" PRIi64 " us). break",
@@ -1118,10 +1155,11 @@ void MonitorStream::SingleImage(int scale) {
   }
 
   AVPixelFormat pixformat = monitor->image_pixelformats[index];
-
-  Image *snap_image = monitor->analysis_image_buffer[index];
-  snap_image->AVPixFormat(pixformat);
-  Debug(1, "Sending regular image index %d, pix format is %d %s %d", index, pixformat, av_get_pix_fmt_name(pixformat), snap_image->Size());
+  // index is last_analysis_index, so serve from the analysis ring; the
+  // helper adopts the per-slot AVPixelFormat published by the analysis
+  // process before the bytes are interpreted.
+  Image *snap_image = monitor->ReadAnalysisShmFrame(index);
+  Debug(1, "Sending regular image index %d, pix format is %d %s %d", index, pixformat, zm_get_pix_fmt_name(pixformat), snap_image->Size());
   if (!config.timestamp_on_capture) {
     monitor->TimestampImage(snap_image, SystemTimePoint(zm::chrono::duration_cast<Microseconds>(monitor->shared_timestamps[index])));
   }

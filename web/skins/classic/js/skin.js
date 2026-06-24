@@ -44,6 +44,7 @@ var shifted = false;
 var ctrled = false;
 var alted = false;
 var mainContent = document.getElementById('content');
+var timeOutExtruderChange;
 
 const showExtruderPanelOnMouseHover = false;
 const NAVBAR_RELOAD = document.getElementById('reload'); // Top panel with statistics
@@ -98,7 +99,17 @@ window.addEventListener("DOMContentLoaded", function onSkinDCL() {
         url = element.getAttribute("data-url");
       }
       evt.preventDefault();
-      window.location.assign(url);
+      // Only navigate to safe schemes; block javascript:/data:/vbscript: URLs
+      // in href/data-url so a crafted attribute cannot run script on click.
+      try {
+        const parsed = new URL(String(url), document.baseURI);
+        const proto = parsed.protocol.toLowerCase();
+        if (proto === 'http:' || proto === 'https:') {
+          window.location.assign(parsed.href);
+        }
+      } catch {
+        // Ignore invalid URLs
+      }
     });
   });
 
@@ -477,19 +488,11 @@ if ( currentView != 'none' && currentView != 'login' ) {
         .done(setNavBar)
         .fail(function(jqxhr, textStatus, error) {
           console.log("Request Failed: " + textStatus + ", " + error);
-          if (error == 'Unauthorized') {
-            window.location.reload(true);
-          }
-          if (!jqxhr.responseText) {
-            console.log("No responseText in jqxhr");
-            console.log(jqxhr);
-            return;
-          }
-          console.log("Response Text: " + jqxhr.responseText.replace(/(<([^>]+)>)/gi, ''));
-          if (textStatus != "timeout") {
-          // The idea is that this should only fail due to auth, so reload the page
-          // which should go to login if it can't stay logged in.
-            window.location.reload(true);
+          // A dead session/hash returns 401; go straight to login rather than
+          // reloading in a loop. Transient errors (network/timeout) are left to
+          // the next poll.
+          if (authFailureAction(jqxhr.status) == 'login') {
+            goToLogin();
           }
         });
   }
@@ -514,10 +517,32 @@ if ( currentView != 'none' && currentView != 'login' ) {
     // iterate through all the keys then update each element id with the same name
     for (const key of Object.keys(data)) {
       if ( $j('#'+key).hasClass("show") ) continue; // don't update if the user has the dropdown open
+      if (key == 'getLogStatusHTML') {
+        const getLogHTML = [];
+        const logState = data[key];
+        const _class = (logState == 'ok') ? 'text-success' : (logState == 'alert' ? 'text-warning' : ((logState == 'alarm' ? 'text-danger' : '')));
+        getLogHTML.push(document.querySelector('#getLogHTML a'));
+        getLogHTML.push(document.querySelector('#getLogIconHTML a span')); // Navbar Type = Collapsed
+        getLogHTML.push(document.querySelector('#logState')); // Log page
+        for (let i = 0; i < getLogHTML.length; i++) {
+          if (getLogHTML[i] === null) continue;
+          getLogHTML[i].classList.remove('text-success', 'text-warning', 'text-danger');
+          getLogHTML[i].classList.add(_class);
+        }
+        continue;
+      }
       if ( $j('#'+key).length ) $j('#'+key).replaceWith(data[key]);
       if ( key == 'getBandwidthHTML' ) bwClickFunction();
     }
   }
+
+  // Re-validate auth when the tab becomes visible again after being hidden or
+  // slept; onAuthVisible (auth-helpers.js) refreshes the hash and repaints, or
+  // redirects to login on a dead session. Wired here so it only runs for the
+  // authenticated views. pageshow covers bfcache restores (Firefox/Chromium/
+  // Android) and refocus.
+  document.addEventListener('visibilitychange', onAuthVisible);
+  window.addEventListener('pageshow', onAuthVisible);
 } // end if ( currentView != 'none' && currentView != 'login' )
 
 // Refresh auth_hash/auth_relay by hitting the navBar status endpoint, then
@@ -650,7 +675,10 @@ function submitThisForm(param = null) {
     // Let's hide the old filter so that it doesn't appear during the transfer...
     filter.style.display = 'none';
     // We return the filter to its place in the form, since in the left side menu the filter should always be inside the form.
-    form.prepend(filter);
+    // Skip if filter is already an ancestor of form (e.g. console: #fbpanel > #monitorFiltersForm), which would cause HierarchyRequestError.
+    if (!filter.contains(form)) {
+      form.prepend(filter);
+    }
   }
   if (param && typeof param === 'string') { //ON WATCH PAGE WHEN SELECTING A MONITOR, the object is transferred as PARAM!!!
     var uri = "?" + $j(form).serialize() + param;
@@ -696,6 +724,37 @@ function configureDeleteButton( element ) {
 
 function confirmDelete( message ) {
   return ( confirm( message?message:'Are you sure you wish to delete?' ) );
+}
+
+// Load the Delete Confirmation Modal HTML via Ajax call
+function getDelConfirmModal(key, title, formName=null) {
+  $j.getJSON(thisUrl, {
+    request: 'modal',
+    modal: 'delconfirm',
+    key: key,
+    title: title
+  })
+      .done(function(data) {
+        insertModalHtml('deleteConfirm', data.html);
+        $j('#deleteConfirm').modal('show');
+        document.getElementById("delConfirmBtn").addEventListener("click", function onDelConfirmClick(evt) {
+          $j('#deleteConfirm').modal('hide');
+          if (!formName) {
+            if (typeof manageDelConfirmModalBtns === "function") {
+              manageDelConfirmModalBtns();
+            }
+          } else {
+            const form = document.querySelector('form[name="'+formName+'"]');
+            if (form) {
+              if (currentView == 'groups') form.elements['action'].value = 'delete';
+              submitThisForm(form);
+            } else {
+              console.warn(`Form with name=${formName} not found.`);
+            }
+          }
+        }, {once: true});
+      })
+      .fail(logAjaxFail);
 }
 
 window.addEventListener( 'DOMContentLoaded', checkSize );
@@ -1071,7 +1130,11 @@ function stateStuff(action, runState, newState) {
 }
 
 function strip_html(string) {
-  return string.replace(/<[^>]+>/g, '');
+  // Parse as HTML and return only the text content. Regex tag-stripping is
+  // an incomplete sanitizer (e.g. nested/overlapping tags) and can backtrack;
+  // letting the parser extract textContent is both correct and linear.
+  const doc = new DOMParser().parseFromString(String(string), 'text/html');
+  return doc.body.textContent || '';
 }
 
 function escapeHTML(text) {
@@ -1323,28 +1386,34 @@ function thumbnail_onmouseover(event) {
   const go2rtcMid = img.getAttribute('go2rtc_mid') || monitorId;
   const useGo2rtc = streamType === 'go2rtc' || (!streamType && go2rtcSrc && go2rtcMid);
 
-  // Pre-load required modules
-  if (useGo2rtc) {
-    ensureVideoStreamLoaded();
-  } else if (streamType === 'rtsp2web') {
-    ensureHlsLoaded();
-  }
-
-  // Determine overlay source (priority: live stream > mp4 video > MJPEG/still)
-  const overlaySrc = determineOverlaySrc(img, streamType, monitorId, useGo2rtc);
-  if (!overlaySrc) return;
-
-  const overlayDimensions = calculateOverlayDimensions(img);
-  if (!overlayDimensions) return;
-
   thumbnail_timeout = setTimeout(function() {
-    createThumbnailOverlay(img, overlaySrc, overlayDimensions, streamType, monitorId, go2rtcSrc, go2rtcMid, useGo2rtc);
+    // Pre-load required modules
+    const isLiveStream = Boolean((streamType && monitorId) || useGo2rtc);
+    const m3u8Exists = (!isLiveStream) ? checkM3u8File(img.dataset.videoHlsSrc) : false;
+    if (useGo2rtc) {
+      ensureVideoStreamLoaded();
+    } else if (streamType === 'rtsp2web' || m3u8Exists) {
+      ensureHlsLoaded();
+    }
+
+    // Determine overlay source (priority: live stream > HLS video > mp4 video > MJPEG/still)
+    const overlaySrc = determineOverlaySrc(img, streamType, monitorId, useGo2rtc, m3u8Exists);
+    if (!overlaySrc) return;
+
+    const overlayDimensions = calculateOverlayDimensions(img);
+    if (!overlayDimensions) return;
+
+    createThumbnailOverlay(img, overlaySrc, overlayDimensions, streamType, monitorId, go2rtcSrc, go2rtcMid, useGo2rtc, m3u8Exists);
   }, 250);
 }
 
-function determineOverlaySrc(img, streamType, monitorId, useGo2rtc) {
+function determineOverlaySrc(img, streamType, monitorId, useGo2rtc, m3u8Exists) {
   const useLiveStream = streamType && monitorId;
   if (useLiveStream || useGo2rtc) return 'live';
+
+  if (m3u8Exists && currentView !== 'frames') {
+    return img.dataset.videoHlsSrc;
+  }
 
   const videoSrc = img.getAttribute('video_src');
   if (videoSrc && currentView !== 'frames') return videoSrc;
@@ -1381,7 +1450,7 @@ function calculateOverlayScale(img, overlayWidth) {
   return Math.max(5, Math.min(100, scale));
 }
 
-function createThumbnailOverlay(img, overlaySrc, dimensions, streamType, monitorId, go2rtcSrc, go2rtcMid, useGo2rtc) {
+function createThumbnailOverlay(img, overlaySrc, dimensions, streamType, monitorId, go2rtcSrc, go2rtcMid, useGo2rtc, m3u8Exists) {
   const existing = document.getElementById('thumb-overlay');
   if (existing) existing.remove();
 
@@ -1409,6 +1478,8 @@ function createThumbnailOverlay(img, overlaySrc, dimensions, streamType, monitor
       fallbackImg.src = streamSrc.replace(/scale=\d+/, 'scale=' + scale);
       container.appendChild(fallbackImg);
     }
+    const infoStatusBar = document.getElementById("info-status-bar");
+    if (infoStatusBar) infoStatusBar.innerHTML = ' [MJPEG] ';
   };
 
   // Determine if this is a live stream or recorded video
@@ -1423,23 +1494,26 @@ function createThumbnailOverlay(img, overlaySrc, dimensions, streamType, monitor
 
     if (isLive) {
       // Live indicator with pulsing dot
-      statusBar.innerHTML = '<span class="live-indicator"><span class="live-dot"></span>LIVE</span>';
+      statusBar.innerHTML = '<span class="live-indicator"><span class="live-dot"></span>LIVE<span id="info-status-bar"></span></span>';
     } else if (eventStart) {
       // Wall clock time for recorded video with clock icon
       statusBar.innerHTML = '<span class="time-indicator"><i class="fa fa-clock-o"></i><span class="time-display">' +
-        formatDateTime(new Date(eventStart)) + '</span></span>';
+        formatDateTime(new Date(eventStart)) + '</span><span id="info-status-bar"></span></span>';
     }
   }
 
   if (isLive && useGo2rtc) {
     createGo2rtcStream(container, go2rtcSrc, monitorId || go2rtcMid, fallbackToMjpeg);
   } else if (streamType === 'rtsp2web') {
-    createRtsp2webStream(container, img, monitorId, fallbackToMjpeg);
+    createRtsp2webStream(container, img, monitorId, fallbackToMjpeg, eventStart, statusBar);
+  } else if (m3u8Exists && currentView !== 'frames') {
+    playEventHLS(container, img, monitorId, fallbackToMjpeg, statusBar, eventStart);
   } else if (streamType === 'janus') {
     // Janus requires complex initialization; fall back to MJPEG
     fallbackToMjpeg();
   } else if (!isLive && img.getAttribute('video_src') && currentView !== 'frames') {
-    createVideoElement(container, overlaySrc, eventStart, statusBar);
+    const video = createVideoElement(container, overlaySrc, eventStart, statusBar);
+    thumbnailVideoPlay(video, 'MP4', eventStart, statusBar);
   } else {
     const overlayImg = document.createElement('img');
     const scale = calculateOverlayScale(img, dimensions.width);
@@ -1482,9 +1556,27 @@ function createGo2rtcStream(container, src, mid, fallbackToMjpeg) {
     const stream = document.createElement('video-stream');
     stream.style.cssText = 'width: 100%; height: 100%; display: block;';
     stream.background = true;
-    stream.muted = getCookie('zmWatchMuted') !== 'false';
+    stream.muted = getCookie('zmWatchMuted') === 'true';
     stream.src = url.href;
     container.appendChild(stream);
+
+    const attachPlayListener = function() {
+      const innerVideo = stream.querySelector('video');
+      if (!innerVideo) return false;
+      innerVideo.addEventListener('play', function() {
+        const subMode = stream.getAttribute('current-mode') || '';
+        const infoStatusBar = document.getElementById('info-status-bar');
+        if (infoStatusBar) infoStatusBar.textContent = ' [Go2RTC_' + subMode + '] ';
+      });
+      return true;
+    };
+
+    if (!attachPlayListener()) {
+      const observer = new MutationObserver(function(_mutations, obs) {
+        if (attachPlayListener()) obs.disconnect();
+      });
+      observer.observe(stream, {childList: true});
+    }
 
     // Fallback if go2rtc doesn't produce video within 3s
     stream._fallbackTimer = setTimeout(function() {
@@ -1494,12 +1586,15 @@ function createGo2rtcStream(container, src, mid, fallbackToMjpeg) {
         fallbackToMjpeg();
       }
     }, 3000);
-  }).catch(fallbackToMjpeg);
+  }).catch(function(e) {
+    console.error(e);
+    fallbackToMjpeg();
+  });
 }
 
-function createRtsp2webStream(container, img, monitorId, fallbackToMjpeg) {
+function createRtsp2webStream(container, img, monitorId, fallbackToMjpeg, eventStart, statusBar) {
   const rtsp2webSrc = img.dataset.rtsp2webSrc;
-  const channel = img.dataset.rtsp2webStream === 'Secondary' ? 1 : 0;
+  const channel = (img.dataset.streamChannel && img.dataset.streamChannel.toLowerCase().indexOf("secondary") !== -1 ) ? 1 : 0;
 
   ensureHlsLoaded().then(function() {
     if (!document.getElementById('thumb-overlay')) return;
@@ -1510,17 +1605,40 @@ function createRtsp2webStream(container, img, monitorId, fallbackToMjpeg) {
     const video = document.createElement('video');
     video.removeAttribute('controls');
     video.style.cssText = 'width: 100%; height: 100%;';
-    video.autoplay = true;
-    video.muted = getCookie('zmWatchMuted') !== 'false';
+    video.autoplay = false;
+    video.muted = getCookie('zmWatchMuted') === 'true';
     video.playsInline = true;
     container.appendChild(video);
+    video.streamType = 'rtsp2web';
 
     if (Hls.isSupported()) {
       const hls = new Hls();
       hls.loadSource(hlsUrl);
       hls.attachMedia(video);
-      hls.on(Hls.Events.ERROR, function() {
+
+      const infoStatusBar = statusBar.querySelector("#info-status-bar");
+      hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+        if (infoStatusBar) infoStatusBar.innerHTML = ' [RTSP2Web Loading] ';
+        thumbnailVideoPlay(video, 'RTSP2Web', eventStart, statusBar);
+        console.debug("HLS Event = MEDIA_ATTACHED");
+      });
+      hls.on(Hls.Events.FRAG_LOADED, () => {
+        console.debug("HLS Event = FRAG_LOADED");
+      });
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        console.debug("HLS Event = MANIFEST_PARSED");
+      });
+      hls.on(Hls.Events.BUFFER_APPENDED, () => {
+        console.debug("HLS Event = BUFFER_APPENDED");
+      });
+      hls.on(Hls.Events.BUFFER_EOS, () => {
+        console.debug("HLS Event = BUFFER_EOS");
+      });
+      hls.on(Hls.Events.ERROR, function(event, data) {
+        console.warn("HLS Event = ERROR", "\n", "event:", event, "\n", "errorType:", data.type, "\n", "errorDetails:", data.details, "\n", "errorFatal:", data.fatal);
+        if (!data || !data.fatal) return;
         hls.destroy();
+        clearTimeout(video._fallbackTimer);
         video.remove();
         fallbackToMjpeg();
       });
@@ -1528,9 +1646,11 @@ function createRtsp2webStream(container, img, monitorId, fallbackToMjpeg) {
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       // Native HLS support (Safari)
       video.src = hlsUrl;
+      thumbnailVideoPlay(video, 'RTSP2Web', eventStart, statusBar);
       video.addEventListener('error', function() {
         video.remove();
         fallbackToMjpeg();
+        return;
       });
     } else {
       video.remove();
@@ -1546,21 +1666,37 @@ function createRtsp2webStream(container, img, monitorId, fallbackToMjpeg) {
         fallbackToMjpeg();
       }
     }, 5000);
-  }).catch(fallbackToMjpeg);
+  }).catch(function(e) {
+    console.error(e);
+    fallbackToMjpeg();
+  });
 }
 
-function createVideoElement(container, src, eventStart, statusBar) {
-  const video = document.createElement('video');
-  const previewRate = getPreviewRate();
-  video.src = src;
-  video.autoplay = true;
-  video.muted = getCookie('zmWatchMuted') !== 'false';
-  video.playsInline = true;
-  video.playbackRate = previewRate;
-  video.addEventListener('loadedmetadata', function() {
-    this.playbackRate = previewRate; // Some browsers reset playbackRate on metadata load
-  });
+function thumbnailVideoPlay(video, currentMode, eventStart, statusBar) {
+  const infoStatusBar = (statusBar) ? statusBar.querySelector("#info-status-bar") : null;
+  video.play().then(() => {
+    if (infoStatusBar && currentMode) infoStatusBar.innerHTML = ' [' + currentMode + '] ';
+    console.debug(currentMode + " video player started playing");
+    if (eventStart && statusBar) updateTimeWallClock(video, eventStart, statusBar);
+  })
+      .catch((er) => {
+        if (er.name === 'NotAllowedError' && !video.muted) {
+          video.muted = true;
+          video.play().then(() => {
+            if (infoStatusBar && currentMode) infoStatusBar.innerHTML = ' [' + currentMode + '] ';
+            console.debug(currentMode + " video player started playing after muting");
+            if (eventStart && statusBar) updateTimeWallClock(video, eventStart, statusBar);
+          })
+              .catch((retryError) => {
+                console.warn(retryError);
+              });
+        } else {
+          console.warn(er);
+        }
+      });
+}
 
+function updateTimeWallClock(video, eventStart, statusBar) {
   // Update wall clock time as video plays
   if (eventStart && statusBar) {
     const startTime = new Date(eventStart).getTime();
@@ -1572,8 +1708,191 @@ function createVideoElement(container, src, eventStart, statusBar) {
       });
     }
   }
+}
+
+function checkM3u8File(hlsUrl) {
+  if (!hlsUrl || currentView === 'frames') return false;
+
+  try {
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", hlsUrl, false);
+    xhr.send();
+    return (xhr.readyState === 4 && xhr.status === 200);
+  } catch (err) {
+    console.warn('Failed to check M3U8 file:', err);
+    return false;
+  }
+}
+
+function tryPlayMp4(container, img, monitorId, fallbackToMjpeg, statusBar) {
+  let video = null;
+  const videoSrc = img.getAttribute('video_src');
+  const durationSecs = parseFloat(img.dataset.videoDurationSecs);
+  if (videoSrc && currentView !== 'frames' && Number.isFinite(durationSecs) && durationSecs > 0 && durationSecs < 60) {
+    const eventStart = img.dataset.eventStart;
+    if (eventStart) {
+      // Wall clock time for recorded video with clock icon
+      if (statusBar) {
+        statusBar.innerHTML = '<span class="time-indicator"><i class="fa fa-clock-o"></i><span class="time-display">' +
+          formatDateTime(new Date(eventStart)) + '</span><span id="info-status-bar"> [MP4] </span></span>';
+      }
+    }
+    video = createVideoElement(container, videoSrc, eventStart, statusBar);
+    thumbnailVideoPlay(video, 'MP4', eventStart, statusBar);
+  } else {
+    fallbackToMjpeg();
+    return;
+  }
+
+  if (video) {
+    const clearVideoFallbackTimers = function() {
+      if (video._fallbackTimer) {
+        clearTimeout(video._fallbackTimer);
+        video._fallbackTimer = null;
+      }
+      if (video._fallbackTimerTime) {
+        clearInterval(video._fallbackTimerTime);
+        video._fallbackTimerTime = null;
+      }
+    };
+
+    video.addEventListener('ended', function() {
+      clearVideoFallbackTimers();
+    });
+
+    // Fallback after 5s if video hasn't loaded
+    video._fallbackTimer = setTimeout(function() {
+      if (video.readyState < 2) {
+        clearVideoFallbackTimers();
+        video.remove();
+        fallbackToMjpeg();
+      } else {
+        // A defective video may simply stop or freeze.
+        let curTime = video.currentTime;
+        video._fallbackTimerTime = setInterval(function() {
+          if (video.ended) {
+            clearVideoFallbackTimers();
+            return;
+          }
+
+          if (curTime == video.currentTime) {
+            console.log("MP4 video does not play, fallback to MJPEG.");
+            clearVideoFallbackTimers();
+            video.remove();
+            fallbackToMjpeg();
+          } else {
+            curTime = video.currentTime;
+          }
+        }, 1000);
+      }
+    }, 5000);
+  }
+}
+
+function playEventHLS(container, img, monitorId, fallbackToMjpeg, statusBar, eventStart) {
+  const hlsUrl = img.dataset.videoHlsSrc;
+
+  ensureHlsLoaded().then(function() {
+    if (!document.getElementById('thumb-overlay')) return;
+    const video = document.createElement('video');
+    video.addEventListener("ended", (event) => {
+      const infoStatusBar = document.getElementById("info-status-bar");
+      if (infoStatusBar) infoStatusBar.innerHTML = ' [END] ';
+    });
+    video.removeAttribute('controls');
+    video.style.cssText = 'width: 100%; height: 100%;';
+    video.autoplay = false;
+    video.muted = getCookie('zmWatchMuted') === 'true';
+    video.playsInline = true;
+    container.appendChild(video);
+
+    if (Hls.isSupported()) {
+      const hls = new Hls({
+        maxBufferLength: 20,
+        maxMaxBufferLength: 30,
+        backBufferLength: 5,
+        //debug: true,
+      });
+      hls.loadSource(hlsUrl);
+      hls.attachMedia(video);
+      thumbnailVideoPlay(video, 'HLS', eventStart, statusBar);
+      video._fallbackTimer = setTimeout(function() {
+        // If the index.m3u8 manifest is bad, playback may not start, although there will be no errors.
+        if (video.readyState < 2) {
+          video.remove();
+          hls.destroy();
+          tryPlayMp4(container, img, monitorId, fallbackToMjpeg, statusBar);
+        }
+      }, 2000);
+
+      hls.on(Hls.Events.FRAG_LOADED, () => {
+        console.debug("HLS Event = FRAG_LOADED");
+      });
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        console.debug("HLS Event = MANIFEST_PARSED");
+      });
+      hls.on(Hls.Events.BUFFER_APPENDED, () => {
+        console.debug("HLS Event = BUFFER_APPENDED");
+      });
+      hls.on(Hls.Events.BUFFER_EOS, () => {
+        console.debug("HLS Event = BUFFER_EOS");
+      });
+      hls.on(Hls.Events.ERROR, function(event, data) {
+        console.warn("HLS Event = ERROR", "\n", "event:", event, "\n", "errorType:", data.type, "\n", "errorDetails:", data.details, "\n", "errorFatal:", data.fatal);
+        if (!data || !data.fatal) return;
+        video.remove();
+        hls.destroy();
+        clearTimeout(video._fallbackTimer);
+        tryPlayMp4(container, img, monitorId, fallbackToMjpeg, statusBar);
+      });
+      video._hls = hls;
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      // Native HLS support (Safari)
+      video.src = hlsUrl;
+      video.addEventListener('error', function(e) {
+        console.error(e);
+        video.remove();
+        clearTimeout(video._fallbackTimer);
+        tryPlayMp4(container, img, monitorId, fallbackToMjpeg, statusBar);
+      });
+      thumbnailVideoPlay(video, 'Native HLS', eventStart, statusBar);
+      video._fallbackTimer = setTimeout(function() {
+        if (video.readyState < 2) {
+          video.remove();
+          tryPlayMp4(container, img, monitorId, fallbackToMjpeg, statusBar);
+        }
+      }, 2000);
+    } else {
+      video.remove();
+      tryPlayMp4(container, img, monitorId, fallbackToMjpeg, statusBar);
+    }
+  }).catch(function(e) {
+    console.error(e);
+    tryPlayMp4(container, img, monitorId, fallbackToMjpeg, statusBar);
+  });
+}
+
+function createVideoElement(container, src, eventStart, statusBar) {
+  const video = document.createElement('video');
+  const previewRate = getPreviewRate();
+  video.src = src;
+  video.autoplay = false;
+  video.muted = getCookie('zmWatchMuted') === 'true';
+  video.playsInline = true;
+  video.playbackRate = previewRate;
+  video.addEventListener("loadeddata", () => {
+    console.debug("Change video.readyState to: ", video.readyState);
+  });
+  video.addEventListener('loadedmetadata', function() {
+    this.playbackRate = previewRate; // Some browsers reset playbackRate on metadata load
+  });
+  video.addEventListener("ended", (event) => {
+    const infoStatusBar = document.getElementById("info-status-bar");
+    if (infoStatusBar) infoStatusBar.innerHTML = ' [END] ';
+  });
 
   container.appendChild(video);
+  return video;
 }
 
 function thumbnail_onmouseout(event) {
@@ -1598,6 +1917,7 @@ function cleanupVideoStream(videoStream) {
 function cleanupVideoElement(video) {
   if (!video) return;
   if (video._fallbackTimer) clearTimeout(video._fallbackTimer);
+  clearInterval(video._fallbackTimerTime);
   if (video._hls) {
     video._hls.destroy();
     video._hls = null;
@@ -1653,10 +1973,18 @@ function toggle_password_visibility(element) {
     return;
   }
   if (element.innerHTML=='visibility') {
-    input.type = 'text';
+    if (input.classList.contains('masked-input')) {
+      input.classList.add('unmasked');
+    } else {
+      input.type = 'text';
+    }
     element.innerHTML = 'visibility_off';
   } else {
-    input.type = 'password';
+    if (input.classList.contains('masked-input')) {
+      input.classList.remove('unmasked');
+    } else {
+      input.type = 'password';
+    }
     element.innerHTML='visibility';
   }
 }
@@ -1962,6 +2290,12 @@ function canPlayCodec(filename) {
     const codec = matches[1];
     const ext = matches[2].toLowerCase();
     const video = document.createElement('video');
+    if (matches[1] == 'av1') matches[1] = 'av01.0.01M.08';
+    else if (matches[1] == 'h264') matches[1] = 'avc1.42E01E';
+    else if (matches[1] == 'hevc') matches[1] = 'hvc1.1.6.L93.B0';
+    else {
+      console.log('matches didnt match'+matches[1]);
+    }
     video.muted = true;
 
     // For HLS playlists, check native HLS support with the embedded codec
@@ -2163,9 +2497,10 @@ function insertControlModuleMenu() {
   // Assign to Show/hide button
   menuControlModule.on("click", function() {
     if (!SIDEBAR_MAIN_EXTRUDER.classList.contains('isOpened')) {
+      clearTimeout(timeOutExtruderChange);
       $j(SIDEBAR_MAIN_EXTRUDER).openMbExtruder();
     } else {
-      $j(SIDEBAR_MAIN_EXTRUDER).closeMbExtruder();
+      closeMbExtruder(true);
     }
   });
 
@@ -2471,6 +2806,10 @@ function closeMbExtruder(updateCookie = false) {
     setCookie('zmVisibleMbExtruder', !!SIDEBAR_MAIN_EXTRUDER.classList.contains('isOpened'));
   }
   $j(SIDEBAR_MAIN_EXTRUDER).closeMbExtruder();
+  timeOutExtruderChange = setTimeout(function() {
+    // Prevent premature reset of z-index, as Extruder does not disappear immediately
+    SIDEBAR_MAIN_EXTRUDER.style.zIndex = 'unset';
+  }, 300);
 }
 
 /*
@@ -2641,15 +2980,29 @@ function initPageGeneral() {
 
   document.querySelectorAll('[id ^= "controlMute"]').forEach(function(el) {
     el.addEventListener("click", function clickControlMute(event) {
-      const mid = (stringToNumber(event.target.id) || stringToNumber(document.querySelector('[id ^= "liveStream"]').id));
-      if (!mid) return;
-      if (currentView == 'watch') {
-        monitorStream.controlMute('switch');
-      } else if (currentView == 'montage') {
-        const currentMonitor = monitors.find((o) => {
-          return parseInt(o["id"]) === mid;
+      let mid = (stringToNumber(event.target.id));
+      if (isNaN(mid)) { // For example, a common one on the Montage page
+        // You can't call it with MODE='switch' here, as some monitors may have the volume on, while others may have the volume off. You need to get the current state of the MUTED icon!!!
+        const setStateMuted = (event.target.textContent == "volume_off") ? 'off' : 'on';
+        controlMute(null, setStateMuted);
+        document.querySelectorAll('[id ^= "controlMute"]').forEach(function(el) {
+          // Let's specify the button state for each monitor on the page.
+          mid = (stringToNumber(el.id));
+          if (isNaN(mid)) return; // For all monitors
+          const currentMonitor = monitors.find((o) => {
+            return parseInt(o["id"]) === mid;
+          });
+          currentMonitor.controlMute(setStateMuted);
         });
-        currentMonitor.controlMute('switch');
+      } else {
+        if (currentView == 'watch') {
+          monitorStream.controlMute('switch');
+        } else if (currentView == 'montage' || currentView == 'event') {
+          const currentMonitor = monitors.find((o) => {
+            return parseInt(o["id"]) === mid;
+          });
+          currentMonitor.controlMute('switch');
+        }
       }
     });
   });
@@ -2853,6 +3206,46 @@ function monitorsSetScale(id=null) {
   setTextSizeOnInfoBlocks();
 } // End function monitorsSetScale
 
+function connectAudioMotion(mid) {
+  const selectorWhatDisplay = document.getElementById('whatDisplay');
+  const monitorStream = getMonitorStream(mid);
+  const defaultWhatDisplay = (typeof eventData !== 'undefined') ? eventData.whatDisplay : (monitorStream) ? monitorStream.whatDisplay : null;
+
+  if (!selectorWhatDisplay || (-1 !== selectorWhatDisplay.value.toLowerCase().indexOf('default'))) { // Default monitor settings
+    if (defaultWhatDisplay && (-1 === defaultWhatDisplay.toLowerCase().indexOf('audio'))) return;
+  } else {
+    if (-1 === selectorWhatDisplay.value.toLowerCase().indexOf('audio')) return;
+  }
+
+  const audioMotion = document.querySelector('audio-motion#audioVisualization' + mid);
+  if (audioMotion && audioMotion.init) {
+    audioMotion.init();
+  } else {
+    console.log(`connectToMediaStreamSource not possible. 'audio-motion'=`, $j(audioMotion));
+  }
+};
+
+function hideAudioMotion(mid) {
+  const audioMotion = document.querySelector('audio-motion#audioVisualization' + mid);
+  if (audioMotion && audioMotion.hide) {
+    audioMotion.hide();
+  }
+};
+
+function destroyAudioMotion(mid) {
+  const audioMotion = document.querySelector('audio-motion#audioVisualization' + mid);
+  if (audioMotion && audioMotion.destroy) {
+    audioMotion.destroy();
+  }
+};
+
+function pauseAudioMotion(mid) {
+  const audioMotion = document.querySelector('audio-motion#audioVisualization' + mid);
+  if (audioMotion && audioMotion.pause) {
+    audioMotion.pause();
+  }
+};
+
 /*IMPORTANT DO NOT CALL WITHOUT CONSCIOUS NEED!!!*/
 // https://habr.com/ru/companies/timeweb/articles/667148/
 async function getTracksFromStream(videoFeedStream) {
@@ -2895,15 +3288,16 @@ async function getTracksFromStream(videoFeedStream) {
 
   if (stream) {
     const timeoutStreamActive = 20000;
-    const streamActive = await waitUntil(() => stream.active, timeoutStreamActive ); // We are waiting for the stream to become active.
-    if (streamActive !== false) {
+    const startTime = Date.now();
+    const streamActive = await waitUntil(() => (stream.active || videoFeedStream.started === false), timeoutStreamActive, stream.active); // We are waiting for the stream to become active.
+    if (streamActive !== false && videoFeedStream.started !== false) {
       console.debug(`Stream for monitor with ID=${mid} became active within ${(streamActive/1000).toFixed(2)} seconds.`);
     } else {
-      console.warn(`Within ${(timeoutStreamActive/1000).toFixed(2)} seconds, the stream for monitor with ID=${mid} did not become active.`);
+      console.warn(`Within ${((Date.now() - startTime)/1000).toFixed(2)} seconds, the stream for monitor with ID=${mid} did not become active.`);
       return;
     }
 
-    if (videoFeedStream.started) {
+    if (videoFeedStream.started === undefined || videoFeedStream.started) { // Event page || Watch/Montage
       // While we were waiting for Media Stream activity, the video stream may have stopped.
       videoFeedStream.audioTrack = stream.getAudioTracks()[0];
       videoFeedStream.videoTrack = stream.getVideoTracks()[0];
@@ -2930,25 +3324,230 @@ async function getTracksFromStream(videoFeedStream) {
 
   }
 
-  //connectAudioMotion(mid);
+  connectAudioMotion(mid);
 }
 
 const waitUntil = (condition, timeout = 0) => {
   const startTime = Date.now();
+  let currentTime;
 
   return new Promise((resolve) => {
-    const interval = setInterval(() => {
-      const currentTime = Date.now();
-      if (timeout !== 0 && ((currentTime - startTime) > timeout)) {
-        clearInterval(interval);
-        resolve(false);
-      } else {
-        if (!condition()) return;
-        clearInterval(interval);
-        resolve(currentTime - startTime);
-      }
-    }, 100);
+    if (condition()) {
+      currentTime = Date.now();
+      resolve(currentTime - startTime);
+    } else {
+      const interval = setInterval(() => {
+        currentTime = Date.now();
+        if (timeout !== 0 && ((currentTime - startTime) > timeout)) {
+          clearInterval(interval);
+          resolve(false);
+        } else {
+          if (!condition()) return;
+          clearInterval(interval);
+          resolve(currentTime - startTime);
+        }
+      }, 100);
+    }
   });
+};
+
+const createVolumeSlider = function(volumeSlider, audioStream=null) {
+  if (!volumeSlider) return;
+  const defaultVolume = (volumeSlider.getAttribute("data-volume") || 50);
+  const iconMute = getIconMute(stringToNumber(volumeSlider.id));
+
+  noUiSlider.create(volumeSlider, {
+    start: [(defaultVolume) ? defaultVolume : (audioStream) ? audioStream.volume * 100 : 50],
+    step: 1,
+    //behaviour: 'unconstrained',
+    behaviour: 'tap',
+    connect: [true, false],
+    range: {
+      'min': 0,
+      'max': 100
+    },
+    /*tooltips: [
+      //true,
+      { to: function(value) { return value.toFixed(0) + '%'; } }
+    ],*/
+  });
+  volumeSlider.allowSetValue = true;
+  volumeSlider.noUiSlider.on('update', function onUpdateUiSlider(values, handle) {
+    const valueSlider = values[0];
+    if (audioStream) audioStream.volume = valueSlider/100;
+    if (valueSlider > 0 && (!audioStream || (audioStream && !audioStream.muted))) {
+      iconMute.innerHTML = 'volume_up';
+      volumeSlider.classList.remove('noUi-mute');
+    } else {
+      iconMute.innerHTML = 'volume_off';
+      volumeSlider.classList.add('noUi-mute');
+    }
+    //console.log("Audio volume slider event: 'update'");
+  });
+  volumeSlider.noUiSlider.on('end', function onEndUiSlider(values, handle) {
+    volumeSlider.allowSetValue = true;
+    //console.log("Audio volume slider event: 'end'");
+  });
+  volumeSlider.noUiSlider.on('start', function onStartUiSlider(values, handle) {
+    volumeSlider.allowSetValue = false; // Let's prohibit changing the Value using the "Set" method, otherwise there will be lags and collapse when directly moving the slider with the mouse...
+    //console.log("Audio volume slider event: 'start'");
+  });
+  volumeSlider.noUiSlider.on('set', function onSetUiSlider(values, handle) {
+    //console.log("Audio volume slider event: 'set'");
+  });
+  volumeSlider.noUiSlider.on('slide', function onSlideUiSlider(values, handle) {
+    if (audioStream) {
+      if (audioStream.volume > 0 && audioStream.muted) {
+        iconMute.innerHTML = 'volume_up';
+        audioStream.muted = false;
+      }
+    } else { // For all monitors
+      document.querySelectorAll('[id ^= "volumeSlider"]').forEach(function(el) {
+        const mid = stringToNumber(el.id);
+        if (isNaN(mid)) return;
+        const stream = getAVStream(mid);
+        const valueSlider = values[0];
+        if (stream) stream.volume = valueSlider/100;
+        const iconMute = getIconMute(mid);
+        if (iconMute) iconMute.innerHTML = (valueSlider > 0) ? 'volume_up' : 'volume_off';
+        if (stream) stream.muted = (valueSlider > 0) ? false : true;
+      });
+    }
+    //console.log("Audio volume slider event: 'slide'");
+  });
+};
+
+const destroyVolumeSlider = function(volumeSlider) {
+  if (volumeSlider) {
+    if (volumeSlider.noUiSlider) {
+      volumeSlider.noUiSlider.destroy();
+      volumeSlider.noUiSlider = null;
+    }
+    const mid = stringToNumber(volumeSlider.id);
+    if (!isNaN(mid)) changeStateIconMute(mid, '');
+  }
+};
+
+const changeStateIconMute = function(mid, volume) {
+  //const volumeControls = getVolumeControls(mid);
+  //const disabled = (volumeControls) ? volumeControls.classList.contains('disabled') : false;
+  const iconMute = getIconMute(mid);
+  if (iconMute) {
+    iconMute.innerHTML = (volume == 'on') ? 'volume_up' : (volume == 'off') ? 'volume_off' : '';
+  }
+  return iconMute;
+};
+
+const changeVolumeSlider = function(mid, volume) {
+  const volumeControls = getVolumeControls(mid);
+  const volumeSlider = getVolumeSlider(mid);
+  if (volumeSlider) {
+    let disabled = false;
+    if (volumeControls) {
+      disabled = volumeControls.classList.contains('disabled');
+    }
+    if (volume == 'on') {
+      volumeSlider.classList.remove('noUi-mute');
+    } else if (volume == 'off') {
+      volumeSlider.classList.add('noUi-mute');
+    }
+    if (volumeSlider.noUiSlider) {
+      (disabled) ? volumeSlider.noUiSlider.disable() : volumeSlider.noUiSlider.enable();
+    }
+  }
+  return volumeSlider;
+};
+
+const controlMute = function(mid, mode = 'switch') {
+  let volumeSlider = getVolumeSlider(mid);
+  const audioStream = getAVStream(mid);
+  const volumeControls = getVolumeControls(mid);
+  const disabled = (volumeControls) ? volumeControls.classList.contains('disabled') : false;
+
+  if (volumeSlider && volumeSlider.noUiSlider) {
+    (disabled) ? volumeSlider.noUiSlider.disable() : volumeSlider.noUiSlider.enable();
+  }
+
+  if (disabled) {
+    console.log(`Volume control is disabled in controlMute for monitor ID=${mid}`);
+    return;
+  }
+  if (mid && !audioStream) {
+    console.log(`No audiostream! in controlMute for monitor ID=${mid}`);
+    return;
+  }
+
+  if (mode=='switch') {
+    if (audioStream.muted) {
+      changeStateIconMute(mid, 'on');
+      volumeSlider = changeVolumeSlider(mid, 'on');
+      if (mid) {
+        audioStream.muted = false;
+        if (volumeSlider && volumeSlider.noUiSlider) {
+          audioStream.volume = volumeSlider.noUiSlider.get() / 100;
+        }
+      } else { // For all monitors
+
+      }
+    } else {
+      changeStateIconMute(mid, 'off');
+      changeVolumeSlider(mid, 'off');
+      if (mid) {
+        audioStream.muted = true;
+      } else { // For all monitors
+
+      }
+    }
+  } else if (mode=='on') {
+    changeStateIconMute(mid, 'off');
+    changeVolumeSlider(mid, 'off');
+    if (mid) {
+      audioStream.muted = true;
+    } else { // For all monitors
+
+    }
+  } else if (mode=='off') {
+    changeStateIconMute(mid, 'on');
+    volumeSlider = changeVolumeSlider(mid, 'on');
+    if (mid) {
+      audioStream.muted = false;
+      if (volumeSlider && volumeSlider.noUiSlider) {
+        audioStream.volume = volumeSlider.noUiSlider.get() / 100;
+      }
+    } else { // For all monitors
+
+    }
+  }
+};
+
+const getVolumeControls = function(mid=null) {
+  return (mid && !isNaN(mid)) ? document.getElementById('volumeControls'+mid) : document.getElementById('volumeControls');
+};
+
+const getVolumeSlider = function(mid=null) {
+  return (mid && !isNaN(mid)) ? document.getElementById('volumeSlider'+mid) : document.getElementById('volumeSlider');
+};
+
+const getIconMute = function(mid=null) {
+  return (mid && !isNaN(mid)) ? document.getElementById('controlMute'+mid) : document.getElementById('controlMute');
+};
+
+const getAVStream = function(mid) {
+  /*
+  Go2RTC uses <video-stream id='liveStreamXX'><video></video></video-stream>,
+  RTSP2Web uses <video id='liveStreamXX'></video>
+  This.getElement() may need to be changed, but the implications of such a change need to be analyzed
+  */
+  return (document.querySelector('#liveStream'+mid + ' video') || document.getElementById('liveStream'+mid));
+};
+
+const replaceDoubleTildeToBR = function(str) {
+  return (str.replaceAll("~~", "<br/>"));
+};
+
+const createClickableLink = function(text) {
+  const text1=text.replace(/(\b(https?|ftp|file):\/\/[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])/ig, '<a target="_blank" href="$1">$1</a>');
+  return text1.replace(/(^|[^\/])(www\.[\S]+(\b|$))/gim, '$1<a target="_blank" href="http://$2">$2</a>');
 };
 
 // https://stackoverflow.com/a/69273090

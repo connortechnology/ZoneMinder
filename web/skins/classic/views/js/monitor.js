@@ -194,7 +194,7 @@ function initPage() {
     el.onchange = function() {
       const form = document.getElementById('contentForm');
       form.tab.value = 'general';
-      form.submit();
+      saveMonitorDataPrepare(document.getElementById('contentForm'), false, 'reload');
     };
   });
   document.querySelectorAll('input[name="newMonitor[ImageBufferCount]"],input[name="newMonitor[MaxImageBufferCount]"],input[name="newMonitor[Width]"],input[name="newMonitor[Height]"],input[name="newMonitor[PreEventCount]"]').forEach(function(el) {
@@ -309,39 +309,42 @@ function initPage() {
     window.location.assign('?view=console');
   });
 
-  var sourceFormMonitor = $j('#contentForm').serialize();
+  sourceFormMonitor = $j('#contentForm').serialize();
   // Manage the ZONES Button
-  document.getElementById("zones-tab").addEventListener("click", function onZonesClick(evt) {
-    if ($j('#contentForm').serialize() !== sourceFormMonitor) {
-      evt.preventDefault();
-      const data = {
-        request: "modal",
-        modal: "saveconfirm",
-        key: messageSavingDataWhenLeavingPage
-      };
+  const zonesTab = document.getElementById("zones-tab");
+  if (zonesTab) {
+    zonesTab.addEventListener("click", function onZonesClick(evt) {
+      if ($j('#contentForm').serialize() !== sourceFormMonitor) {
+        evt.preventDefault();
+        const data = {
+          request: "modal",
+          modal: "saveconfirm",
+          key: messageSavingDataWhenLeavingPage
+        };
 
-      if (!document.getElementById('saveConfirm')) {
-        // Load the save confirmation modal into the DOM
-        $j.getJSON(thisUrl, data)
-            .done(function(data) {
-              insertModalHtml('saveConfirm', data.html);
-              manageSaveConfirmModalBtns();
-              $j('#saveConfirm').modal('show');
-            })
-            .fail(function(jqXHR) {
-              console.log('error getting saveconfirm', jqXHR);
-              logAjaxFail(jqXHR);
-            });
-        return;
+        if (!document.getElementById('saveConfirm')) {
+          // Load the save confirmation modal into the DOM
+          $j.getJSON(thisUrl, data)
+              .done(function(data) {
+                insertModalHtml('saveConfirm', data.html);
+                manageSaveConfirmModalBtns();
+                $j('#saveConfirm').modal('show');
+              })
+              .fail(function(jqXHR) {
+                console.log('error getting saveconfirm', jqXHR);
+                logAjaxFail(jqXHR);
+              });
+          return;
+        } else {
+          document.getElementById('saveConfirmBtn').disabled = false; // re-enable the button
+          $j('#saveConfirm').modal('show');
+        }
       } else {
-        document.getElementById('saveConfirmBtn').disabled = false; // re-enable the button
-        $j('#saveConfirm').modal('show');
+        const href = '?view=zones&mid='+mid;
+        window.location.assign(href);
       }
-    } else {
-      const href = '?view=zones&mid='+mid;
-      window.location.assign(href);
-    }
-  });
+    });
+  }
 
   // Manage the SAVE CONFIRMATION modal button
   function manageSaveConfirmModalBtns() {
@@ -349,7 +352,7 @@ function initPage() {
     document.getElementById('saveConfirmBtn').addEventListener('click', function onSaveConfirmClick(evt) {
       document.getElementById('saveConfirmBtn').disabled = true; // prevent double click
       evt.preventDefault();
-      saveMonitorData(href);
+      saveMonitorDataPrepare(document.getElementById('contentForm'), true, href);
     });
 
     // Manage the Don't SAVE modal button
@@ -366,21 +369,44 @@ function initPage() {
 
   // Manage the SAVE Button
   document.getElementById("saveBtn").addEventListener("click", function onSaveClick(evt) {
-    const form = document.getElementById('contentForm');
-    if (validateForm(form)) {
-      saveMonitorData();
-    }
+    saveMonitorDataPrepare(document.getElementById('contentForm'), true);
   });
 
   // Manage the SAVE AND CLOSE Button - use AJAX instead of native form
   // submit so Chrome doesn't trigger its "save password" prompt.
   document.getElementById("saveAndCloseBtn").addEventListener("click", function onSaveAndCloseClick(evt) {
-    const form = document.getElementById('contentForm');
-    if (validateForm(form)) {
-      $j('#contentButtons').hide();
-      saveMonitorData('?view=console');
-    }
+    saveMonitorDataPrepare(document.getElementById('contentForm'), true, '?view=console');
   });
+
+  /*
+  * href - Link to follow after saving
+  */
+  function saveMonitorDataPrepare(form, formValidation, href = null) {
+    $j.getJSON(thisUrl, {
+      request: "monitor",
+      action: "validateName",
+      mid: mid,
+      monitorName: form.elements['newMonitor[Name]'].value
+    })
+        .done(function(data) {
+          if (data.response === false) {
+            alert(data.messageBadNameChars.replace(/~~/, '\r\n'));
+          } else if (data.result === 'Error') {
+            alert(data.message);
+          } else {
+            const successfulFormValidation = (formValidation) ? validateForm(form) : true;
+            if (successfulFormValidation) {
+              if (!href || href === '') {
+                saveMonitorData();
+              } else {
+                $j('#contentButtons').hide();
+                saveMonitorData(href);
+              }
+            }
+          }
+        })
+        .fail(logAjaxFail);
+  }
 
   const form = document.getElementById('contentForm');
 
@@ -583,7 +609,38 @@ function initPage() {
       });
     });
   }
+
+  checkVerAudioMotion();
 } // end function initPage()
+
+async function checkVerAudioMotion() {
+  const result = await waitUntil(() => window.CURRENT_AUDIO_MOTION_ANALYZER_VERSION, 20000);
+  if (result === false) {
+    console.warn("Unable to obtain the current version number of audio motion analyzer.");
+    return;
+  }
+  const whatDisplayInfo = document.getElementById("WhatDisplayInfo");
+  whatDisplayInfo.classList.remove("text-success");
+  whatDisplayInfo.classList.remove("text-info");
+  whatDisplayInfo.classList.remove("text-danger");
+
+  if (window.SUPPORTED_AUDIO_MOTION_ANALYZER_VERSION === window.CURRENT_AUDIO_MOTION_ANALYZER_VERSION) {
+    whatDisplayInfo.innerHTML = applyTemplateAudioMotionTranslation(audioMotionVersionOK);
+    whatDisplayInfo.classList.add("text-success");
+  } else if (window.CURRENT_AUDIO_MOTION_ANALYZER_VERSION === "NotInstalled") {
+    whatDisplayInfo.innerHTML = applyTemplateAudioMotionTranslation(audioMotionVersionNotInstalled);
+    whatDisplayInfo.classList.add("text-info");
+  } else { //The versions do not match
+    whatDisplayInfo.innerHTML = applyTemplateAudioMotionTranslation(audioMotionVersionWrongVersion);
+    whatDisplayInfo.classList.add("text-danger");
+  }
+}
+
+function applyTemplateAudioMotionTranslation(str) {
+  str = str.replaceAll('{AudioMotionVersionInstalled}', window.CURRENT_AUDIO_MOTION_ANALYZER_VERSION);
+  str = str.replaceAll('{AudioMotionVersionRequired}', window.SUPPORTED_AUDIO_MOTION_ANALYZER_VERSION);
+  return createClickableLink(replaceDoubleTildeToBR(str));
+}
 
 function saveMonitorData(href = '') {
   const alertBlock = $j("#alertSaveMonitorData");
@@ -596,7 +653,14 @@ function saveMonitorData(href = '') {
     data: form_data,
     success: function() {
       alertBlock.fadeOut({duration: 'fast'});
-      if (href) window.location.assign(href);
+      sourceFormMonitor = $j('#contentForm').serialize();
+      if (href) {
+        if (href == 'reload') {
+          window.location.reload();
+        } else {
+          window.location.assign(href);
+        }
+      }
       //document.getElementById('zones-tab').classList.remove("disabled");
     },
     error: function() {
@@ -946,7 +1010,10 @@ function ControlId_onChange(ddm) {
 function ControlEdit_onClick() {
   const ControlId = document.getElementById('ControlId');
   if (ControlId) {
-    window.location = '?view=controlcap&cid='+ControlId.value;
+    const cid = parseInt(ControlId.value, 10);
+    if (Number.isInteger(cid) && cid > 0) {
+      window.location = '?view=controlcap&cid=' + cid;
+    }
   }
 }
 
@@ -971,6 +1038,7 @@ function ObjectDetection_onChange(od_select) {
     $j('#ObjectDetectionNMSThreshold').show();
     const od_model_select = od_select.form.elements['newMonitor[ObjectDetectionModel]'];
 
+    const previous = od_model_select.value;
     od_model_select.innerHTML = '';
     const choices = od_models[od] || {};
     for (const [key, value] of Object.entries(choices)) {
@@ -978,6 +1046,9 @@ function ObjectDetection_onChange(od_select) {
       opt.value = key; // the index
       opt.innerHTML = value;
       od_model_select.append(opt);
+    }
+    if (previous && Object.prototype.hasOwnProperty.call(od_models[od], previous)) {
+      od_model_select.value = previous;
     }
   } else {
     console.log('unknown object detection:', od);

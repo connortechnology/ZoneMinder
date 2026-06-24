@@ -49,11 +49,12 @@ class Monitor extends ZM_Object {
     'last_write_time'  => [ 'type'=>'time_t64', 'offset'=>128, 'size'=>8 ],
     'last_read_time'   => [ 'type'=>'time_t64', 'offset'=>136, 'size'=>8 ],
     'last_viewed_time' => [ 'type'=>'time_t64', 'offset'=>144, 'size'=>8 ],
-    'control_state'    => [ 'type'=>'uint8[256]', 'offset'=>152, 'size'=>256 ],
-    'alarm_cause'      => [ 'type'=>'int8[256]', 'offset'=>408, 'size'=>256 ],
-    'video_fifo'       => [ 'type'=>'int8[64]', 'offset'=>664, 'size'=>64 ],
-    'audio_fifo'       => [ 'type'=>'int8[64]', 'offset'=>728, 'size'=>64 ],
-    'janus_pin'        => [ 'type'=>'int8[64]', 'offset'=>792, 'size'=>64 ],
+    'last_analysis_viewed_time' => [ 'type'=>'time_t64', 'offset'=>152, 'size'=>8 ],
+    'control_state'    => [ 'type'=>'uint8[256]', 'offset'=>160, 'size'=>256 ],
+    'alarm_cause'      => [ 'type'=>'int8[256]', 'offset'=>416, 'size'=>256 ],
+    'video_fifo'       => [ 'type'=>'int8[64]', 'offset'=>672, 'size'=>64 ],
+    'audio_fifo'       => [ 'type'=>'int8[64]', 'offset'=>736, 'size'=>64 ],
+    'janus_pin'        => [ 'type'=>'int8[64]', 'offset'=>800, 'size'=>64 ],
   ], 
   'TriggerData' => [
     'size'     => [ 'type'=>'uint32', 'offset'=>864, 'size'=>4 ],
@@ -62,7 +63,7 @@ class Monitor extends ZM_Object {
     'padding'  => [ 'type'=>'uint32', 'offset'=>876, 'size'=>4 ],
     'cause'    => [ 'type'=>'int8[32]', 'offset'=>880, 'size'=>32 ],
     'text'     => [ 'type'=>'int8[256]', 'offset'=>912, 'size'=>256 ],
-    'showtext' => [ 'type'=>'int8[256]', 'offset'=>1268, 'size'=>256 ],
+    'showtext' => [ 'type'=>'int8[256]', 'offset'=>1168, 'size'=>256 ],
     // 1424
   ]
   ];
@@ -211,7 +212,7 @@ class Monitor extends ZM_Object {
 
   protected $defaults = array(
     'Id' => null,
-    'Name' => array('type'=>'text','filter_regexp'=>'/[^\w\-\.\(\)\:\/ ]/', 'default'=>'Monitor'),
+    'Name' => array('type'=>'text','filter_regexp'=>'/[^\w\p{L}\p{M}\p{N}\-\.\(\)\:\/ ]/u', 'default'=>'Monitor'),
     'Deleted' => 0,
     'Notes' => '',
     'ServerId' => 0,
@@ -232,6 +233,7 @@ class Monitor extends ZM_Object {
     'ObjectDetectionNMSThreshold' => '0.25',
     'Enabled'   => array('type'=>'boolean','default'=>1),
     'Decoding'  => 'Always',
+    'WhatDisplay'   => 'OnlyVideo',
     'RTSP2WebEnabled'   => array('type'=>'integer','default'=>0),
     'DefaultPlayer' => '',
     'StreamChannel'   => 'Restream',
@@ -378,7 +380,11 @@ class Monitor extends ZM_Object {
     'ArchivedEventDiskSpace' =>  array('type'=>'integer', 'default'=>null, 'do_not_update'=>1),
   );
 
-  protected $Id;
+  public $Id;
+
+  public function getDefaults() {
+    return $this->defaults;
+  }
 
   public function save($data = null) {
     if ($data) $this->set($data);
@@ -399,7 +405,7 @@ class Monitor extends ZM_Object {
     if (!$this->{'JanusEnabled'}) return '';
 
     if ((!defined('ZM_SERVER_ID')) or ( property_exists($this, 'ServerId') and (ZM_SERVER_ID==$this->{'ServerId'}) )) {
-      $cmd = getZmuCommand(' --janus-pin -m '.$this->{'Id'});
+      $cmd = getZmuCommand(' --janus-pin -m '.validCardinal($this->{'Id'}));
       $output = shell_exec($cmd);
       Debug("Running $cmd output: $output");
       return $output ? trim($output) : $output;
@@ -874,6 +880,55 @@ class Monitor extends ZM_Object {
     return true;
   } // end function sendControlCommand($mid, $command)
 
+  // Send an opt-in query command to the local zmcontrol daemon and return the
+  // decoded 'result' it writes back (e.g. a light status). Returns null if no
+  // running daemon, a remote server, or no reply. Fire-and-forget commands are
+  // unaffected; only this path sets wants_response so zmcontrol replies.
+  public function sendControlCommandWithResponse($command) {
+    $options = array();
+    foreach (explode(' ', $command) as $option) {
+      if (preg_match('/--([^=]+)(?:=(.+))?/', $option, $matches)) {
+        $options[$matches[1]] = isset($matches[2]) ? $matches[2] : 1;
+      }
+    }
+    if (!count($options))
+      return null;
+    $options['wants_response'] = 1;
+
+    # Live status is only available from the local recording server's daemon.
+    if (defined('ZM_SERVER_ID') and property_exists($this, 'ServerId') and ZM_SERVER_ID != $this->{'ServerId'})
+      return null;
+
+    $sockFile = ZM_PATH_SOCKS.'/zmcontrol-'.$this->{'Id'}.'.sock';
+    $socket = socket_create(AF_UNIX, SOCK_STREAM, 0);
+    if ($socket < 0) {
+      Error('socket_create() failed: '.socket_strerror($socket));
+      return null;
+    }
+    if (!@socket_connect($socket, $sockFile)) {
+      # No running control daemon to answer.
+      socket_close($socket);
+      return null;
+    }
+    socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, array('sec'=>5, 'usec'=>0));
+    if (!socket_write($socket, jsonEncode($options))) {
+      Error('Cannot write to control socket: '.socket_strerror(socket_last_error($socket)));
+      socket_close($socket);
+      return null;
+    }
+    # Signal end-of-write so zmcontrol's readline completes, but keep reading.
+    socket_shutdown($socket, 1);
+    $response = '';
+    while (($chunk = @socket_read($socket, 4096)) !== false and $chunk !== '') {
+      $response .= $chunk;
+    }
+    socket_close($socket);
+    if ($response === '')
+      return null;
+    $decoded = json_decode($response, true);
+    return (is_array($decoded) and array_key_exists('result', $decoded)) ? $decoded['result'] : null;
+  } // end function sendControlCommandWithResponse($command)
+
   function Groups($new='') {
     if ($new != '')
       $this->Groups = $new;
@@ -1083,6 +1138,7 @@ class Monitor extends ZM_Object {
     $html = '
 <div id="monitorStatus'.$this->Id().'" class="monitorStatus">
   <div class="stream-info">
+    <div class="stream-info-status-track"></div>
     <div class="stream-info-status"></div>
     <div class="stream-info-mode"></div>
   </div>
@@ -1114,6 +1170,21 @@ class Monitor extends ZM_Object {
  */
   function getStreamHTML($options) {
     global $basename;
+    global $view;
+
+    $whatDisplay = null;
+    if (defined('AUDIO_MOTION_ENABLED') && AUDIO_MOTION_ENABLED) {
+      $whatDisplay = (isset($_COOKIE["zmWhatDisplay"])) ? strtolower($_COOKIE["zmWhatDisplay"]) : 'default';
+    } else {
+      $whatDisplay = 'OnlyVideo';
+    }
+    $dataNotDisplayVideo = 'false';
+
+    if (false !== strpos($whatDisplay, 'default')) { // Default monitor settings
+      if (false === (strpos(strtolower($this->WhatDisplay()), 'video'))) $dataNotDisplayVideo = 'true';
+    } else {
+      if (false === (strpos(strtolower($whatDisplay), 'video'))) $dataNotDisplayVideo = 'true';
+    }
 
     if (isset($options['scale']) and $options['scale'] != '' and $options['scale'] != 'fixed') {
       if ($options['scale'] != 'auto' && $options['scale'] != '0') {
@@ -1180,6 +1251,7 @@ class Monitor extends ZM_Object {
               class="monitorStream imageFeed"
               data-monitor-id="'. $this->Id() .'"
               data-width="'. $this->ViewWidth() .'"
+              data-not-display-video="'. $dataNotDisplayVideo .'"
               data-height="'.$this->ViewHeight() .'" style="'.
 #(($options['width'] and ($options['width'] != '0px')) ? 'width: '.$options['width'].';' : '').
 #(($options['height'] and ($options['height'] != '0px')) ? 'height: '.$options['height'].';' : '').
@@ -1275,6 +1347,23 @@ class Monitor extends ZM_Object {
     //if ((!ZM_WEB_COMPACT_MONTAGE) && ($this->Type() != 'WebSite')) {
       $html .= $this->getMonitorStateHTML();
     }
+    $htmlAudioMotion = '
+      <audio-motion id="audioVisualization'.$this->Id().'" class="audio-visualization">
+    '.PHP_EOL;
+    if ($view == 'montage') {
+      $htmlAudioMotion .= '
+        <div id="audioControlPanel'.$this->Id().'" class="audio-control-panel">
+          <div id="volumeControls'.$this->Id().'" class="disabled volume">
+            <div id="volumeSlider'.$this->Id().'" data-volume="50" data-muted="true" class="volumeSlider noUi-horizontal noUi-base noUi-round"></div>
+            <i id="controlMute'.$this->Id().'" class="audio-control-mute material-icons md-22"></i>
+          </div>
+        </div>
+      '.PHP_EOL;
+    }
+    $htmlAudioMotion .= '
+        <canvas></canvas>
+      </audio-motion>'.PHP_EOL;
+    if (defined('AUDIO_MOTION_ENABLED') && AUDIO_MOTION_ENABLED) $html .= $htmlAudioMotion;
     $html .= PHP_EOL.'</div></div><!--.grid-stack-item-content--></div><!--.grid-stack-item-->'.PHP_EOL;
     return $html;
   } // end getStreamHTML

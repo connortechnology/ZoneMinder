@@ -106,6 +106,7 @@ $SLANG = array(
     'AnalysisUpdateDelay'   => 'Analysis Update Delay',
     'AcceptDetection'       => 'Accept',
     'APIEnabled'            => 'API Enabled',
+    'ApplyEncoderTemplate'  => 'Apply template',
     'ApplyingStateChange'   => 'Applying State Change',
     'ArchArchived'          => 'Archived Only',
     'Assigned Users'        => 'Assigned Users',
@@ -144,6 +145,9 @@ $SLANG = array(
     'AttrTotalScore'        => 'Total Score',
     'AttrStartWeekday'      => 'Start Weekday',
     'AttrEndWeekday'        => 'End Weekday',
+    'AudioMotionVersionOK'  => 'Correct version installed "{AudioMotionVersionInstalled}"',
+    'AudioMotionVersionNotInstalled' => 'Requires audio motion analyzer version "{AudioMotionVersionRequired}" to be installed~~Download link: https://cdn.jsdelivr.net/npm/audiomotion-analyzer@{AudioMotionVersionRequired} or https://github.com/hvianna/audioMotion-analyzer/releases/tag/{AudioMotionVersionRequired}',
+    'AudioMotionVersionWrongVersion' => 'The required analyzer version is "{AudioMotionVersionRequired}", but you have "{AudioMotionVersionInstalled}" installed~~Download link: https://cdn.jsdelivr.net/npm/audiomotion-analyzer@{AudioMotionVersionRequired} or https://github.com/hvianna/audioMotion-analyzer/releases/tag/{AudioMotionVersionRequired}',
     'Auth'                  => 'Authentication',
     'AutoStopTimeout'       => 'Auto Stop Timeout',
     'AvgBrScore'            => 'Avg.<br/>Score',
@@ -165,7 +169,8 @@ $SLANG = array(
     'BadLabelX'             => 'Label X co-ordinate must be set to an integer of zero or more',
     'BadLabelY'             => 'Label Y co-ordinate must be set to an integer of zero or more',
     'BadMaxFPS'             => 'Maximum FPS must be a positive integer or floating point value',
-    'BadNameChars'          => 'Names may only contain alphanumeric characters plus spaces, hyphen and underscore',
+    'BadNameChars'          => 'Names may only contain letters, numbers, parentheses, slashes, and the space, period, minus, colon, and underscore characters.',
+    'BadNameCharsList'      => 'The monitor name contains invalid characters, such as:',
     'BadPalette'            => 'Palette must be set to a valid value',
     'BadColours'            => 'Target colour must be set to a valid value',
     'BadPassthrough'        => 'Recording -> Passthrough only works with ffmpeg type monitors.',
@@ -223,6 +228,9 @@ $SLANG = array(
     'CanWhiteBal'           => 'Can White Bal.',
     'CanWhite'              => 'Can White Balance',
     'CanWhiteCon'           => 'Can White Bal. Continuous',
+    'CanLight'              => 'Can Light',
+    'CanIndicatorLight'     => 'Can Indicator Light',
+    'Indicator'             => 'Indicator',
     'CanWhiteRel'           => 'Can White Bal. Relative',
     'CanZoomAbs'            => 'Can Zoom Absolute',
     'CanZoom'               => 'Can Zoom',
@@ -254,11 +262,23 @@ $SLANG = array(
     'ConfirmClearLogs'      => 'Are you sure you wish to delete the selected log entries?',
     'ConfirmClearLogsTitle' => 'Clear Logs Confirmation',
     'ConfirmDeleteControl'  => 'Warning, deleting a control will reset all monitors that use it to be uncontrollable.<br><br>Are you sure you wish to delete?',
+    'ConfirmDeleteFiles'    => 'Are you sure you wish to delete the selected files?',
+    'ConfirmDeleteGroups'   => 'Are you sure you wish to delete the selected groups?',
     'ConfirmDeleteDevices'  => 'Are you sure you wish to delete the selected devices?',
     'ConfirmDeleteEvents'   => 'Are you sure you wish to delete the selected events?',
     'ConfirmDeleteTrainingData' => 'This will permanently delete ALL training data (images, labels, and class definitions). Type agree to confirm:',
     'ConfirmDeleteLayout'   => 'Are you sure you wish to delete current layout?',
     'ConfirmDeleteTitle'    => 'Delete Confirmation',
+    'ConfirmDeleteUserTitle'=> 'Confirm User Deletion',
+    'ConfirmDeleteUser'     => 'Are you sure you wish to delete the selected users?',
+    'ConfirmDeleteServerTitle'=> 'Confirm Server Deletion',
+    'ConfirmDeleteServer'   => 'Are you sure you wish to delete the selected servers?',
+    'ConfirmDeleteReport'   => 'Are you sure you wish to delete the selected reports?',
+    'ConfirmDeleteStorage'  => 'Are you sure you wish to delete the selected storages?',
+    'ConfirmDeleteStorageTitle'=> 'Confirm Storage Deletion',
+    'ConfirmDeleteRole'     => 'Are you sure you wish to delete the selected roles?',
+    'ConfirmDeleteRoleTitle'=> 'Confirm Role Deletion',
+    'ConfirmDeleteSnapshots'=> 'Are you sure you wish to delete the selected snapshots?',
     'ConfirmPassword'       => 'Confirm Password',
     'ConfirmUnarchiveEvents'=> 'Are you sure you wish to unarchive the selected events?',
     'ConjAnd'               => 'and',
@@ -304,10 +324,19 @@ $SLANG = array(
     'EditControl'           => 'Edit Control',
     'EditLayout'            => 'Edit Layout',
     'EnableAlarms'          => 'Enable Alarms',
+    'EncoderTemplate'       => 'Encoder Template',
+    'EncoderTemplates'      => 'Encoder Templates',
+    'EncoderTemplatesDescription' => 'Curated parameter sets for ffmpeg encoders. Apply one to a monitor\'s Encoder Parameters from the monitor edit page.',
+    'EditEncoderTemplate'   => 'Edit Encoder Template',
+    'NewEncoderTemplate'    => 'New Encoder Template',
+    'AddNewEncoderTemplate' => 'Add New Template',
+    'AllEncoders'           => 'All Encoders',
+    'FilterByEncoder'       => 'Filter by Encoder',
     'EnterNewFilterName'    => 'Enter new filter name',
     'Enter password for QR code' => 'Enter password for QR code',
     'ErrorBrackets'         => 'Error, please check you have an equal number of opening and closing brackets',
     'ErrorValidValue'       => 'Error, please check that all terms have a valid value',
+    'ErrorVerifyingMonitorName'=> 'Unable to verify the monitor name because the name is missing',
     'Etc'                   => 'etc',
     'EventFilter'           => 'Event Filter',
     'EventId'               => 'Event Id',
@@ -383,6 +412,7 @@ $SLANG = array(
     'Highband'              => 'High&nbsp;B/W',
     'ImageBufferSize'       => 'Image Buffer Size (frames)',
     'ImagesPerClass'        => 'Images per class',
+    'InsufficientPermissionsUser'=> 'Insufficient permissions for user',
     'MaxImageBufferCount'   => 'Maximum Image Buffer Size (frames)',
     'InvalidateTokens'      => 'Invalidate all generated tokens',
     'KeyString'             => 'Key String',
@@ -609,6 +639,8 @@ $SLANG = array(
     'ReplayGapless'         => 'Gapless Events',
     'ReplaySingle'          => 'Single Event',
     'ReportEventAudit'      => 'Audit Events Report',
+    'RequestMissing'        => 'The request is missing',
+    'RequiresAudioMotionEnabled' => 'Requires installation of the file "audioMotion-analyzer.js"',
     'ResetEventCounts'      => 'Reset Event Counts',
     'RestrictedCameraIds'   => 'Restricted Camera Ids',
     'RestrictedMonitors'    => 'Restricted Monitors',
@@ -675,6 +707,7 @@ $SLANG = array(
     'StorageScheme'         => 'Scheme',
     'StreamReplayBuffer'    => 'Stream Replay Image Buffer',
     'TargetColorspace'      => 'Target colorspace',
+    'DeprecatedColoursSetting' => 'Deprecated - will be auto-detected in a future release',
     'TimeDelta'             => 'Time Delta',
     'TimelineTip1'          => 'Pass your mouse over the graph to view a snapshot image and event details.',              // Added 2013.08.15.
     'TimelineTip2'          => 'Click on the coloured sections of the graph, or the image, to view the event.',              // Added 2013.08.15.
@@ -736,6 +769,7 @@ $SLANG = array(
     'TurboPanSpeed'         => 'Turbo Pan Speed',
     'TurboTiltSpeed'        => 'Turbo Tilt Speed',
     'TZUnset'               => 'Unset - use value in php.ini',
+    'UnrecognisedAction'    => 'Unrecognised action',
     'UpdateAvailable'       => 'An update to ZoneMinder is available.',
     'UpdateNotNecessary'    => 'No update is necessary.',
     'UsedPlugins'	          => 'Used Plugins',
@@ -869,16 +903,18 @@ $VLANG = array(
 //
 // In languages such as English this is fairly simple
 // Note this still has to be used with printf etc to get the right formatting
-function zmVlang($langVarArray, $count) {
-  krsort($langVarArray);
-  foreach ($langVarArray as $key=>$value) {
-    if (abs($count) >= $key) {
-      return $value;
+if (!function_exists('zmVlang')) {
+  // To avoid overriding the function, this file may be loaded alongside another language translation file.
+  function zmVlang($langVarArray, $count) {
+    krsort($langVarArray);
+    foreach ($langVarArray as $key=>$value) {
+      if (abs($count) >= $key) {
+        return $value;
+      }
     }
+    ZM\Error('Unable to correlate variable language string');
   }
-  ZM\Error('Unable to correlate variable language string');
 }
-
 // This is an version that could be used in the Russian example above
 // The rules are that the first word form is used if the count ends in
 // 0, 5-9 or 11-19. The second form is used then the count ends in 1
@@ -1060,6 +1096,11 @@ Always: A zmc process will run and immediately connect and stay connected.~~~~
      is set to "my_camera", access the stream at rtsp://ZM_HOST:20006/my_camera
      ',
     ),
+  'OPTIONS_WHATTODISPLAY' => array(
+     'Help' => '
+     On the Watch, Montage, Event page, you can display either a video stream, or an audio stream visualization, or both a video stream and an audio visualization.
+     ',
+    ),
   'FUNCTION_ANALYSIS_ENABLED' => array(
     'Help' => '
       When to perform motion detection on the captured video.  
@@ -1154,6 +1195,15 @@ None: No frames will be decoded, live view and thumbnails will not be available~
      - SceneTemperature~~
      - Tamper~~
      For more details, see the instructions for your camera, as well as the specifications at the link:~~https://www.onvif.org/specs/core/ONVIF-Core-Specification.pdf
+    '
+   ),
+   'OPTIONS_WHATTODISPLAY' => array(
+    'Help' => '
+     Audio motion visualization can be displayed on the Montage, Watch, and Event pages.~~
+     To do this, install the file "/skins/MySkin/assets/audioMotion-analyzer/src/audioMotion-analyzer.js".~~
+     This file can be downloaded from the following links:~~
+     https://cdn.jsdelivr.net/npm/audiomotion-analyzer@X.X.X where X.X.X is the version number~~
+     https://github.com/hvianna/audioMotion-analyzer/releases
     '
    ),
   'ZM_OPT_TRAINING' => array(

@@ -231,6 +231,13 @@ if ( empty($_REQUEST['path']) ) {
       ZM\Error('Event '.$_REQUEST['eid'].' Not found');
       return;
     }
+    // Per-event ACL: coarse Events/Snapshots role isn't enough, must also check
+    // monitor-level permission (GHSA-vj5r-pc2v-gfwv). 404 to avoid leaking the id.
+    if (!$Event->canView()) {
+      header('HTTP/1.0 404 Not Found');
+      ZM\Warning('Event '.$_REQUEST['eid'].' access denied');
+      return;
+    }
 
     if ( $_REQUEST['fid'] == 'objdetect' ) {
       // if animation file is found, return that, else return image
@@ -336,7 +343,11 @@ if ( empty($_REQUEST['path']) ) {
           $path = $Event->Path().'/'.sprintf('%0'.ZM_EVENT_IMAGE_DIGITS.'d', $Frame->FrameId()).'-'.$show.'.jpg';
         } else {
           if ( $Event->DefaultVideo() ) {
-            $file_path = $Event->Path().'/'.$Event->DefaultVideo();
+            if($Event->DefaultVideo() !== 'index.m3u8') {
+              $file_path = $Event->Path().'/'.$Event->DefaultVideo();
+            } else {
+              $file_path = $Event->Path().'/'.find_video($Event->Path());
+            }
 
             if (!file_exists($file_path)) {
               if ($file = find_video($Event->Path())) {
@@ -357,7 +368,7 @@ if ( empty($_REQUEST['path']) ) {
               $retval = 0;
               exec($command, $output, $retval);
               ZM\Debug("Command: $command, retval: $retval, output: " . implode("\n", $output));
-              if ( ! file_exists($path) ) {
+              if ( $Event->DefaultVideo() !== 'index.m3u8' && ! file_exists($path) ) {
                 header('HTTP/1.0 404 Not Found');
                 ZM\Error('Can\'t create frame images from video for this event '.$Event->DefaultVideo().'
 
@@ -414,6 +425,13 @@ if ( empty($_REQUEST['path']) ) {
       ZM\Error('Event ' . $Frame->EventId() . ' Not Found');
       return;
     }
+    // Per-event ACL: see GHSA-vj5r-pc2v-gfwv. The frame id is user-supplied so the
+    // event/monitor it resolves to may be one the user is denied from viewing.
+    if (!$Event->canView()) {
+      header('HTTP/1.0 404 Not Found');
+      ZM\Warning('Event '.$Frame->EventId().' access denied via frame '.$_REQUEST['fid']);
+      return;
+    }
     $path = $Event->Path().'/'.sprintf('%0'.ZM_EVENT_IMAGE_DIGITS.'d',$Frame->FrameId()).'-'.$show.'.jpg';
   } # end if have eid
     
@@ -447,7 +465,7 @@ if ( empty($_REQUEST['path']) ) {
       $retval = 0;
       exec($command, $output, $retval);
       ZM\Debug("Command: $command, retval: $retval, output: " . implode("\n", $output));
-      if ( ! file_exists($path) ) {
+      if ($Event->DefaultVideo() !== 'index.m3u8' && ! file_exists($path) ) {
         header('HTTP/1.0 404 Not Found');
         $message = 'Can\'t create frame images from video for this event '.$Event->DefaultVideo().'
 
@@ -506,6 +524,11 @@ if ( $errorText ) {
   ZM\Error($errorText);
 } else {
   # Must lock it because zmc may be still writing the jpg and will have a lock on it.
+  if (!file_exists($path)) {
+    header('HTTP/1.0 404 Not Found');
+    ZM\Warning("File '$path' cannot be locked because it does not exist.");
+    return;
+  }
   $fp_path = fopen($path, 'r');
   $lock = flock($fp_path, LOCK_SH);
   if (!$lock) ZM\Warning("Unable to get a read lock on $path, continuing.");

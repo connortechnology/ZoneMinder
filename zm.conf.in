@@ -65,6 +65,10 @@ ZM_HAVE_QUADRA=@HAVE_QUADRA@
 # Whether Intel OpenVINO support was found at build time
 ZM_HAVE_OPENVINO=@HAVE_OPENVINO@
 
+# Verify the database server's SSL certificate against the CA (only applies when
+# ZM_DB_SSL_CA_CERT is set). Set to 0 to allow a self-signed server certificate.
+ZM_DB_SSL_VERIFY_SERVER_CERT=@ZM_DB_SSL_VERIFY_SERVER_CERT@
+
 # Do NOT set ZM_SERVER_HOST if you are not using Multi-Server
 # You have been warned
 #

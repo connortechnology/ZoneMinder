@@ -20,6 +20,8 @@
 
 #include "zm_logger.h"
 #include "zm_signal.h"
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <unistd.h>
 
@@ -47,6 +49,34 @@ bool zmDbConnect() {
     mysql_options(&dbconn, MYSQL_OPT_SSL_KEY,    staticConfig.DB_SSL_CLIENT_KEY.c_str());
     mysql_options(&dbconn, MYSQL_OPT_SSL_CERT,   staticConfig.DB_SSL_CLIENT_CERT.c_str());
     mysql_options(&dbconn, MYSQL_OPT_SSL_CA,     staticConfig.DB_SSL_CA_CERT.c_str());
+
+    // Whether to verify the server certificate. When enabled this is full
+    // identity verification (the certificate must chain to the CA and its
+    // CN/SAN must match the host we connect to), matching the PHP and Perl
+    // layers which only offer an identity-checking verify flag. Set
+    // ZM_DB_SSL_VERIFY_SERVER_CERT to 0/false/no/off to allow a self-signed or
+    // non-matching server certificate. An empty/unset value leaves the client
+    // library default in place so existing installs are not changed on upgrade.
+    // The controlling option differs by client library: MySQL 8.0 removed
+    // MYSQL_OPT_SSL_VERIFY_SERVER_CERT in favour of MYSQL_OPT_SSL_MODE, while
+    // older MariaDB/MySQL only have the former, so CMake feature-detects which
+    // is available.
+    std::string verify_value = staticConfig.DB_SSL_VERIFY_SERVER_CERT;
+    std::transform(verify_value.begin(), verify_value.end(), verify_value.begin(),
+        [](unsigned char c) { return std::tolower(c); });
+    if (!verify_value.empty()) {
+      bool verify_server_cert = !(verify_value == "0" || verify_value == "false"
+          || verify_value == "no" || verify_value == "off");
+#if defined(HAVE_MYSQL_OPT_SSL_MODE)
+      unsigned int ssl_mode = verify_server_cert ? SSL_MODE_VERIFY_IDENTITY : SSL_MODE_REQUIRED;
+      mysql_options(&dbconn, MYSQL_OPT_SSL_MODE, &ssl_mode);
+#elif defined(HAVE_MYSQL_OPT_SSL_VERIFY_SERVER_CERT)
+      // This branch only compiles on clients without MYSQL_OPT_SSL_MODE (older
+      // MariaDB/MySQL), where my_bool is the expected argument type and defined.
+      my_bool verify_flag = verify_server_cert ? 1 : 0;
+      mysql_options(&dbconn, MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &verify_flag);
+#endif
+    }
   }
 
   std::string::size_type colonIndex = staticConfig.DB_HOST.find(":");
@@ -98,7 +128,14 @@ bool zmDbConnect() {
   if (mysql_query(&dbconn, "SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED")) {
     Error("Can't set isolation level: %s", mysql_error(&dbconn));
   }
-  mysql_set_character_set(&dbconn, "utf8");
+  // Use utf8mb4 so the connection can carry the full Unicode range. The "utf8"
+  // alias is only 3-byte utf8mb3, which mangles 4-byte characters (e.g. emoji
+  // and supplementary-plane scripts) in utf8mb4 columns like Monitors.Name to
+  // '?' on both read and write. refs #4785
+  if (mysql_set_character_set(&dbconn, "utf8mb4")) {
+    Warning("Can't set connection character set to utf8mb4, falling back to utf8: %s", mysql_error(&dbconn));
+    mysql_set_character_set(&dbconn, "utf8");
+  }
   db_thread_id = mysql_thread_id(&dbconn);
   zmDbConnected = true;
   return zmDbConnected;
@@ -189,10 +226,18 @@ MYSQL_RES *zmDbRow::fetch(const std::string &query) {
   return result_set;
 }
 
-/* performs SQL queries.  Will repeat if error is LOCK_WAIT_TIMEOUT
+/* performs SQL queries.  Retries on lock contention (deadlock victim or
+ * lock-wait timeout) up to kMaxContentionRetries with exponential backoff.
  * We assume that in general our SQL is properly formed, so errors will
  * be due to external factors.
  */
+
+static constexpr int kMaxContentionRetries = 5;
+
+// 50ms * 2^attempt + up to 50ms jitter. attempt 1 ~= 100ms, attempt 5 ~= 1.6s.
+static useconds_t contention_backoff_us(int attempt) {
+  return 50000u * (1u << attempt) + (rand() % 50000);
+}
 
 int zmDbDo(const std::string &query) {
   std::lock_guard<std::mutex> lck(db_mutex);
@@ -203,8 +248,11 @@ int zmDbDo(const std::string &query) {
   Logger::Level oldLevel = logger->databaseLevel();
   logger->databaseLevel(Logger::NOLOG);
 
+  int contention_retries = 0;
+
   while ((rc = mysql_query(&dbconn, query.c_str())) and !zm_terminate) {
     std::string reason = mysql_error(&dbconn);
+    unsigned int err = mysql_errno(&dbconn);
     Debug(1, "Failed running sql query %s, thread_id: %lu, %d %s", query.c_str(), db_thread_id, rc, reason.c_str());
 
     if (mysql_ping(&dbconn)) {
@@ -217,14 +265,23 @@ int zmDbDo(const std::string &query) {
         logger->databaseLevel(oldLevel);
         return 0;
       }
-    } else {
-      // Not a connection error
-      Error("Can't run query %s: %d %s", query.c_str(), rc, reason.c_str());
-      if (mysql_errno(&dbconn) != ER_LOCK_WAIT_TIMEOUT) {
-        logger->databaseLevel(oldLevel);
-        return rc;
-      }
-    } // end if !connected
+      continue;
+    }
+
+    // Not a connection error. Retry lock contention with backoff; otherwise give up.
+    if ((err == ER_LOCK_DEADLOCK or err == ER_LOCK_WAIT_TIMEOUT)
+        and contention_retries < kMaxContentionRetries) {
+      contention_retries++;
+      useconds_t us = contention_backoff_us(contention_retries);
+      Debug(1, "Lock contention (errno=%u) on '%s', retry %d/%d after %u us",
+            err, query.c_str(), contention_retries, kMaxContentionRetries, us);
+      usleep(us);
+      continue;
+    }
+
+    Error("Can't run query %s: %d %s", query.c_str(), rc, reason.c_str());
+    logger->databaseLevel(oldLevel);
+    return rc;
   }
 
   Debug(1, "Success running sql query %s, thread_id: %lu", query.c_str(), db_thread_id);

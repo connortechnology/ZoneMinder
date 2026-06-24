@@ -61,7 +61,7 @@ VideoStore::VideoStore(
   resample_ctx(nullptr),
   fifo(nullptr),
   converted_in_samples(nullptr),
-  filename(filename_in),
+  filename(filename_in ? filename_in : ""),
   format(format_in),
   video_first_pts(AV_NOPTS_VALUE),
   video_first_dts(AV_NOPTS_VALUE),
@@ -75,7 +75,9 @@ VideoStore::VideoStore(
   reorder_queue_size(0),
   last_fragment_offset_(0),
   last_fragment_start_dts_(AV_NOPTS_VALUE),
-  init_segment_end_(0) {
+  init_segment_end_(0),
+  finalized_(false),
+  write_packet_failed_(false) {
   FFMPEGInit();
   swscale.init();
   opkt = av_packet_ptr{av_packet_alloc()};
@@ -83,24 +85,24 @@ VideoStore::VideoStore(
 
 /* Failure to open audio will not be a total failure. */
 bool VideoStore::open() {
-  Debug(1, "Opening video storage stream %s format: %s", filename, format);
+  Debug(1, "Opening video storage stream %s format: %s", filename.c_str(), format);
 
-  int ret = avformat_alloc_output_context2(&oc, nullptr, nullptr, filename);
+  int ret = avformat_alloc_output_context2(&oc, nullptr, nullptr, filename.c_str());
   if (ret < 0) {
     Warning(
       "Could not create video storage stream %s as no out ctx"
       " could be assigned based on filename: %s",
-      filename, av_make_error_string(ret).c_str());
+      filename.c_str(), av_make_error_string(ret).c_str());
   }
 
   // Couldn't deduce format from filename, trying from format name
   if (!oc) {
-    avformat_alloc_output_context2(&oc, nullptr, format, filename);
+    avformat_alloc_output_context2(&oc, nullptr, format, filename.c_str());
     if (!oc) {
       Error(
         "Could not create video storage stream %s as no out ctx"
         " could not be assigned based on filename or format %s",
-        filename, format);
+        filename.c_str(), format);
       return false;
     }
   } // end if ! oc
@@ -158,16 +160,30 @@ bool VideoStore::open() {
       if (orientation > 1) { // 1 is ROTATE_0
 #if LIBAVCODEC_VERSION_CHECK(59, 37, 100, 37, 100)
         int32_t* displaymatrix = static_cast<int32_t*>(av_malloc(sizeof(int32_t)*9));
+        // Initialise to identity so the matrix is always fully written before
+        // it is attached as side data; av_display_rotation_set(.,0) yields the
+        // identity matrix.
+        av_display_rotation_set(displaymatrix, 0);
         Debug(3, "Have orientation %d", orientation);
-        if (orientation == Monitor::ROTATE_0) {
-        } else if (orientation == Monitor::ROTATE_90) {
-          av_display_rotation_set(displaymatrix, 90);
-        } else if (orientation == Monitor::ROTATE_180) {
-          av_display_rotation_set(displaymatrix, 180);
-        } else if (orientation == Monitor::ROTATE_270) {
-          av_display_rotation_set(displaymatrix, 270);
-        } else {
-          Warning("Unsupported Orientation(%d)", orientation);
+        switch (orientation) {
+          case Monitor::ROTATE_90:
+            av_display_rotation_set(displaymatrix, 90);
+            break;
+          case Monitor::ROTATE_180:
+            av_display_rotation_set(displaymatrix, 180);
+            break;
+          case Monitor::ROTATE_270:
+            av_display_rotation_set(displaymatrix, 270);
+            break;
+          case Monitor::FLIP_HORI:
+            av_display_matrix_flip(displaymatrix, 1, 0);
+            break;
+          case Monitor::FLIP_VERT:
+            av_display_matrix_flip(displaymatrix, 0, 1);
+            break;
+          default:
+            Warning("Unsupported Orientation(%d)", orientation);
+            break;
         }
 #endif
 #if LIBAVCODEC_VERSION_CHECK(60, 31, 102, 31, 102)
@@ -184,18 +200,23 @@ bool VideoStore::open() {
 					sizeof(int32_t) * 9);
 #endif
 #endif
-        if (orientation == Monitor::ROTATE_0) {
-        } else if (orientation == Monitor::ROTATE_90) {
-          ret = av_dict_set(&video_out_stream->metadata, "rotate", "90", 0);
-          if (ret < 0) Warning("%s:%d: title set failed", __FILE__, __LINE__);
-        } else if (orientation == Monitor::ROTATE_180) {
-          ret = av_dict_set(&video_out_stream->metadata, "rotate", "180", 0);
-          if (ret < 0) Warning("%s:%d: title set failed", __FILE__, __LINE__);
-        } else if (orientation == Monitor::ROTATE_270) {
-          ret = av_dict_set(&video_out_stream->metadata, "rotate", "270", 0);
-          if (ret < 0) Warning("%s:%d: title set failed", __FILE__, __LINE__);
-        } else {
-          Warning("Unsupported Orientation(%d)", orientation);
+        // The legacy "rotate" metadata tag only expresses rotation. Flips are
+        // carried by the display matrix side data above, so don't warn for them.
+        switch (orientation) {
+          case Monitor::ROTATE_90:
+            ret = av_dict_set(&video_out_stream->metadata, "rotate", "90", 0);
+            if (ret < 0) Warning("%s:%d: title set failed", __FILE__, __LINE__);
+            break;
+          case Monitor::ROTATE_180:
+            ret = av_dict_set(&video_out_stream->metadata, "rotate", "180", 0);
+            if (ret < 0) Warning("%s:%d: title set failed", __FILE__, __LINE__);
+            break;
+          case Monitor::ROTATE_270:
+            ret = av_dict_set(&video_out_stream->metadata, "rotate", "270", 0);
+            if (ret < 0) Warning("%s:%d: title set failed", __FILE__, __LINE__);
+            break;
+          default:
+            break;
         }
       } // end if orientation
 
@@ -308,13 +329,12 @@ bool VideoStore::open() {
 
         // When encoding, we are going to use the timestamp values instead of packet pts/dts
         video_out_ctx->time_base = AV_TIME_BASE_Q;
-        // Set framerate from input context or stream
-        if (video_in_ctx && video_in_ctx->framerate.num) {
+        // Set framerate from input context or stream. video_in_ctx->framerate
+        // has already been sanitized upstream in Monitor::Decode().
+        if (video_in_ctx && video_in_ctx->framerate.num > 0) {
           video_out_ctx->framerate = video_in_ctx->framerate;
-        } else if (video_in_stream && video_in_stream->r_frame_rate.num) {
-          video_out_ctx->framerate = video_in_stream->r_frame_rate;
-        } else if (video_in_stream && video_in_stream->avg_frame_rate.num) {
-          video_out_ctx->framerate = video_in_stream->avg_frame_rate;
+        } else {
+          video_out_ctx->framerate = get_sane_framerate(video_in_stream);
         }
         Debug(1, "Setting framerate to %d/%d", video_out_ctx->framerate.num, video_out_ctx->framerate.den);
         video_out_ctx->codec_id = chosen_codec_data->codec_id;
@@ -395,16 +415,18 @@ bool VideoStore::open() {
 
         zm_dump_codec(video_out_ctx);
         if ((ret = avcodec_open2(video_out_ctx, video_out_codec, &opts)) < 0) {
+          // In auto mode, every failure here is a fallback step — promote to
+          // Info so the trail is visible without enabling debug logging.
           if (wanted_encoder != "" and wanted_encoder != "auto") {
             Warning("Can't open video codec (%s) %s",
                     video_out_codec->name,
                     av_make_error_string(ret).c_str()
                    );
           } else {
-            Debug(1, "Can't open video codec (%s) %s",
-                  video_out_codec->name,
-                  av_make_error_string(ret).c_str()
-                 );
+            Info("Can't open video codec (%s) %s — trying next",
+                 video_out_codec->name,
+                 av_make_error_string(ret).c_str()
+                );
           }
           video_out_codec = nullptr;
         }
@@ -416,6 +438,7 @@ bool VideoStore::open() {
         av_dict_free(&opts);
 
         if (video_out_codec) {
+          Info("Selected video encoder %s", video_out_codec->name);
           zm_dump_codec(video_out_ctx);
           break;
         }
@@ -433,6 +456,10 @@ bool VideoStore::open() {
       Debug(2, "Success opening codec");
 
       video_out_stream = avformat_new_stream(oc, nullptr);
+      if (!video_out_stream) {
+        Error("Unable to create video out stream");
+        return false;
+      }
       ret = avcodec_parameters_from_context(video_out_stream->codecpar, video_out_ctx);
       if (ret < 0) {
         Error("Could not initialize stream parameters");
@@ -554,9 +581,9 @@ bool VideoStore::open() {
 
   /* open the out file, if needed */
   if (!(out_format->flags & AVFMT_NOFILE)) {
-    ret = avio_open2(&oc->pb, filename, AVIO_FLAG_WRITE, nullptr, nullptr);
+    ret = avio_open2(&oc->pb, filename.c_str(), AVIO_FLAG_WRITE, nullptr, nullptr);
     if (ret < 0) {
-      Error("Could not open out file '%s': %s", filename, av_make_error_string(ret).c_str());
+      Error("Could not open out file '%s': %s", filename.c_str(), av_make_error_string(ret).c_str());
       return false;
     }
   }
@@ -596,7 +623,7 @@ bool VideoStore::open() {
   av_dict_free(&opts);
   if (ret < 0) {
     Error("Error occurred when writing out file header to %s: %s",
-          filename, av_make_error_string(ret).c_str());
+          filename.c_str(), av_make_error_string(ret).c_str());
     avio_closep(&oc->pb);
     return false;
   }
@@ -726,49 +753,11 @@ Debug(1, "Done flushing");
 
 VideoStore::~VideoStore() {
 
-  for (auto &n : reorder_queues) {
-    auto &queue = n.second;
-    Debug(1, "Queue for %d length is %zu", n.first, queue.size());
-    while (!queue.empty()) {
-      auto pkt = queue.front();
-      queue.pop_front();
-      if (pkt->codec_type == AVMEDIA_TYPE_VIDEO) {
-        writeVideoFramePacket(pkt);
-      } else if (pkt->codec_type == AVMEDIA_TYPE_AUDIO) {
-        writeAudioFramePacket(pkt);
-      }
-      //delete pkt;
-    }
-  }
-
-  if (oc->pb) {
-    flush_codecs();
-
-    // Flush Queues
-    Debug(4, "Flushing interleaved queues");
-    av_interleaved_write_frame(oc, nullptr);
-
-    Debug(1, "Writing trailer");
-    /* Write the trailer before close */
-    int rc;
-    if ((rc = av_write_trailer(oc)) < 0) {
-      Error("Error writing trailer %s", av_err2str(rc));
-    } else {
-      Debug(3, "Success Writing trailer");
-    }
-
-    // When will we not be using a file ?
-    if (!(out_format->flags & AVFMT_NOFILE)) {
-      /* Close the out file. */
-      Debug(4, "Closing");
-      if ((rc = avio_close(oc->pb)) < 0) {
-        Error("Error closing avio %s", av_err2str(rc));
-      }
-    } else {
-      Debug(3, "Not closing avio because we are not writing to a file.");
-    }
-    oc->pb = nullptr;
-  }  // end if oc->pb
+  // Run the shutdown path through finalize() so the queue-drain / trailer /
+  // close logic lives in one place. finalize() is idempotent and bails early
+  // if oc was never allocated, so the legacy "caller didn't call finalize"
+  // path and the open()-failed-before-allocating-oc path both work.
+  finalize();
 
   // I wonder if we should be closing the file first.
   // I also wonder if we really need to be doing all the ctx
@@ -1247,6 +1236,14 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
            ) {
           zm_packet->image->PopulateFrame(zm_packet->out_frame.get());
         } else {
+          Debug(2, "converting");
+          zm_packet->get_out_frame(video_out_ctx->width, video_out_ctx->height, chosen_codec_data->sw_pix_fmt);
+          av_frame_ref(frame.get(), zm_packet->out_frame.get());
+
+          // The destination is out_frame's buffer, which get_out_frame laid
+          // out at alignment (width % 32 ? 1 : 32) — mirror that choice here
+          // so sws writes the layout the encoder will read via
+          // out_frame->linesize.
           swscale.Convert(
               zm_packet->image,
               zm_packet->out_frame->buf[0]->data,
@@ -1254,7 +1251,8 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
               zm_packet->image->AVPixFormat(),
               chosen_codec_data->sw_pix_fmt,
               video_out_ctx->width,
-              video_out_ctx->height
+              video_out_ctx->height,
+              (video_out_ctx->width % 32) ? 1 : 32
               );
         }
       } else if (zm_packet->ai_frame) {
@@ -1297,6 +1295,21 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
         }
       } // end if no in_frame
     } // end if no out_frame
+
+    // If decode failed upstream (e.g. NetInt Quadra EIO from av_hwframe_transfer_data
+    // nulled zm_packet->in_frame in zm_packet.cpp), none of the branches above
+    // populated `frame`. Skip this packet rather than handing AV_PIX_FMT_NONE to
+    // the encoder's hwframe uploader — NI rejects it with EINVAL and the daemon
+    // marks the encoder permanently failed on what is really a single-frame glitch.
+    if (frame->format == AV_PIX_FMT_NONE || !frame->buf[0]) {
+      Debug(1,
+            "No usable input frame for packet (in_frame=%p out_frame=%p hw_frame=%p ai_frame=%p) — skipping encode",
+            (void*)zm_packet->in_frame.get(),
+            (void*)zm_packet->out_frame.get(),
+            (void*)zm_packet->hw_frame.get(),
+            (void*)zm_packet->ai_frame.get());
+      return 0;
+    }
 
     zm_dump_video_frame(frame.get(), "frame before hwaccel check");
     Debug(1, "Encoder: pix_fmt=%d %s sw_pix_fmt=%d %s, frame format=%d %s, hw_frames_ctx=%p, color_range=%d",
@@ -1425,27 +1438,28 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
 
     // Drain any pending packets from the encoder before sending a new frame.
     // VAAPI encoders can accumulate output packets; not draining before send
-    // can exhaust the internal surface pool and trigger an abort.
-    {
-      AVPacket *drain_pkt = av_packet_alloc();
-      while (drain_pkt) {
-        int drain_ret = avcodec_receive_packet(video_out_ctx, drain_pkt);
-        if (drain_ret == 0) {
-          Debug(3, "Drained buffered packet from encoder before send");
-          av_packet_unref(drain_pkt);
-          continue;
-        }
-        break;
+    // can exhaust the internal surface pool and trigger an abort. Skip on a
+    // fresh context — NetInt Quadra returns EIO (-5) and logs "encoder read
+    // retval -5" if receive_packet is called before the first send_frame
+    // opens the xcoder session. NetInt Quadra AV1 has multi-frame reorder
+    // latency, so the packets we drain here are the previous frames' output —
+    // they MUST be written to the muxer, not discarded.
+    if (video_encoded) {
+      while (!zm_terminate) {
+        int drain_ret = receive_and_write_video_packet();
+        if (drain_ret < 0) break;
+        Debug(3, "Drained buffered packet from encoder before send");
       }
-      av_packet_free(&drain_pkt);
     }
 
     do {
       zm_dump_video_frame(frame.get(), "sending video frame");
       if (frame->format != video_out_ctx->pix_fmt) {
-        Error("Frame format %d %s doesn't match encoder format %d %s",
+        Error("Frame format %d %s doesn't match encoder format %d %s — refusing to send (would crash encoder)",
               frame->format, av_get_pix_fmt_name(static_cast<AVPixelFormat>(frame->format)),
               video_out_ctx->pix_fmt, av_get_pix_fmt_name(video_out_ctx->pix_fmt));
+        video_encoder_failed = true;
+        return AVERROR(EINVAL);
       }
       int ret = avcodec_send_frame(video_out_ctx, frame.get());
       if (ret < 0) {
@@ -1454,13 +1468,9 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
           video_encoder_failed = true;
           return ret;
         } else {
-          Debug(3, "Got EAGAIN, draining encoder");
-          // Drain one packet and retry
-          AVPacket *eagain_pkt = av_packet_alloc();
-          if (eagain_pkt) {
-            avcodec_receive_packet(video_out_ctx, eagain_pkt);
-            av_packet_free(&eagain_pkt);
-          }
+          Debug(3, "send_frame EAGAIN, draining one packet to free a slot");
+          // Drain one packet (and write it) to make room, then retry the send.
+          receive_and_write_video_packet();
         }
       } else {
         video_encoded = true;
@@ -1469,7 +1479,7 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
     } while (!zm_terminate);
 
     while (!zm_terminate) {
-      int ret = avcodec_receive_packet(video_out_ctx, opkt.get());
+      int ret = receive_and_write_video_packet();
       if (ret < 0) {
         int64_t encode_us = std::chrono::duration_cast<Microseconds>(
             std::chrono::steady_clock::now() - encode_start).count();
@@ -1495,28 +1505,6 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
         }
         return ret;
       }
-      pkt_guard.acquire(opkt);
-      ZM_DUMP_PACKET(opkt, "packet returned by codec");
-
-      // Need to adjust pts/dts values from codec time to stream time
-      if (opkt->pts != AV_NOPTS_VALUE)
-        opkt->pts = av_rescale_q(opkt->pts, video_out_ctx->time_base, video_out_stream->time_base);
-      if (opkt->dts != AV_NOPTS_VALUE)// and opkt->dts > 0)
-        opkt->dts = av_rescale_q(opkt->dts, video_out_ctx->time_base, video_out_stream->time_base);
-      Debug(1, "Timebase conversions using %d/%d -> %d/%d",
-            video_out_ctx->time_base.num,
-            video_out_ctx->time_base.den,
-            video_out_stream->time_base.num,
-            video_out_stream->time_base.den);
-      ZM_DUMP_PACKET(opkt, "packet returned by codec after timebase conversions");
-
-      if (video_last_pts != AV_NOPTS_VALUE) {
-        opkt->duration = opkt->pts - video_last_pts;
-        Debug(1, "Duration %" PRId64 " from pts %" PRId64 " - last %" PRId64, opkt->duration, opkt->pts, video_last_pts);
-        if (opkt->duration < 0) opkt->duration = 0;
-      }
-      video_last_pts = opkt->pts;
-      write_packet(opkt.get(), video_out_stream);
     } // end while receive_packet
   } else { // Passthrough
     AVPacket *ipkt = zm_packet->packet.get();
@@ -1663,7 +1651,30 @@ int VideoStore::writeAudioFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
   return 0;
 }  // end int VideoStore::writeAudioFramePacket(AVPacket *ipkt)
 
+int VideoStore::receive_and_write_video_packet() {
+  av_packet_ptr opkt{av_packet_alloc()};
+  if (!opkt) return AVERROR(ENOMEM);
+  int ret = avcodec_receive_packet(video_out_ctx, opkt.get());
+  if (ret < 0) return ret;
+  ZM_DUMP_PACKET(opkt, "packet returned by codec");
+  if (opkt->pts != AV_NOPTS_VALUE)
+    opkt->pts = av_rescale_q(opkt->pts, video_out_ctx->time_base, video_out_stream->time_base);
+  if (opkt->dts != AV_NOPTS_VALUE)
+    opkt->dts = av_rescale_q(opkt->dts, video_out_ctx->time_base, video_out_stream->time_base);
+  if (video_last_pts != AV_NOPTS_VALUE) {
+    opkt->duration = opkt->pts - video_last_pts;
+    if (opkt->duration < 0) opkt->duration = 0;
+  }
+  video_last_pts = opkt->pts;
+  return write_packet(opkt.get(), video_out_stream);
+}
+
 int VideoStore::write_packet(AVPacket *pkt, AVStream *stream) {
+  if (write_packet_failed_) {
+    // Muxer may be in an inconsistent state after a prior failure.
+    // Further av_interleaved_write_frame calls can trigger ffmpeg's internal abort().
+    return AVERROR(EINVAL);
+  }
   pkt->pos = -1;
   pkt->stream_index = stream->index;
   ZM_DUMP_PACKET(pkt, "packet in write_packet");
@@ -1718,26 +1729,33 @@ int VideoStore::write_packet(AVPacket *pkt, AVStream *stream) {
   Debug(3, "next_dts for stream %d has become %" PRId64 " last_dts %" PRId64,
         stream->index, next_dts[stream->index], last_dts[stream->index]);
 
-  // HLS fragment tracking: with frag_keyframe movflag, FFmpeg creates a new
-  // moof+mdat at each video keyframe. We record the byte range of each fragment
-  // by checking the file position before and after the write call.
-  //
-  // Strategy: before writing a video keyframe, snapshot the file position.
-  // This marks the end of the previous fragment. We record that fragment and
-  // start tracking the new one.
   bool is_video_keyframe = (stream == video_out_stream) && (pkt->flags & AV_PKT_FLAG_KEY);
+  // Snapshot the keyframe's dts before the write call may modify the packet.
+  int64_t this_keyframe_dts = is_video_keyframe ? pkt->dts : AV_NOPTS_VALUE;
 
+  int ret = av_interleaved_write_frame(oc, pkt);
+  if (ret != 0) {
+    Error("Error writing packet: %s", av_make_error_string(ret).c_str());
+    write_packet_failed_ = true;
+  } else {
+    Debug(4, "Success writing packet");
+    packets_written++;
+  }
+
+  // HLS fragment tracking: with movflags=frag_keyframe, the muxer flushes the
+  // previous fragment to disk inside av_interleaved_write_frame() when a new
+  // keyframe arrives. So the position *after* this call equals the end of the
+  // just-flushed fragment, and last_fragment_offset_/_dts_ describe that
+  // fragment. Record it, then move tracking to the new fragment.
   if (is_video_keyframe && oc && oc->pb) {
-    // Force flush any buffered data so the file position reflects all previous writes
     avio_flush(oc->pb);
-    int64_t pos_now = avio_tell(oc->pb);
+    int64_t pos_after = avio_tell(oc->pb);
 
-    if (last_fragment_start_dts_ != AV_NOPTS_VALUE && pos_now > last_fragment_offset_) {
-      // Record the completed fragment
-      int64_t frag_size = pos_now - last_fragment_offset_;
+    if (last_fragment_start_dts_ != AV_NOPTS_VALUE && pos_after > last_fragment_offset_) {
+      int64_t frag_size = pos_after - last_fragment_offset_;
       double duration = 0;
       if (video_out_stream->time_base.den > 0) {
-        duration = static_cast<double>(pkt->dts - last_fragment_start_dts_)
+        duration = static_cast<double>(this_keyframe_dts - last_fragment_start_dts_)
                    * video_out_stream->time_base.num
                    / video_out_stream->time_base.den;
       }
@@ -1747,49 +1765,129 @@ int VideoStore::write_packet(AVPacket *pkt, AVStream *stream) {
               fragments_.size() - 1, last_fragment_offset_, frag_size, duration);
       }
     }
-    // New fragment starts here
-    last_fragment_offset_ = pos_now;
-    last_fragment_start_dts_ = pkt->dts;
-  }
-
-  // Initialize tracking after init segment is written
-  if (last_fragment_start_dts_ == AV_NOPTS_VALUE && is_video_keyframe) {
-    if (oc && oc->pb) {
-      last_fragment_offset_ = avio_tell(oc->pb);
-    }
-    last_fragment_start_dts_ = pkt->dts;
-  }
-
-  int ret = av_interleaved_write_frame(oc, pkt);
-  if (ret != 0) {
-    Error("Error writing packet: %s", av_make_error_string(ret).c_str());
-  } else {
-    Debug(4, "Success writing packet");
+    last_fragment_offset_ = pos_after;
+    last_fragment_start_dts_ = this_keyframe_dts;
   }
 
   return ret;
 }  // end int VideoStore::write_packet(AVPacket *pkt, AVStream *stream)
 
-void VideoStore::writeM3U8(const std::string &m3u8_path, const std::string &video_url, bool is_complete) {
-  // Finalize last fragment if there's data after the last recorded fragment
-  if (oc && oc->pb) {
-    int64_t file_end = avio_tell(oc->pb);
-    if (file_end > last_fragment_offset_ && last_fragment_start_dts_ != AV_NOPTS_VALUE) {
-      int64_t frag_size = file_end - last_fragment_offset_;
-      // Estimate duration from last known DTS
-      double duration = 0;
-      if (video_out_stream && video_out_stream->time_base.den > 0 &&
-          last_dts.count(video_out_stream->index) && last_dts[video_out_stream->index] != AV_NOPTS_VALUE) {
-        duration = static_cast<double>(last_dts[video_out_stream->index] + last_duration[video_out_stream->index] - last_fragment_start_dts_)
-                   * video_out_stream->time_base.num
-                   / video_out_stream->time_base.den;
-      }
-      if (duration > 0 && frag_size > 0) {
-        fragments_.push_back({last_fragment_offset_, frag_size, duration});
+void VideoStore::finalize() {
+  if (finalized_) return;
+  finalized_ = true;
+
+  if (!oc || !oc->pb) return;
+
+  // Drain reorder queues before writing the trailer — the destructor would
+  // otherwise try to run these packets through av_interleaved_write_frame()
+  // after we've already closed oc->pb here.
+  for (auto &n : reorder_queues) {
+    auto &queue = n.second;
+    Debug(1, "Queue for %d length is %zu", n.first, queue.size());
+    while (!queue.empty()) {
+      auto pkt = queue.front();
+      queue.pop_front();
+      if (pkt->codec_type == AVMEDIA_TYPE_VIDEO) {
+        writeVideoFramePacket(pkt);
+      } else if (pkt->codec_type == AVMEDIA_TYPE_AUDIO) {
+        writeAudioFramePacket(pkt);
       }
     }
   }
 
+  // Skip trailer writes if a prior write_packet failed or if no packets were
+  // ever written — muxer state may be inconsistent (short-lived events with
+  // hw encoders that never drained a packet hit this) and these calls can
+  // trigger an internal ffmpeg abort inside av_write_trailer.
+  int rc = 0;
+  if (write_packet_failed_) {
+    Warning("Skipping codec flush, interleaved flush and trailer due to prior write failure");
+  } else if (packets_written == 0) {
+    Warning("Skipping codec flush, interleaved flush and trailer: no packets ever written to muxer");
+  } else {
+    flush_codecs();
+
+    Debug(4, "Flushing interleaved queues");
+    av_interleaved_write_frame(oc, nullptr);
+
+    Debug(1, "Writing trailer");
+    rc = av_write_trailer(oc);
+    if (rc < 0) {
+      Error("Error writing trailer %s", av_err2str(rc));
+    } else {
+      Debug(3, "Success Writing trailer");
+    }
+  }
+
+  // After av_write_trailer, the file contains init+fragments_1..N + mfra trailer.
+  // Capture the on-disk length so we can size the final fragment.
+  avio_flush(oc->pb);
+  int64_t file_size = avio_tell(oc->pb);
+
+  // Close the output file before reading it back to inspect the mfra box.
+  if (!(out_format->flags & AVFMT_NOFILE)) {
+    Debug(4, "Closing");
+    if ((rc = avio_close(oc->pb)) < 0) {
+      Error("Error closing avio %s", av_err2str(rc));
+    }
+  }
+  oc->pb = nullptr;
+
+  // The MOV muxer writes an mfra (Movie Fragment Random Access) box at the end
+  // of the file when fragmentation is on. Its trailing mfro box is exactly 16
+  // bytes and contains the mfra size, so we can subtract that to find where
+  // the final fragment's mdat actually ends.
+  int64_t fragment_n_end = file_size;
+  if (!filename.empty() && file_size >= 16) {
+    FILE *fp = fopen(filename.c_str(), "rb");
+    if (fp) {
+      if (fseeko(fp, file_size - 16, SEEK_SET) == 0) {
+        uint8_t mfro[16];
+        if (fread(mfro, 1, 16, fp) == 16) {
+          uint32_t box_size = (static_cast<uint32_t>(mfro[0]) << 24)
+                            | (static_cast<uint32_t>(mfro[1]) << 16)
+                            | (static_cast<uint32_t>(mfro[2]) << 8)
+                            | static_cast<uint32_t>(mfro[3]);
+          if (box_size == 16
+              && mfro[4] == 'm' && mfro[5] == 'f' && mfro[6] == 'r' && mfro[7] == 'o') {
+            uint32_t mfra_size = (static_cast<uint32_t>(mfro[12]) << 24)
+                               | (static_cast<uint32_t>(mfro[13]) << 16)
+                               | (static_cast<uint32_t>(mfro[14]) << 8)
+                               | static_cast<uint32_t>(mfro[15]);
+            if (mfra_size > 0 && static_cast<int64_t>(mfra_size) <= file_size) {
+              fragment_n_end = file_size - mfra_size;
+              Debug(1, "mfra trailer is %u bytes; final fragment ends at %" PRId64,
+                    mfra_size, fragment_n_end);
+            }
+          }
+        }
+      }
+      fclose(fp);
+    }
+  }
+
+  // Record the final fragment that no subsequent keyframe was around to record.
+  if (last_fragment_start_dts_ != AV_NOPTS_VALUE
+      && fragment_n_end > last_fragment_offset_
+      && video_out_stream && video_out_stream->time_base.den > 0
+      && last_dts.count(video_out_stream->index)
+      && last_dts[video_out_stream->index] != AV_NOPTS_VALUE) {
+    int64_t frag_size = fragment_n_end - last_fragment_offset_;
+    double duration = static_cast<double>(
+        last_dts[video_out_stream->index]
+        + last_duration[video_out_stream->index]
+        - last_fragment_start_dts_)
+        * video_out_stream->time_base.num
+        / video_out_stream->time_base.den;
+    if (duration > 0 && frag_size > 0) {
+      fragments_.push_back({last_fragment_offset_, frag_size, duration});
+      Debug(1, "HLS final fragment: offset=%" PRId64 " size=%" PRId64 " duration=%.3f",
+            last_fragment_offset_, frag_size, duration);
+    }
+  }
+}
+
+void VideoStore::writeM3U8(const std::string &m3u8_path, const std::string &video_url, bool is_complete) {
   if (fragments_.empty()) return;
 
   // Calculate max duration for EXT-X-TARGETDURATION (must be integer, rounded up)

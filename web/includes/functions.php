@@ -21,6 +21,26 @@
 require_once('Filter.php');
 require_once('FilterTerm.php');
 
+// Polyfills for PHP 8.0+ string functions, so views and callers don't have to
+// guard each use. ZoneMinder still supports PHP 7.x in some distros.
+if (!function_exists('str_starts_with')) {
+  function str_starts_with(string $haystack, string $needle): bool {
+    return $needle === '' || strncmp($haystack, $needle, strlen($needle)) === 0;
+  }
+}
+if (!function_exists('str_ends_with')) {
+  function str_ends_with(string $haystack, string $needle): bool {
+    if ($needle === '' || $needle === $haystack) return true;
+    $nlen = strlen($needle);
+    return $nlen <= strlen($haystack) && substr_compare($haystack, $needle, -$nlen) === 0;
+  }
+}
+if (!function_exists('str_contains')) {
+  function str_contains(string $haystack, string $needle): bool {
+    return $needle === '' || strpos($haystack, $needle) !== false;
+  }
+}
+
 function noCacheHeaders() {
   header('Expires: Mon, 26 Jul 1997 05:00:00 GMT');    // Date in the past
   header('Last-Modified: '.gmdate( 'D, d M Y H:i:s' ).' GMT'); // always modified
@@ -404,7 +424,7 @@ function htmlOptions($options, $values) {
   $has_selected = false;
   foreach ( $options as $value=>$option ) {
     $disabled = 0;
-    $text = '';
+    $text = $class = '';
     if ( is_array($option) ) {
 
       if ( isset($option['Name']) )
@@ -414,6 +434,9 @@ function htmlOptions($options, $values) {
 
       if ( isset($option['disabled']) ) {
         $disabled = $option['disabled'];
+      }
+      if ( isset($option['class']) ) {
+        $class = $option['class'];
       }
     } else if ( is_object($option) ) {
       $text = $option->Name();
@@ -430,6 +453,7 @@ function htmlOptions($options, $values) {
     $options_html .= '<option value="'.htmlspecialchars($value, ENT_COMPAT | ENT_HTML401, ini_get('default_charset'), false).'"'.
       ($selected?' selected="selected"':'').
       ($disabled?' disabled="disabled"':'').
+      ($class?' class="'.htmlspecialchars($class, ENT_COMPAT | ENT_HTML401, ini_get('default_charset'), false).'"':'').
       '>'.htmlspecialchars($text, ENT_COMPAT | ENT_HTML401, ini_get('default_charset'), false).'</option>'.PHP_EOL;
   } # end foreach options
   if ( $values and ((!is_array($values)) or count($values) ) and ! $has_selected ) {
@@ -2367,22 +2391,38 @@ function output_file($path, $chunkSize=1024) {
   header("Content-Disposition: $contentDisposition;filename=\"$file\"");
 
   header('Accept-Ranges: bytes');
-  $range = 0;
   $size = filesize($path);
+  $start = 0;
+  $end = $size - 1;
 
   if (isset($_SERVER['HTTP_RANGE'])) {
-    list($a, $range) = explode('=', $_SERVER['HTTP_RANGE']);
-    str_replace($range, '-', $range);
-    $range = (int)$range; #fseek etc require integers not strings
-    $size2 = $size - 1;
-    $new_length = $size - $range;
+    # RFC 7233: bytes=start-end | bytes=start- | bytes=-suffix
+    if (preg_match('/^bytes=(\d*)-(\d*)$/', trim($_SERVER['HTTP_RANGE']), $m)
+        and ($m[1] !== '' or $m[2] !== '')) {
+      if ($m[1] === '') {
+        # Suffix range: last N bytes
+        $suffix = (int)$m[2];
+        if ($suffix > $size) $suffix = $size;
+        $start = $size - $suffix;
+      } else {
+        $start = (int)$m[1];
+        if ($m[2] !== '') $end = (int)$m[2];
+      }
+      if ($end > $size - 1) $end = $size - 1;
+    }
+    if ($start > $end or $start >= $size) {
+      header('HTTP/1.1 416 Range Not Satisfiable');
+      header("Content-Range: bytes */$size");
+      return false;
+    }
+    $length = $end - $start + 1;
     header('HTTP/1.1 206 Partial Content');
-    header("Content-Length: $new_length");
-    header("Content-Range: bytes $range-$size2/$size");
+    header("Content-Length: $length");
+    header("Content-Range: bytes $start-$end/$size");
   } else {
-    $size2 = $size - 1;
-    header("Content-Range: bytes 0-$size2/$size");
-    header('Content-Length: ' . $size);
+    $length = $size;
+    header("Content-Range: bytes 0-$end/$size");
+    header("Content-Length: $size");
   }
 
   if ($size == 0) {
@@ -2391,13 +2431,18 @@ function output_file($path, $chunkSize=1024) {
   @ini_set('magic_quotes_runtime', 0);
   $fp = fopen($path, 'rb');
 
-  fseek($fp, $range);
+  fseek($fp, $start);
 
-  while (!feof($fp) and (connection_status() == 0)) {
+  $remaining = $length;
+  $buffer = 1024 * $chunkSize;
+  while ($remaining > 0 and !feof($fp) and (connection_status() == 0)) {
     set_time_limit(0);
-    print(@fread($fp, 1024*$chunkSize));
+    $data = @fread($fp, min($buffer, $remaining));
+    if ($data === false or $data === '') break;
+    print($data);
     flush();
-    ob_flush();
+    if (ob_get_level() > 0) ob_flush();
+    $remaining -= strlen($data);
   }
   fclose($fp);
 
@@ -2461,5 +2506,52 @@ function to_string($thing) {
   if (empty($thing)) return '';
   if (is_array($thing)) return implode(', ', $thing);
   return strval($thing);
+}
+
+if (!function_exists('mb_ucfirst')) { // Available in PHP >= 8.4
+  function mb_ucfirst($str, $encoding='UTF-8') {
+    if (extension_loaded('mbstring')) {
+      $result = mb_strtoupper(mb_substr($str, 0, 1, $encoding), $encoding) . mb_substr($str, 1, null, $encoding);
+    } else {
+      $result = (ucfirst($str));
+    }
+    return $result;
+  }
+}
+
+if (!function_exists('mb_lcfirst')) { // Available in PHP >= 8.4
+  function mb_lcfirst($str, $encoding='UTF-8') {
+    if (extension_loaded('mbstring')) {
+      $result = mb_strtolower(mb_substr($str, 0, 1, $encoding), $encoding) . mb_substr($str, 1, null, $encoding);
+    } else {
+      $result = (lcfirst($str));
+    }
+    return $result;
+  }
+}
+
+function findVideoEventFile ($Event, $ext="*") {
+  $dir = $Event->Path();
+  $eventDefaultVideo = to_string($Event->DefaultVideo());
+  $path = '';
+  if ($eventDefaultVideo !== '' &&
+    !str_ends_with($eventDefaultVideo, '.m3u8') &&
+    ($ext === "*" || str_ends_with(strtolower($eventDefaultVideo), '.' . $ext))) {
+      $path = $dir.'/'.$eventDefaultVideo;
+  }
+  if (!is_file($path)) $path = ''; # So we don't return a reference to a non-existent file.
+
+  if ($path === '') {
+    # By default, we search for files with any extension, such as mp4, mkv, or webm.
+    # Look for the final renamed first, then incomplete.
+    # Incomplete files may exist as either incomplete.<container> or incomplete.<codec>.<container>.
+    $candidates = glob($dir.'/'.$Event->Id().'-video.*.'.$ext);
+    if (!$candidates) $candidates = glob($dir.'/incomplete.'.$ext);
+    if (!$candidates) $candidates = glob($dir.'/incomplete.*.'.$ext);
+    if ($candidates) {
+      $path = $candidates[0];
+    }
+  }
+  return $path;
 }
 ?>

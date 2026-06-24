@@ -89,18 +89,16 @@ FfmpegCamera::FfmpegCamera(
    * will receive correct colours and subpixel order */
   if ( zm_is_rgb32(pixelFormat) ) {
     subpixelorder = ZM_SUBPIX_ORDER_RGBA;
-    imagePixFormat = AV_PIX_FMT_RGBA;
     pixelFormat = AV_PIX_FMT_RGBA;
   } else if ( zm_is_rgb24(pixelFormat) ) {
     subpixelorder = ZM_SUBPIX_ORDER_RGB;
-    imagePixFormat = AV_PIX_FMT_RGB24;
     pixelFormat = AV_PIX_FMT_RGB24;
   } else if ( pixelFormat == AV_PIX_FMT_GRAY8 ) {
     subpixelorder = ZM_SUBPIX_ORDER_NONE;
-    imagePixFormat = AV_PIX_FMT_GRAY8;
     pixelFormat = AV_PIX_FMT_GRAY8;
   } else {
-    Panic("Unexpected colours: %d", colours);
+    Panic("Unexpected pixel format %d (%s); legacy colours=%d subpixelorder=%d",
+          pixelFormat, zm_get_pix_fmt_name(pixelFormat), colours, subpixelorder);
   }
 
 }  // FfmpegCamera::FfmpegCamera

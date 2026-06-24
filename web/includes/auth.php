@@ -171,24 +171,46 @@ function validateToken($token, $allowed_token_type='access') {
 function getAuthUser($auth) {
   if (ZM_OPT_USE_AUTH && (ZM_AUTH_RELAY == 'hashed') && !empty($auth)) {
     $remoteAddr = '';
+    $xff = !empty($_SERVER['HTTP_X_FORWARDED_FOR'])
+      ? trim(explode(',', $_SERVER['HTTP_X_FORWARDED_FOR'])[0])
+      : '';
+    $directAddr = isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '';
     if (ZM_AUTH_HASH_IPS) {
-      $remoteAddr = $_SERVER['REMOTE_ADDR'];
+      // Use HTTP_X_FORWARDED_FOR if available (consistent with session.php which uses it for hash generation)
+      // taking only the first IP to guard against spoofed multi-value headers.
+      // This ensures validation matches generation when behind a reverse proxy.
+      $remoteAddr = $xff !== '' ? $xff : $directAddr;
       if ( !$remoteAddr ) {
         ZM\Error("Can't determine remote address for authentication, using empty string");
         $remoteAddr = '';
       }
     }
 
+    // Prefer the username from the URL (matches what zms uses) so PHP and the
+    // C++ side query the same row. Fall back to the session username for
+    // page-internal calls that don't carry user= on the URL.
+    $requestedUser = !empty($_REQUEST['user']) ? $_REQUEST['user'] : null;
+    $sessionUser = isset($_SESSION['username']) ? $_SESSION['username'] : null;
+    $filterUser = $requestedUser !== null ? $requestedUser : $sessionUser;
+
+    ZM\Debug("getAuthUser: validating auth='$auth' filterUser='".($filterUser ?? '')."' xff='$xff' directAddr='$directAddr' usingRemoteAddr='$remoteAddr' session_username='".($sessionUser ?? '')."'");
+
     $sql = 'SELECT * FROM Users WHERE Enabled = 1';
     $values = array();
-    if (isset($_SESSION['username'])) {
+    if ($filterUser !== null) {
       # Most of the time we will be logged in already and the session will have our username, so we can significantly speed up our hash testing by only looking at our user.
       # Only really important if you have a lot of users.
-      $sql .= ' AND Username=?';
-      array_push($values, $_SESSION['username']);
+      if (ZM_CASE_INSENSITIVE_USERNAMES) {
+        $sql .= ' AND LOWER(Username)=LOWER(?)';
+      } else {
+        $sql .= ' AND Username=?';
+      }
+      array_push($values, $filterUser);
     }
 
-    foreach (dbFetchAll($sql, NULL, $values) as $user) {
+    $rows = dbFetchAll($sql, NULL, $values);
+    $rowsTried = count($rows);
+    foreach ($rows as $user) {
       $now = time();
       for ($i = 0; $i < ZM_AUTH_HASH_TTL; $i++, $now -= 3600) { // Try for last TTL hours
         $time = localtime($now);
@@ -201,7 +223,7 @@ function getAuthUser($auth) {
       } // end foreach hour
     } // end foreach user
 
-    if (isset($_SESSION['username'])) {
+    if ($filterUser !== null) {
       # In a multi-server case, we might be logged in as another user and so the auth hash didn't work
       if (ZM_CASE_INSENSITIVE_USERNAMES) {
         $sql = 'SELECT * FROM Users WHERE Enabled = 1 AND LOWER(Username) != LOWER(?)';
@@ -209,7 +231,9 @@ function getAuthUser($auth) {
         $sql = 'SELECT * FROM Users WHERE Enabled = 1 AND Username != ?';
       }
 
-      foreach (dbFetchAll($sql, NULL, $values) as $user) {
+      $altRows = dbFetchAll($sql, NULL, array($filterUser));
+      $rowsTried += count($altRows);
+      foreach ($altRows as $user) {
         $now = time();
         for ($i = 0; $i < ZM_AUTH_HASH_TTL; $i++, $now -= 3600) { // Try for last TTL hours
           $time = localtime($now);
@@ -217,11 +241,15 @@ function getAuthUser($auth) {
           $authHash = md5($authKey);
 
           if ($auth == $authHash) {
+            ZM\Debug("getAuthUser: matched user '".$user['Username']."' from fallback (filter was '$filterUser')");
             return new ZM\User($user);
           } // end if $auth == $authHash
         } // end foreach hour
       } // end foreach user
-    } // end if 
+    } // end if
+
+    ZM\Info("Unable to authenticate user from auth hash '$auth' (filterUser='".($filterUser ?? '')."' sessionUser='".($sessionUser ?? '')."' xff='$xff' directAddr='$directAddr' rowsTried=$rowsTried ttl=".ZM_AUTH_HASH_TTL.'h)');
+    return null;
   } // end if using auth hash
 
   ZM\Info("Unable to authenticate user from auth hash '$auth'");
@@ -246,10 +274,14 @@ function generateAuthHash($useRemoteAddr, $force=false) {
     $time = time();
     # We use 1800 so that we regenerate the hash at half the TTL
     $mintime = $time - (ZM_AUTH_HASH_TTL * 1800);
-    $remoteAddr = ZM_AUTH_HASH_IPS ? $_SESSION['remoteAddr'] : '';
-    # Appending the remoteAddr prevents us from using an auth hash generated for a different ip
+    # The address baked into the hash, and the cache slot key, must agree. A
+    # caller that asks for an IP-less hash ($useRemoteAddr false, e.g.
+    # getZmuCommand) must not overwrite the IP-bound slot used by the browser,
+    # otherwise the next status poll serves an IP-less hash that the IP-bound
+    # validator rejects, bouncing the user to login (issue #4921).
+    $remoteAddr = ($useRemoteAddr and ZM_AUTH_HASH_IPS) ? $_SESSION['remoteAddr'] : '';
     if ($force or (!isset($_SESSION['AuthHash'.$remoteAddr])) or ($_SESSION['AuthHashGeneratedAt'] < $mintime)) {
-      $auth = calculateAuthHash($useRemoteAddr ? $remoteAddr : '');
+      $auth = calculateAuthHash($remoteAddr);
       # Don't both regenerating Auth Hash if an hour hasn't gone by yet
       $_SESSION['AuthHash'.$remoteAddr] = $auth;
       $_SESSION['AuthHashGeneratedAt'] = $time;
@@ -549,6 +581,12 @@ if (ZM_OPT_USE_AUTH) {
           unset($_SESSION['AuthHash'.$remoteAddr]);
         }
         $_SESSION['username'] = $user->Username();
+      } else {
+        # Stale/invalid auth hash in URL: fall back to session if one exists.
+        # Why: post-login redirects can carry a hash generated before the new
+        # session; without this fallback the request is treated as unauthenticated
+        # and we bounce back to login, producing an auth loop.
+        $user = userFromSession();
       }
     } else if (!(empty($_REQUEST['user']) or empty($_REQUEST['pass']))) {
       # The shortened versions are used in auth_relay = PLAIN
@@ -607,8 +645,8 @@ if (ZM_OPT_USE_AUTH) {
         } // end if success==false
       } // end if using reCaptcha
 
-      zm_session_clear(); # Closes session
-      zm_session_regenerate_id(); # starts session
+      # Drop the pre-auth session and issue a fresh id in a single Set-Cookie
+      zm_session_regenerate_id_login();
 
       $username = $_REQUEST['username'];
       $password = $_REQUEST['password'];

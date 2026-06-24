@@ -613,7 +613,7 @@ int Quadra_Yolo::process_roi(AVFrame *in_frame, AVFrame **filt_frame) {
       (cur_roi[i]).bottom    = roi[i].bottom;
       (cur_roi[i]).left      = roi[i].left;
       (cur_roi[i]).right     = roi[i].right;
-      (cur_roi[i]).qoffset   = { 0 , 0 };
+      (cur_roi[i]).qoffset   = { 0 , 1 };  // 0/1: no QP adjustment. den=0 is rejected by the encoder.
       cur_roi_extra[i].self_size = roi_extra[i].self_size;
       cur_roi_extra[i].cls       = roi_extra[i].cls;
       cur_roi_extra[i].prob      = roi_extra[i].prob;
@@ -870,7 +870,7 @@ int Quadra_Yolo::ni_read_roi(AVFrame *out, int frame_count) {
     roi[j].right     = transform_coord(roi_box[i].right, letterbox_offset_x, false);
     roi[j].top       = transform_coord(roi_box[i].top, letterbox_offset_y, true);
     roi[j].bottom    = transform_coord(roi_box[i].bottom, letterbox_offset_y, true);
-    roi[j].qoffset   = { 0 , 0 };
+    roi[j].qoffset   = { 0 , 1 };  // 0/1: no QP adjustment. den=0 is rejected by the encoder.
     roi_extra[j].self_size = sizeof(*roi_extra);
     roi_extra[j].cls       = roi_box[i].ai_class;
     roi_extra[j].prob      = roi_box[i].prob;

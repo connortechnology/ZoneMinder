@@ -532,6 +532,8 @@ function streamPause() {
   setButtonState('slowFwdBtn', 'inactive');
   setButtonState('slowRevBtn', 'inactive');
   setButtonState('fastRevBtn', 'unavail');
+  const audioMotion = document.querySelector('audio-motion#audioVisualization' + eventData.MonitorId);
+  if (audioMotion && audioMotion.pause) audioMotion.pause();
 }
 
 function playClicked( ) {
@@ -1382,7 +1384,10 @@ function initPage() {
     addVideoTimingTrack(vid, LabelFormat, eventData.MonitorName, eventData.Length, eventData.StartDateTime);
     //$j('.vjs-progress-control').append('<div id="alarmCues" class="alarmCues"></div>');//add a place for videojs only on first load
     vid.on('ended', vjsReplay);
-    vid.on('play', streamPlay);
+    vid.on('play', function(event) {
+      streamPlay();
+      connectAudioMotion(eventData.MonitorId);
+    });
     vid.on('pause', streamPause);
     vid.on('click', function(event) {
       handleClick(event);
@@ -1655,14 +1660,34 @@ function initPage() {
           const tagInput = $j(this);
           tagValue = tagInput.val().trim();
         }
-        addOrCreateTag(tagValue);
+        addOrCreateTag(tagValue, event.key);
       } else if (event.key === " " || event.key === ",") {
         const tagInput = $j(this);
         const tagValue = tagInput.val().trim();
-        addOrCreateTag(tagValue);
+        addOrCreateTag(tagValue, event.key);
         event.preventDefault(); // Prevent the key from being entered in the input field
       } else if (event.key === "Escape") {
         $j("#tagInput").blur();
+      } else if (event.key === "ArrowLeft") {
+        if (ctrled) {
+          var tagValue = $hlight.text();
+          if (!tagValue) {
+            const tagInput = $j(this);
+            tagValue = tagInput.val().trim();
+          }
+          addOrCreateTag(tagValue, event.key);
+          tagAndPrev(true);
+        }
+      } else if (event.key === "ArrowRight") {
+        if (ctrled) {
+          var tagValue = $hlight.text();
+          if (!tagValue) {
+            const tagInput = $j(this);
+            tagValue = tagInput.val().trim();
+          }
+          addOrCreateTag(tagValue, event.key);
+          tagAndNext(true);
+        }
       }
     });
   }
@@ -1734,7 +1759,10 @@ function initPage() {
         //const id = stringToNumber(this.id); //Montage & Watch page
         const id = eventData.MonitorId; // Event page
         //$j('#button_zoom' + id).stop(true, true).slideDown('fast');
-        $j('#button_zoom' + id).removeClass('hidden');
+        const _imageFeed = document.getElementById('videoFeedStream'+id);
+        if (!_imageFeed || (_imageFeed && _imageFeed.getAttribute('data-not-display-video') !== 'true')) {
+          $j('#button_zoom' + id).removeClass('hidden');
+        }
       },
       function() {
         //const id = stringToNumber(this.id); //Montage & Watch page
@@ -1767,14 +1795,14 @@ function initPage() {
   if (toggleZonesButton) toggleZonesButton.addEventListener('click', toggleZones);
 } // end initPage
 
-function addOrCreateTag(tagValue) {
+function addOrCreateTag(tagValue, buttonPressed = null) {
   const tagNames = availableTags.map((t) => t.Name.toLowerCase());
   const index = tagNames.indexOf(tagValue.toLowerCase());
   if (index > -1) {
-    addTag(availableTags[index]);
+    addTag(availableTags[index], buttonPressed);
     $j('.tag-dropdown-content').hide();
   } else if (tagValue.trim().length > 0) {
-    createTag(tagValue);
+    createTag(tagValue, buttonPressed);
   }
 }
 
@@ -1827,7 +1855,7 @@ function formatTag(tag) {
   $j('.tag-dropdown').before(tagElement);
 }
 
-function addTag(tag) {
+function addTag(tag, buttonPressed = null) {
   if (tag && (tag.Name.trim() !== '') && !isDup(tag.Name)) {
     $j.getJSON(thisUrl + '?request=event&action=addtag&tid=' + tag.Id + '&id=' + eventData.Id)
         .done(function(data) {
@@ -1837,6 +1865,7 @@ function addTag(tag) {
           // Move the added tag to the front(top) of the availableTags array
           const index = availableTags.map((t) => t.Id).indexOf(tag.Id);
           availableTags.splice(0, 0, availableTags.splice(index, 1)[0]);
+          if (["Enter", " ", ","].includes(buttonPressed)) $j('#tagInput').focus();
         })
         .fail(logAjaxFail);
   } else {
@@ -1859,7 +1888,7 @@ function removeTag(tag) {
       .fail(logAjaxFail);
 }
 
-function createTag(tagName) {
+function createTag(tagName, buttonPressed = null) {
   $j.getJSON(thisUrl + '?request=tags&action=createtag&tname=' + tagName)
       .done(function(data) {
         if (data.response.length > 0) {
@@ -1869,6 +1898,7 @@ function createTag(tagName) {
           }
           addTag(tag);
         }
+        if (["Enter", " ", ","].includes(buttonPressed)) $j('#tagInput').focus();
       })
       .fail(logAjaxFail);
 }
@@ -1940,6 +1970,11 @@ function panZoomIn(el) {
 
 function panZoomOut(el) {
   zmPanZoom.zoomOut(el);
+}
+
+function changeWhatDisplay() {
+  setCookie('zmWhatDisplay', $j('#whatDisplay').val());
+  location.reload();
 }
 
 // Kick everything off

@@ -104,6 +104,14 @@ sub zmDbConnect {
           'mysql_ssl_client_key='.$ZoneMinder::Config::Config{ZM_DB_SSL_CLIENT_KEY},
           'mysql_ssl_client_cert='.$ZoneMinder::Config::Config{ZM_DB_SSL_CLIENT_CERT}
           );
+      # Identity-verify the server certificate when ZM_DB_SSL_VERIFY_SERVER_CERT
+      # is set: truthy verifies, false-y (0/false/no/off) allows a self-signed or
+      # non-matching cert. An empty/unset value leaves the driver default so
+      # existing installs are unchanged on upgrade.
+      my $verify = $ZoneMinder::Config::Config{ZM_DB_SSL_VERIFY_SERVER_CERT};
+      if ( defined($verify) and ($verify ne '') ) {
+        $sslOptions .= ';mysql_ssl_verify_server_cert=' . ((lc($verify) =~ /^(0|false|no|off)$/) ? '0' : '1');
+      }
     }
 
     eval {
@@ -263,15 +271,41 @@ sub _sql_with_bind_values {
 }
 
 # Basic execution of $dbh->do but with some pretty logging of the sql on error.
+# Auto-retries on deadlock (MariaDB ER_LOCK_DEADLOCK = 1213) only when
+# AutoCommit is on, since inside a caller-managed transaction the caller has
+# to rebuild the whole TX.
 sub zmDbDo {
-	my $sql = shift;
-  my $rows = $dbh->do($sql, undef, @_);
-	if ( ! defined $rows ) {
-		Error('Failed '._sql_with_bind_values($sql, @_).' : '.$dbh->errstr());
-  } elsif ( ZoneMinder::Logger::logLevel() > INFO ) {
+  my $sql = shift;
+  my @params = @_;
+  my $max_attempts = $dbh->{AutoCommit} ? 5 : 1;
+  my $rows;
+  for ( my $attempt = 1; $attempt <= $max_attempts; $attempt++ ) {
+    $rows = $dbh->do($sql, undef, @params);
+    last if defined $rows;
+    # In a caller-managed transaction, never issue ANY logging here that can
+    # write to the Logs table: ZoneMinder::Logger->logPrint INSERTs into
+    # Logs using the same $dbh, which would clear $dbh->err / $dbh->errstr
+    # before the caller reads them for rollback/retry. Bail silently — the
+    # caller owns the retry loop and is responsible for logging.
+    last if !$dbh->{AutoCommit};
+
+    my $err_code = $dbh->err() // 0;
+    if ( $err_code == 1213 and $attempt < $max_attempts ) { # 1213 = ER_LOCK_DEADLOCK
+      Debug("Deadlock on '"._sql_with_bind_values($sql, @params)."' attempt $attempt/$max_attempts, retrying");
+      select(undef, undef, undef, 0.05 * (1 << $attempt) + rand(0.05));
+      next;
+    }
+    Error('Failed '._sql_with_bind_values($sql, @params).' : '.$dbh->errstr());
+    last;
+  }
+  # Skip the success Debug when we're inside a caller-managed transaction:
+  # ZoneMinder::Logger->logPrint INSERTs into Logs on this same $dbh, which
+  # would add an extra write to a TX that's trying to be lock-minimal and
+  # could change $dbh->err / $dbh->errstr the caller will later inspect.
+  if ( defined $rows and $dbh->{AutoCommit} and ZoneMinder::Logger::logLevel() > INFO ) {
     ($rows) = $rows =~ /^(.*)$/; # de-taint
-    Debug('Succeeded '._sql_with_bind_values($sql, @_)." : $rows rows affected");
-	}
+    Debug('Succeeded '._sql_with_bind_values($sql, @params)." : $rows rows affected");
+  }
   return $rows;
 }
 

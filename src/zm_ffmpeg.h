@@ -260,6 +260,13 @@ const std::string get_codecpar_string(const AVCodecParameters *par);
 int check_sample_fmt(const AVCodec *codec, enum AVSampleFormat sample_fmt);
 enum AVPixelFormat fix_deprecated_pix_fmt(enum AVPixelFormat );
 
+// Return a plausible framerate for `stream`. Prefers r_frame_rate, falls
+// back to avg_frame_rate. ffmpeg falls back to 1/time_base when it can't
+// sample a real frame interval (e.g. 90000/1 for RTSP/MPEG), which trips
+// encoder validation downstream — implausible values (>240 fps, <=0)
+// are rejected and {0, 1} is returned to signal "unknown".
+AVRational get_sane_framerate(const AVStream *stream);
+
 bool is_video_stream(const AVStream *);
 bool is_audio_stream(const AVStream *);
 bool is_video_context(const AVCodec *);

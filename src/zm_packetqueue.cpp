@@ -263,7 +263,8 @@ bool PacketQueue::clearPackets(const std::shared_ptr<ZMPacket> &add_packet) {
       )
      ) {
     Debug(3, "stream index %d ?= video_stream_id %d, keyframe %d, keep_keyframes %d, pending %d, counts %d > pre_event_count %d at begin %d",
-          add_packet->packet->stream_index, video_stream_id, add_packet->keyframe, keep_keyframes, clear_packets_pending_,
+          add_packet->packet->stream_index, video_stream_id, add_packet->keyframe, keep_keyframes,
+          clear_packets_pending_.load(std::memory_order_relaxed),
           packet_counts[video_stream_id], pre_event_video_packet_count,
           ( *(pktQueue.begin()) != add_packet )
          );
@@ -352,8 +353,12 @@ bool PacketQueue::clearPackets(const std::shared_ptr<ZMPacket> &add_packet) {
   while (*it != add_packet) {
     zm_packet = *it;
 
-    if (zm_packet->queue_index >= min_iterator_queue_index) {
-      Debug(3, "Found iterator Counted %d video packets. Which would leave %d in packetqueue tail count is %d",
+    // Use > (not >=) so we still consider the iterator's own packet as a
+    // next_front candidate. Setting next_front to a packet that an iterator
+    // points at is safe: we delete strictly before next_front, so the
+    // iterator's packet stays in the queue.
+    if (zm_packet->queue_index > min_iterator_queue_index) {
+      Debug(3, "Past iterator. Counted %d video packets. Which would leave %d in packetqueue tail count is %d",
           video_packets_to_delete, packet_counts[video_stream_id]-video_packets_to_delete, tail_count);
       break;
     }
@@ -423,6 +428,12 @@ void PacketQueue::stop() {
 
 void PacketQueue::clear() {
   Debug(1, "Clearing packetqueue");
+  // Move packets out under the lock, then let their destructors run after
+  // the mutex is released. Mirrors queuePacket()/clearPackets() so we don't
+  // stall other threads on expensive ZMPacket teardown (Image, AVPacket).
+  std::vector<std::shared_ptr<ZMPacket>> packets_to_destroy;
+
+  {
   std::lock_guard<std::mutex> lck(mutex);
   deleting = true;
   // Why are we notifying?
@@ -432,8 +443,6 @@ void PacketQueue::clear() {
 
   while (!pktQueue.empty()) {
     std::shared_ptr<ZMPacket> packet = pktQueue.front();
-    // Someone might have this packet, but not for very long and since we have locked the queue they won't be able to get another one
-    // Deleting this packet, doesn't require a lock.  We only need a lock if we are modifying the packet.  
     Debug(1,
           "Deleting a packet with stream index:%d image_index:%d with keyframe:%d, video frames in queue:%d max: %d, queuesize:%zu",
           packet->packet->stream_index,
@@ -444,6 +453,7 @@ void PacketQueue::clear() {
           pktQueue.size());
     packet_counts[packet->packet->stream_index] -= 1;
     pktQueue.pop_front();
+    packets_to_destroy.push_back(std::move(packet));
   }
   Debug(1, "Packetqueue is clear, deleting iterators");
 
@@ -462,6 +472,8 @@ void PacketQueue::clear() {
 
   Debug(1, "Packetqueue is clear, notifying");
   condition.notify_all();
+  } // end scope for lock_guard — mutex released here
+  // packets_to_destroy goes out of scope here, destroying packets without holding the mutex
 }  // end void PacketQueue::clear()
 
 unsigned int PacketQueue::size() {
@@ -584,11 +596,6 @@ ZMPacketLock PacketQueue::get_packet_and_increment_it(packetqueue_iterator *it) 
 
   return ZMPacketLock();
 }  // end ZMPacketLock *PacketQueue::get_packet_and_increment_it(it)
-
-void PacketQueue::unlock(ZMPacketLock *lp) {
-  delete lp;
-  condition.notify_all();
-}
 
 bool PacketQueue::increment_it(packetqueue_iterator *it, bool wait) {
   std::unique_lock<std::mutex> lck(mutex);

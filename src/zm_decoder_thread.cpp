@@ -51,7 +51,11 @@ void DecoderThread::Run() {
       }
     }
   }
-  while (monitor_->decoder_queue.size()) monitor_->decoder_queue.pop_front();
+  // Release any packets we sent to the codec but never received frames for.
+  // The codec context is about to be (or has been) torn down for Pause /
+  // reconnect; leaving stale entries would create a permanent latency
+  // offset against the next codec context on resume.
+  monitor_->flushDecoderQueue();
 
   if (monitor_->mVideoCodecContext) {
     avcodec_free_context(&monitor_->mVideoCodecContext);
@@ -250,9 +254,12 @@ bool DecoderThread::Decode() {
       }
       send_count_++;
 
-      // Warn when average decode rate can't keep up with capture fps
-      int fps = static_cast<int>(monitor_->get_capture_fps());
-      double budget_us = (fps > 0) ? 1e6 / fps : 0;
+      // Warn when average decode rate can't keep up with the camera's
+      // capture rate. capture_fps is smoothed at the source in UpdateFPS
+      // so transient backlog-drain bursts don't trigger false positives.
+      double fps_d = monitor_->get_capture_fps();
+      int fps = static_cast<int>(fps_d);
+      double budget_us = (fps_d > 0) ? 1e6 / fps_d : 0;
       if ((fps > 0) && (send_count_ >= fps) && (avg_send_us_ > budget_us)) {
         Warning("send_packet avg %.1fms exceeds frame budget %.1fms (capture %dfps). Queue %zu, keyframe interval %d",
             avg_send_us_ / 1000.0, budget_us / 1000.0, fps,
@@ -381,9 +388,10 @@ bool DecoderThread::Decode() {
   unsigned int index = packet->image_index % monitor_->image_buffer_count;
 
   if (packet->image) {
-    monitor_->image_buffer[index]->AVPixFormat(monitor_->image_pixelformats[index] = packet->image->AVPixFormat());
     Debug(1, "Assigning %s for index %d to %s", packet->image->toString().c_str(), index, monitor_->image_buffer[index]->toString().c_str());
-    monitor_->image_buffer[index]->Assign(*(packet->image));
+    // Route through WriteShmFrame so image_pixelformats[index] is only
+    // published once the bytes actually land in the slot (copy-then-publish).
+    monitor_->WriteShmFrame(index, packet->image);
   } else if (packet->in_frame) {
 #if AI_IN_DECODE
 

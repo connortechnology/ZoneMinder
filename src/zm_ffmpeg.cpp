@@ -145,6 +145,14 @@ std::list<const CodecData*> get_encoder_data(const std::string &wanted_codec, co
       Debug(1, "Didn't find codec for %s", chosen_codec_data->codec_name);
       continue;
     }
+    // libaom-av1 is not viable for live capture — it runs at <2 fps even at
+    // 640x480 and triggers internal asserts when the encoder backs up. Only
+    // include it when the user has selected it explicitly.
+    if ((wanted_encoder.empty() or wanted_encoder == "auto") and
+        std::string(chosen_codec_data->codec_name) == "libaom-av1") {
+      Debug(1, "Skipping libaom-av1 in auto mode (not real-time viable)");
+      continue;
+    }
     results.push_back(chosen_codec_data);
   }
   return results;
@@ -279,14 +287,20 @@ int setup_hwaccel(
     Error("Failed to initialize hwaccel frame context."
         "Error code: %s", av_err2str(ret));
     av_buffer_unref(&hw_frames_ref);
-  } else {
-    codec_ctx->hw_frames_ctx = av_buffer_ref(hw_frames_ref);
-    if (!codec_ctx->hw_frames_ctx) {
-      Error("Failed to allocate hw_frames_ctx");
-      return -1;
-    }
+    // Must propagate the failure. Returning 0 here would leave codec_ctx with
+    // hw_device_ctx set but hw_frames_ctx NULL; avcodec_open2() then operates
+    // on a half-built hw context and can abort (bad free) inside encoder init
+    // instead of letting the caller fall through to the next encoder.
+    // codec_ctx->hw_device_ctx is left set; the caller frees the whole context
+    // and unrefs its own hw_device_ctx reference on the failure path.
+    return ret;
   }
+  codec_ctx->hw_frames_ctx = av_buffer_ref(hw_frames_ref);
   av_buffer_unref(&hw_frames_ref);
+  if (!codec_ctx->hw_frames_ctx) {
+    Error("Failed to allocate hw_frames_ctx");
+    return AVERROR(ENOMEM);
+  }
   av_buffer_unref(&hw_device_ctx);
 #endif
   return 0;
@@ -617,6 +631,22 @@ enum AVPixelFormat fix_deprecated_pix_fmt(enum AVPixelFormat fmt) {
   default:
     return fmt;
   }
+}
+
+static bool framerate_is_sane(AVRational r) {
+  if (r.num <= 0 || r.den <= 0) return false;
+  double fps = av_q2d(r);
+  return fps > 0.1 && fps <= 240.0;
+}
+
+AVRational get_sane_framerate(const AVStream *stream) {
+  if (!stream) return {0, 1};
+  if (framerate_is_sane(stream->r_frame_rate)) return stream->r_frame_rate;
+  if (framerate_is_sane(stream->avg_frame_rate)) return stream->avg_frame_rate;
+  Debug(1, "Stream framerate implausible: r_frame_rate=%d/%d avg_frame_rate=%d/%d",
+        stream->r_frame_rate.num, stream->r_frame_rate.den,
+        stream->avg_frame_rate.num, stream->avg_frame_rate.den);
+  return {0, 1};
 }
 
 bool is_video_stream(const AVStream * stream) {

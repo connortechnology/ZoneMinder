@@ -132,7 +132,7 @@ cmake --build . --target zmc
 
 | Option | Values | Default | Notes |
 |--------|--------|---------|-------|
-| `CMAKE_BUILD_TYPE` | Release/Debug/Optimised | Release | |
+| `CMAKE_BUILD_TYPE` | Release/Debug/Optimised/Profile | Release | `Profile` = `-O2 -g -fno-omit-frame-pointer` for perf/flamegraph |
 | `BUILD_TEST_SUITE` | ON/OFF | OFF | Enables Catch2 tests |
 | `ENABLE_WERROR` | ON/OFF | OFF | Warnings as errors (CI uses ON) |
 | `ASAN` | ON/OFF | OFF | AddressSanitizer |
@@ -194,6 +194,7 @@ Manual testing required. Test endpoints with curl/browser. Verify JSON responses
 ```bash
 sudo zmupdate.pl --check              # Check for updates
 sudo zmupdate.pl                      # Apply migrations
+sudo zmupdate.pl -f                   # Apply configuration entry changes
 ```
 
 When creating migrations: test upgrade path AND verify fresh install matches migrated schema.

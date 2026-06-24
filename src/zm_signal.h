@@ -21,6 +21,7 @@
 #define ZM_SIGNAL_H
 
 #include "zm_config.h"
+#include <atomic>
 #include <csignal>
 #include <atomic>
 
