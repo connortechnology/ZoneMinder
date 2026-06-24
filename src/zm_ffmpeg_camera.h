@@ -47,6 +47,16 @@ class FfmpegCamera : public Camera {
   std::string         mMethod;
   std::string         mOptions;
 
+  // File-loop support: when the "loop=1" option is set on a seekable file
+  // input, seek back to the start on EOF instead of failing/reconnecting.
+  // Packet timestamps are shifted by a per-stream offset so they stay
+  // monotonically increasing across loops.
+  bool                mLoop;
+  int64_t             mLoopVideoOffset;        // added to video pts/dts (video time_base)
+  int64_t             mLoopAudioOffset;        // added to audio pts/dts (audio time_base)
+  int64_t             mLoopVideoFrameDuration; // last/typical video frame duration (video time_base)
+  int64_t             mLoopAudioFrameDuration; // last/typical audio frame duration (audio time_base)
+
   std::unique_ptr<FFmpeg_Input> mSecondInput;
 
   int frameCount;
@@ -101,5 +111,11 @@ class FfmpegCamera : public Camera {
   bool NeedsDecode() override {return true;};
  private:
   static int FfmpegInterruptCallback(void*ctx);
+  // Read a frame, transparently looping a seekable file input back to the start
+  // on EOF when mLoop is set. Returns the av_read_frame() result.
+  int readFrameWithLoop(AVFormatContext *ctx, AVPacket *pkt);
+  // Seek ctx back to the start and bump the per-stream timestamp offsets so the
+  // next packet continues monotonically. Returns false if the seek failed.
+  bool loopSeekToStart(AVFormatContext *ctx);
 };
 #endif // ZM_FFMPEG_CAMERA_H
