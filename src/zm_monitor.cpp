@@ -3586,6 +3586,8 @@ int Monitor::OpenDecoder() {
         av_dict_set(&opts, "reorder_queue_size", nullptr, AV_DICT_MATCH_CASE);
         av_dict_set(&opts, "probesize", nullptr, AV_DICT_MATCH_CASE);
         av_dict_set(&opts, "loop", nullptr, AV_DICT_MATCH_CASE);
+        av_dict_set(&opts, "realtime", nullptr, AV_DICT_MATCH_CASE);
+        av_dict_set(&opts, "re", nullptr, AV_DICT_MATCH_CASE);
       }
       if (chosen_codec_data->options_defaults) {
         AVDictionary *opts_defaults = nullptr;
