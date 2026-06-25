@@ -24,6 +24,8 @@
 #include "zm_signal.h"
 #include "url.hpp"
 
+#include <thread>
+
 extern "C" {
 #include <libavutil/time.h>
 #include <libavdevice/avdevice.h>
@@ -82,6 +84,10 @@ FfmpegCamera::FfmpegCamera(
   mLoopAudioOffset = 0;
   mLoopVideoFrameDuration = 0;
   mLoopAudioFrameDuration = 0;
+
+  mRealtime = false;
+  mRealtimeAnchored = false;
+  mRealtimeStartTS = 0;
 
   if ( capture ) {
     FFMPEGInit();
@@ -148,7 +154,23 @@ int FfmpegCamera::PrimeCapture() {
       av_dict_set(&opts, "loop", nullptr, 0);
       Debug(1, "Loop-on-EOF mode %s from options", mLoop ? "enabled" : "disabled");
     }
+
+    // "realtime=1" (alias "re=1") is handled by us, like ffmpeg's -re flag:
+    // pace packet delivery to the stream's native rate rather than reading the
+    // file as fast as possible. Consume it so it is not passed through to the
+    // demuxer and reported as an unrecognized option below.
+    AVDictionaryEntry *re_entry = av_dict_get(opts, "realtime", nullptr, 0);
+    if (!re_entry) re_entry = av_dict_get(opts, "re", nullptr, 0);
+    if (re_entry) {
+      mRealtime = (re_entry->value != nullptr) && (atoi(re_entry->value) != 0);
+      av_dict_set(&opts, "realtime", nullptr, 0);
+      av_dict_set(&opts, "re", nullptr, 0);
+      Debug(1, "Real-time pacing %s from options", mRealtime ? "enabled" : "disabled");
+    }
   }
+
+  // Fresh prime: drop any real-time anchor so pacing restarts cleanly.
+  mRealtimeAnchored = false;
 
   // Fresh prime: start with no loop offset.
   mLoopVideoOffset = 0;
@@ -392,6 +414,58 @@ int FfmpegCamera::readFrameWithLoop(AVFormatContext *ctx, AVPacket *pkt) {
   return ret;
 }
 
+RealtimePaceDecision ComputeRealtimePace(
+    int64_t ts_us, int64_t anchor_ts_us, Microseconds elapsed, Microseconds cap) {
+  // Backward movement (e.g. a discontinuity the jump checks let through):
+  // re-anchor so we never try to sleep on a negative delta.
+  if (ts_us < anchor_ts_us)
+    return {true, Microseconds(0)};
+
+  Microseconds target_elapsed(ts_us - anchor_ts_us);
+  Microseconds delay = target_elapsed - elapsed;
+
+  // Already behind schedule: deliver immediately.
+  if (delay <= Microseconds(0))
+    return {false, Microseconds(0)};
+
+  // A large gap usually means a timestamp discontinuity rather than a genuine
+  // multi-second frame interval; re-anchor instead of stalling the capture.
+  if (delay > cap)
+    return {true, Microseconds(0)};
+
+  return {false, delay};
+}
+
+void FfmpegCamera::paceRealtime(int64_t ts_us) {
+  if (!mRealtime || (ts_us == AV_NOPTS_VALUE)) return;
+
+  TimePoint now = std::chrono::steady_clock::now();
+
+  // Anchor on the first packet.
+  if (!mRealtimeAnchored) {
+    mRealtimeStartWall = now;
+    mRealtimeStartTS = ts_us;
+    mRealtimeAnchored = true;
+    return;
+  }
+
+  Microseconds elapsed = std::chrono::duration_cast<Microseconds>(now - mRealtimeStartWall);
+  RealtimePaceDecision d = ComputeRealtimePace(ts_us, mRealtimeStartTS, elapsed, Seconds(10));
+
+  if (d.reanchor) {
+    Debug(1, "realtime: re-anchoring pacing at ts %" PRId64 "us", ts_us);
+    mRealtimeStartWall = now;
+    mRealtimeStartTS = ts_us;
+    return;
+  }
+
+  if (d.sleep > Microseconds(0)) {
+    Debug(4, "realtime: sleeping %" PRId64 "us to pace to stream rate",
+          static_cast<int64_t>(d.sleep.count()));
+    std::this_thread::sleep_for(d.sleep);
+  }
+}
+
 int FfmpegCamera::Capture(std::shared_ptr<ZMPacket> &zm_packet) {
   if (!mIsPrimed) return -1;
 
@@ -531,6 +605,16 @@ int FfmpegCamera::Capture(std::shared_ptr<ZMPacket> &zm_packet) {
         return 0;
       }
     }
+  }
+
+  // Real-time pacing: throttle delivery to the stream's native rate. Use dts
+  // (monotonic in read order) when available, otherwise pts. Sleep happens here,
+  // after all the drop/error filters above, so only packets we actually deliver
+  // advance the schedule.
+  if (mRealtime) {
+    int64_t pace_ts = (packet->dts != AV_NOPTS_VALUE) ? packet->dts : packet->pts;
+    if (pace_ts != AV_NOPTS_VALUE)
+      paceRealtime(av_rescale_q(pace_ts, stream->time_base, AV_TIME_BASE_Q));
   }
 
   zm_packet->codec_type = stream->codecpar->codec_type;
