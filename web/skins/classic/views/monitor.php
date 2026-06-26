@@ -1108,11 +1108,13 @@ echo htmlSelect('newMonitor[Decoder]', $decoders, $monitor->Decoder());
           $od_options['memx'] = 'MemryX Local MX3';
         if (defined('HAVE_MX_ACCL'))
           $od_options['mx_accl'] = 'MemryX MxAccl';
+        if (defined('ZM_HAVE_OPENVINO') and ZM_HAVE_OPENVINO)
+          $od_options['openvino'] = 'Intel OpenVINO';
 
         echo htmlSelect('newMonitor[ObjectDetection]', $od_options, $monitor->ObjectDetection(), [ 'data-on-change-this'=>'ObjectDetection_onChange']);
 ?>
             </li>
-<?php if (defined('HAVE_UNTETHER') or (defined('ZM_HAVE_QUADRA') and ZM_HAVE_QUADRA)) { ?>
+<?php if (defined('HAVE_UNTETHER') or (defined('ZM_HAVE_QUADRA') and ZM_HAVE_QUADRA) or (defined('ZM_HAVE_OPENVINO') and ZM_HAVE_OPENVINO)) { ?>
             <li id="ObjectDetectionModel" class="ObjectDetectionModel">
               <label><?php echo translate('Object Detection Model')?></label>
 <?php
@@ -1138,14 +1140,16 @@ echo htmlSelect('newMonitor[Decoder]', $decoders, $monitor->Decoder());
             } else if ($extension == 'nb' and defined('ZM_HAVE_QUADRA') and ZM_HAVE_QUADRA) {
               if (!isset($models['quadra'])) $models['quadra'] = [];
               $models['quadra'][$model] = $model;
+            } else if ($extension == 'xml' and defined('ZM_HAVE_OPENVINO') and ZM_HAVE_OPENVINO) {
+              if (!isset($models['openvino'])) $models['openvino'] = [];
+              $models['openvino'][$model] = $model;
             } else {
               ZM\Debug("Unkown extension in model $model");
             }
-            if ($monitor->ObjectDetection() == 'none') {
-              $models['none'][$model] = $model;
-            }
           }
-          echo htmlSelect('newMonitor[ObjectDetectionModel]', $models[$monitor->ObjectDetection()], $monitor->ObjectDetectionModel());
+          $od = $monitor->ObjectDetection();
+          $current_models = isset($models[$od]) ? $models[$od] : [];
+          echo htmlSelect('newMonitor[ObjectDetectionModel]', $current_models, $monitor->ObjectDetectionModel());
         } # end if ZM_DIR_MODELS
 ?>
             </li>

@@ -300,6 +300,20 @@ if((ZM_TARGET_DISTRO MATCHES "^el") OR (ZM_TARGET_DISTRO MATCHES "^fc"))
   set(ZM_CGIDIR "/usr/libexec/zoneminder/cgi-bin")
   set(ZM_DIR_EVENTS "/var/lib/zoneminder/events")
   set(ZM_PATH_ZMS "/cgi-bin-zm/nph-zms")
+elseif((ZM_TARGET_DISTRO MATCHES "debian") OR (ZM_TARGET_DISTRO MATCHES "ubuntu"))
+  set(ZM_RUNDIR "/run/zm")
+  set(ZM_SOCKDIR "/run/zm")
+  set(ZM_TMPDIR "/var/tmp/zm")
+  set(ZM_LOGDIR "/var/log/zm")
+  set(ZM_CONFIG_DIR "/etc/zm")
+  set(ZM_CONFIG_SUBDIR "/etc/zm/conf.d")
+  set(ZM_WEBDIR "/usr/share/zoneminder/www")
+  set(ZM_CGIDIR "/usr/lib/zoneminder/cgi-bin")
+  set(ZM_CACHEDIR "/var/cache/zoneminder/cache")
+  set(ZM_DIR_EVENTS "/var/lib/zoneminder/events")
+  set(ZM_PATH_ZMS "/zm/cgi-bin/nph-zms")
+  set(ZM_WEB_USER "www-data")
+  set(ZM_WEB_GROUP "www-data")
 elseif(ZM_TARGET_DISTRO STREQUAL "OS13")
   set(ZM_RUNDIR "/var/run/zoneminder")
   set(ZM_TMPDIR "/var/run/zoneminder")
@@ -434,6 +448,34 @@ else()
   set(HAVE_QUADRA 0)
   set(optlibsnotfound "${optlibsnotfound} xcoder")
   message(STATUS "NETINT Quadra (xcoder) support: No")
+endif()
+
+# Intel OpenVINO inference runtime (CPU/GPU/NPU). Archive installs are not in
+# CMake's default search path; pass -DOpenVINO_DIR=... or source the toolkit's
+# setupvars.sh before configuring.
+find_package(OpenVINO QUIET COMPONENTS Runtime)
+if(OpenVINO_FOUND)
+  set(HAVE_OPENVINO 1)
+  list(APPEND ZM_BIN_LIBS openvino::runtime)
+  set(optlibsfound "${optlibsfound} OpenVINO")
+  message(STATUS "Intel OpenVINO support: Yes (${OpenVINO_VERSION})")
+
+  # OpenVINO archive installs (the typical case for non-distro versions) live
+  # outside the linker's default search path. Add the runtime lib directory to
+  # the build RPATH so binaries can locate libopenvino.so without requiring
+  # the user to source setupvars.sh just to run them.
+  get_target_property(_ov_loc openvino::runtime LOCATION)
+  if(_ov_loc)
+    get_filename_component(OPENVINO_LIB_DIR "${_ov_loc}" DIRECTORY)
+    # Cache the path so add_subdirectory()'d CMakeLists.txt files can reach it
+    # to set BUILD_RPATH on their own targets without each one re-deriving it.
+    set(OPENVINO_LIB_DIR "${OPENVINO_LIB_DIR}" CACHE INTERNAL "OpenVINO runtime lib directory")
+    message(STATUS "OpenVINO runtime libs: ${OPENVINO_LIB_DIR}")
+  endif()
+else()
+  set(HAVE_OPENVINO 0)
+  set(optlibsnotfound "${optlibsnotfound} OpenVINO")
+  message(STATUS "Intel OpenVINO support: No")
 endif()
 
 # jpeg
