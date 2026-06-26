@@ -120,7 +120,6 @@ body.sticky .content-main {
 .report_event_audit-page:not(.filter-inline) #content form,
 .events-page:not(.filter-inline) .content-main #fieldsTable,
 .events-page:not(.filter-inline) a[data-flip-control-object="#fieldsTable"], /* Filter visibility control button */
-.options-page .content-main #sidebar,
 .navbar-brand,
 #navbar-one {
     display: none !important;
