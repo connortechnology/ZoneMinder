@@ -181,6 +181,45 @@ TEST_CASE("Image::Scale YUV420P with non-32-multiple width", "[image]") {
   }
 }
 
+// Regression: Image::DrawBox on a YUV420P image computed chroma indices with
+// unsigned span arithmetic ((right-left), (bottom-top)). When a box arrived
+// inverted - right<left or bottom<top, which happens when a thin detection box
+// is shrunk by the line-width loop in Quadra_Yolo::draw_roi_box_in_place
+// (DrawBox(left+i, top+i, right-2*i, bottom-2*i)) - the subtraction wrapped near
+// 2^31, indexing ~2 billion samples past the buffer. The visible symptom was a
+// flood of "Address index 2147547664 = ... > size 1382400" errors on a 1280x720
+// stream. DrawBox now normalizes the corner ordering before drawing.
+TEST_CASE("Image::DrawBox YUV420P inverted coordinates", "[image]") {
+  bootstrap_image_config();
+  const int w = 1280, h = 720;
+
+  // An inverted box must draw the same pixels as its normalized equivalent and
+  // stay within the buffer (an out-of-bounds index would crash this test).
+  Image normal(w, h, ZM_COLOUR_YUV420P, ZM_SUBPIX_ORDER_YUV420P);
+  Image inverted(w, h, ZM_COLOUR_YUV420P, ZM_SUBPIX_ORDER_YUV420P);
+  REQUIRE(normal.Size() == inverted.Size());
+  memset(normal.Buffer(), 0, normal.Size());
+  memset(inverted.Buffer(), 0, inverted.Size());
+
+  const Rgb colour = 0x00ff8040;
+  normal.DrawBox(34, 200, 600, 400, colour);
+  inverted.DrawBox(600, 400, 34, 200, colour);  // right<left and bottom<top
+
+  REQUIRE(memcmp(normal.Buffer(), inverted.Buffer(), normal.Size()) == 0);
+
+  SECTION("thin box shrunk past itself by line-width loop") {
+    // Reproduces the real caller: a 10px-wide box drawn with line_width 5.
+    // At i=4 the edges cross (left=34, right=32) producing an inverted box.
+    Image image(w, h, ZM_COLOUR_YUV420P, ZM_SUBPIX_ORDER_YUV420P);
+    memset(image.Buffer(), 0, image.Size());
+    const int left = 30, top = 200, right = 40, bottom = 260, line_width = 5;
+    for (int i = 0; i < line_width; i++) {
+      image.DrawBox(left + i, top + i, right - 2 * i, bottom - 2 * i, colour);
+    }
+    SUCCEED("no out-of-bounds access");
+  }
+}
+
 TEST_CASE("Image::Flip YUV420P", "[image]") {
   bootstrap_image_config();
   const int w = 640, h = 480;

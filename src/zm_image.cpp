@@ -3143,6 +3143,14 @@ void Image::DrawBox(unsigned int left, unsigned int top, unsigned int right, uns
   if (top >= height) top = height-1;
   if (bottom >= height) bottom = height-1;
 
+  // Coordinates may arrive inverted (right<left or bottom<top) from a degenerate
+  // detection box, or when a line-width loop shrinks the right/bottom edge of a
+  // thin box past its left/top edge. The span arithmetic below is unsigned, so an
+  // inverted box would underflow (e.g. (right-left) wrapping near 2^31) and index
+  // far outside the buffer. Normalize the ordering before drawing.
+  if (right < left) std::swap(left, right);
+  if (bottom < top) std::swap(top, bottom);
+
   /* Convert the colour's RGBA subpixel order into the image's subpixel order */
   if (colours == ZM_COLOUR_YUV420P && subpixelorder == ZM_SUBPIX_ORDER_YUV420P) {
     YUV yuv_colour = brg_to_yuv(colour);
@@ -3214,11 +3222,12 @@ void Image::DrawBox(unsigned int left, unsigned int top, unsigned int right, uns
       // Draw the box on the Y plane
       y_buffer[row * width + col] = y_colour;
       unsigned int index = uv_row * uv_width + (col>>hsub);
-      u_buffer[index] = u_colour;
-      if (index < uv_size)
+      if (index < uv_size) {
+        u_buffer[index] = u_colour;
         v_buffer[index] = v_colour;
-      else
+      } else {
         Error("Address index %d = row:%d*%d * %d + %d/2> size %d", index, row, uv_row, uv_width, col, size);
+      }
     }
   } else {
     Error("Drawbox for other formats not finished.");
@@ -3279,7 +3288,7 @@ void Image::Outline( Rgb colour, const Polygon &polygon ) {
           y_buffer[(y*width)+int(round(x))] = y_colour;
           unsigned int index = ((y/2)*uv_width)+int(round(x/2));
           //Debug(1, "U %d = %d", index, u_colour);
-          if (index>uv_size) {
+          if (index < uv_size) {
             u_buffer[index] = u_colour;
             v_buffer[index] = v_colour;
           } else {
