@@ -30,6 +30,17 @@
   --colorLink: #3498db;
   --colorBackgroundButtons: #3498db;
   --colorBorder: #3498db;
+
+  /* Custom-styled checkbox/radio inputs. Themes override these in their own
+     :root so the controls restyle automatically. */
+  --colorInputActive: var(--colorBackgroundButtons);
+  --colorInputActiveInner: #eee;
+  --colorInputBorder: var(--colorBorder);
+  --colorInputBorderHover: var(--colorBorder);
+  --colorInputBackground: #eee;
+  --colorInputFocus: rgba(39, 94, 254, 0.3);
+  --colorInputDisabled: #f6f8ff;
+  --colorInputDisabledInner: #e1e6f9;
 }
 
 html,
@@ -1346,14 +1357,14 @@ button.btn.btn-view-watch:hover {
 /* +++ Style for <input> +++ */
 @supports (-webkit-appearance: none) or (-moz-appearance: none) {
   input[type='checkbox'], input[type='radio'] {
-    --active: #3498db;
-    --active-inner: #eee;
-    --focus: 2px rgba(39, 94, 254, 0.3);
-    --border: #3498db;
-    --border-hover: #3498db;
-    --background: #eee;
-    --disabled: #F6F8FF;
-    --disabled-inner: #E1E6F9;
+    --active: var(--colorInputActive);
+    --active-inner: var(--colorInputActiveInner);
+    --focus: 2px var(--colorInputFocus);
+    --border: var(--colorInputBorder);
+    --border-hover: var(--colorInputBorderHover);
+    --background: var(--colorInputBackground);
+    --disabled: var(--colorInputDisabled);
+    --disabled-inner: var(--colorInputDisabledInner);
     -webkit-appearance: none;
     -moz-appearance: none;
     appearance: none;

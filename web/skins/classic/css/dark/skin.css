@@ -26,6 +26,15 @@
   --sliderBG: #95AFC0;
   --alarmBG: #352424;
   --backgroundMediumDark: #485460;
+
+  /* Custom-styled checkbox/radio inputs tuned for the dark background. The
+     active fill keeps the accent colour (--colorBackgroundButtons) and the
+     checkmark/dot stays light (--colorInputActiveInner) for contrast against
+     it; only the unchecked/disabled surfaces need darkening so they don't
+     glow on the dark page. */
+  --colorInputBackground: #2c2c2c;
+  --colorInputDisabled: #333333;
+  --colorInputDisabledInner: #555555;
 }
 
 body {
