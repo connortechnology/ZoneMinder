@@ -3916,6 +3916,19 @@ Event * Monitor::openEvent(
   const std::string &cause,
   const Event::StringSetMap &noteSetMap) {
 
+  // closeEvent() tears down the previous event on close_event_thread, which
+  // flushes and closes its encoder (~VideoStore -> flush_codecs ->
+  // avcodec_free_context). The new event we are about to create opens its own
+  // encoder in Event::Run(). Hardware encoders (e.g. NetInt Quadra) have a
+  // finite number of encoder instances per card; if the previous encoder is
+  // still flushing when we open the new one, both sessions are alive at once
+  // and the open can fail with an insufficient-resource error. Wait for the
+  // prior teardown to release its encoder before allocating a new one.
+  if (close_event_thread.joinable()) {
+    Debug(1, "openEvent: waiting for previous event to finish closing before opening a new encoder");
+    close_event_thread.join();
+  }
+
   // FIXME this iterator is not protected from invalidation
   // We may already have a lock on this packet and not able to get another one. (AI_QUEUE)
   packetqueue_iterator *start_it = packetqueue.get_event_start_packet_it(
