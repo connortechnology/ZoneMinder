@@ -38,6 +38,8 @@ set(ZM_BIN_SRC_FILES
   zm_mx_accl.cpp
   zm_memx_yolo_core.cpp
   zm_memx_yolov8.cpp
+  zm_openvino.cpp
+  zm_yolov8_onnx_postprocess.cpp
   zm_monitor.cpp
   zm_monitor_monitorlink.cpp
   zm_monitor_rtsp2web.cpp
@@ -292,4 +294,19 @@ if(HAVE_RTSP_SERVER)
       ${ZM_EXTRA_LIBS}
       ${CMAKE_DL_LIBS})
   install(TARGETS zm_rtsp_server RUNTIME DESTINATION "${CMAKE_INSTALL_FULL_BINDIR}" PERMISSIONS OWNER_WRITE OWNER_READ OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+endif()
+
+# OpenVINO archive installs put libopenvino.so outside any standard linker
+# search path. Bake the lib directory into RPATH so the binaries can locate it
+# without the user having to source setupvars.sh. Using target_link_options
+# directly because the BUILD_RPATH/INSTALL_RPATH target properties were not
+# producing -Wl,-rpath flags in this build setup.
+if(OPENVINO_LIB_DIR)
+  set(_zm_openvino_targets zmc zma zms zmu zmbenchmark)
+  if(HAVE_RTSP_SERVER)
+    list(APPEND _zm_openvino_targets zm_rtsp_server)
+  endif()
+  foreach(_t IN LISTS _zm_openvino_targets)
+    target_link_options(${_t} PRIVATE "-Wl,-rpath,${OPENVINO_LIB_DIR}")
+  endforeach()
 endif()

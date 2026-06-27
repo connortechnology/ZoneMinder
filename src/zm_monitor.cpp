@@ -306,6 +306,10 @@ Monitor::Monitor() :
   mx_accl(nullptr),
   mx_accl_job(nullptr),
 #endif
+#if HAVE_OPENVINO
+  openvino(nullptr),
+  openvino_job(nullptr),
+#endif
   //nlohmann::json last_detections;
   last_detection_count(0),
   red_val(0),
@@ -416,6 +420,8 @@ void Monitor::Load(MYSQL_ROW dbrow, bool load_zones = true, Purpose p = QUERY) {
     objectdetection = OBJECT_DETECTION_QUADRA;
   } else if (od == "uvicorn") {
     objectdetection = OBJECT_DETECTION_UVICORN;
+  } else if (od == "openvino") {
+    objectdetection = OBJECT_DETECTION_OPENVINO;
   } else {
     Warning("Unsupported value for ObjectDetection: %s", od.c_str());
     objectdetection = OBJECT_DETECTION_NONE;
@@ -2383,8 +2389,13 @@ int Monitor::Analyse() {
                 }
 #endif
 #if HAVE_MX_ACCL_H
-                else if (objectdetection == OBJECT_DETECTION_MX_ACCL) {
+                if (objectdetection == OBJECT_DETECTION_MX_ACCL) {
                   std::pair<int, std::string> results = Analyse_MxAccl(packet);
+                }
+#endif
+#if HAVE_OPENVINO
+                if (objectdetection == OBJECT_DETECTION_OPENVINO) {
+                  std::pair<int, std::string> results = Analyse_OpenVINO(packet);
                 }
 #endif
 #endif
@@ -2677,8 +2688,9 @@ int Monitor::Analyse() {
 
       unsigned int index = (shared_data->last_analysis_index+1) % image_buffer_count;
       if (
-          objectdetection == OBJECT_DETECTION_QUADRA 
-          || objectdetection == OBJECT_DETECTION_MX_ACCL 
+          objectdetection == OBJECT_DETECTION_QUADRA
+          || objectdetection == OBJECT_DETECTION_MX_ACCL
+          || objectdetection == OBJECT_DETECTION_OPENVINO
           || objectdetection == OBJECT_DETECTION_UVICORN
           ) {
         // Only do these if it's a video packet.
@@ -2735,7 +2747,8 @@ int Monitor::Analyse() {
         shared_data->last_read_index = index;
         shared_data->analysis_image_count = analysis_image_count;
       } else {
-        Warning("Unknown value for Object_Detection");
+        Warning("Unknown value for Object_Detection: %d (monitor %u, packet %d)",
+                static_cast<int>(objectdetection), id, packet->image_index);
       }
     } else {
       Debug(3, "Not video, not clearing packets");
@@ -2842,6 +2855,63 @@ std::pair<int, std::string> Monitor::Analyse_MxAccl(std::shared_ptr<ZMPacket> pa
   } // end if has input_frame/hw_frame
   return std::make_pair(score, cause);
 } // end Monitor::Analyse_MxAccl(Packet)
+#endif
+
+#if HAVE_OPENVINO
+std::pair<int, std::string> Monitor::Analyse_OpenVINO(std::shared_ptr<ZMPacket> packet) {
+  int score = 0;
+  std::string cause;
+
+  if (packet->needs_hw_transfer(mVideoCodecContext))
+    packet->transfer_hwframe(mVideoCodecContext);
+  AVFrame *frame = packet->in_frame.get();
+
+  if (!openvino and mVideoCodecContext) {
+    openvino = new OpenVINO();
+    if (!openvino->setup(staticConfig.DIR_MODELS+"/"+objectdetection_model, "",
+                          objectdetection_object_threshold, objectdetection_nms_threshold)) {
+      Warning("Failed setting up OpenVINO");
+      delete openvino;
+      openvino = nullptr;
+      return std::make_pair(0, "");
+    }
+    openvino_job = openvino->get_job();
+  }
+
+  if (frame and openvino_job) {
+    if (!(shared_data->analysis_image_count % (motion_frame_skip+1))) {
+      int ret = packet->image
+        ? openvino->send_image(openvino_job, packet->image)
+        : openvino->send_frame(openvino_job, frame);
+      if (ret <= 0) {
+        Debug(1, "OpenVINO can't send_packet %d", packet->image_index);
+        return std::make_pair(ret, cause);
+      }
+      last_detection_count = motion_frame_skip;
+      const nlohmann::json raw_detections = openvino->receive_detections(openvino_job, objectdetection_object_threshold);
+      const nlohmann::json detections = FilterDetections(raw_detections);
+      if (detections.size()) {
+        Image *ai_image = new Image(packet->in_frame.get(), packet->in_frame->width, packet->in_frame->height);
+        ai_image->draw_boxes(detections, LabelSize(), LabelSize());
+        packet->ai_image = ai_image;
+        packet->ai_frame = av_frame_ptr(av_frame_alloc());
+        ai_image->PopulateFrame(packet->ai_frame.get());
+        packet->detections = detections;
+        last_detections = detections;
+      }
+    } else {
+      if (last_detection_count > 0 and last_detections.size()) {
+        Image *ai_image = new Image(packet->in_frame.get(), packet->in_frame->width, packet->in_frame->height);
+        ai_image->draw_boxes(last_detections, LabelSize(), LabelSize());
+        packet->ai_image = ai_image;
+        packet->ai_frame = av_frame_ptr(av_frame_alloc());
+        ai_image->PopulateFrame(packet->ai_frame.get());
+        last_detection_count--;
+      }
+    }
+  }
+  return std::make_pair(score, cause);
+} // end Monitor::Analyse_OpenVINO(Packet)
 #endif
 
 #if HAVE_QUADRA

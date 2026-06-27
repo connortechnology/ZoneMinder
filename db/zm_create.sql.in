@@ -611,7 +611,7 @@ CREATE TABLE `Monitors` (
   `AnalysisSource` enum('Primary','Secondary') NOT NULL DEFAULT 'Primary',
   `AnalysisImage` enum('FullColour','YChannel') NOT NULL DEFAULT 'FullColour',
   `AnalysisImageOpacity` TINYINT UNSIGNED NOT NULL DEFAULT '128',
-  `ObjectDetection` VARCHAR(8) NOT NULL DEFAULT 'none',
+  `ObjectDetection` VARCHAR(16) NOT NULL DEFAULT 'none',
   `ObjectDetectionModel` VARCHAR(255) NOT NULL DEFAULT '',
   `ObjectDetectionObjectThreshold` FLOAT NOT NULL default 0.4,
   `ObjectDetectionNMSThreshold` FLOAT NOT NULL default 0.25,
