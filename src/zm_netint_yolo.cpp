@@ -291,7 +291,16 @@ int Quadra_Yolo::receive_detection(std::shared_ptr<ZMPacket> packet) {
   SystemTimePoint endtime = std::chrono::system_clock::now();
   Debug(1, "Quadra: *** AI inference took %.2f seconds ***",FPSeconds(endtime-starttime).count());
   if (ret != 0 && ret != NIERROR(EAGAIN)) {
-    Error("Quadra: Error when getting output %d", ret);
+    // A non-EAGAIN error from ni_get_network_output usually means the AI session
+    // was closed by the firmware keep-alive timeout (30s) because inference fell
+    // too far behind real-time to touch the session in time. The device output
+    // shows "wrong session ID, got 0xffff" / "keep alive thread has been closed".
+    // Recovery requires reducing load: lower the capture frame rate, run AI on
+    // fewer frames, or reduce the number of concurrent AI streams on the card.
+    Error("Quadra: Error when getting AI output %d. "
+          "The AI session was likely closed after inference fell behind real-time — "
+          "reduce capture FPS, decimate AI frames, or reduce card load.",
+          ret);
     return -1;
   } else if (ret != NIERROR(EAGAIN)) {
     AVFrame *avframe = (use_hwframe and packet->hw_frame) ? packet->hw_frame.get() : packet->in_frame.get();

@@ -239,7 +239,23 @@ int ZMPacket::transfer_hwframe(AVCodecContext *ctx) {
     /* retrieve data from GPU to CPU */
     int ret = av_hwframe_transfer_data(new_frame.get(), hw_frame.get(), 0);
     if (ret < 0) {
-      Error("Unable to transfer frame: %s", av_make_error_string(ret).c_str());
+      if (ret == AVERROR_EXTERNAL) {
+        // The hardware library reports only a generic error here. In practice
+        // this means the hardware frame is no longer downloadable: it was
+        // recycled out of the frame pool, or the decode session was closed by
+        // the firmware keep-alive timeout because this pipeline fell behind
+        // real-time. (On NetInt Quadra the decoder keep-alive is 3s; the
+        // matching "invalid frameidx ... out of range" / "wrong session ID,
+        // got 0xffff" lines appear on the device's own output.) The fix is to
+        // reduce load: lower the capture frame rate or the number of
+        // concurrent hardware decode/AI streams on the card.
+        Error("Unable to transfer frame from hardware: %s. "
+              "The HW frame was likely recycled or its decode session closed after "
+              "the pipeline fell behind real-time — reduce capture FPS or card load.",
+              av_make_error_string(ret).c_str());
+      } else {
+        Error("Unable to transfer frame: %s", av_make_error_string(ret).c_str());
+      }
       hw_frame = nullptr;
       in_frame = nullptr;
       return ret;
