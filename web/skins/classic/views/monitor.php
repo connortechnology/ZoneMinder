@@ -1099,7 +1099,7 @@ echo htmlSelect('newMonitor[Decoder]', $decoders, $monitor->Decoder());
             <li class="ObjectDetection">
               <label><?php echo translate('Object Detection')?></label>
 <?php
-        $od_options = ['none'=>'None', 'uvicorn'=>'Yolo 11 on Ampere CPU'];
+        $od_options = ['None'=>'None', 'uvicorn'=>'Remote API'];
         if (defined('HAVE_UNTETHER'))
           $od_options['speedai'] = 'Untether SpeedAI';
         if (defined('ZM_HAVE_QUADRA') and ZM_HAVE_QUADRA)
