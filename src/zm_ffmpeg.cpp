@@ -282,7 +282,14 @@ int setup_hwaccel(
   frames_ctx->sw_format = codec_data->sw_pix_fmt;
   frames_ctx->width     = width;
   frames_ctx->height    = height;
-  frames_ctx->initial_pool_size = 40;
+  // Each pooled frame reserves width*height*1.5 bytes of card memory (~12.4MB
+  // at 4K). 40 was far more than an encoder needs (it only has to cover frames
+  // in flight: GOP/B-frame/lookahead depth) and, with decoder + uploader + AI
+  // pools per 4K monitor, exhausted the card's shared memory long before its
+  // compute capacity — new encoder opens then failed with
+  // NI_RETCODE_NVME_SC_VPU_RSRC_INSUFFICIENT. 16 halves the reservation while
+  // still covering typical lookahead/reorder depth.
+  frames_ctx->initial_pool_size = 16;
   if ((ret = av_hwframe_ctx_init(hw_frames_ref)) < 0) {
     Error("Failed to initialize hwaccel frame context."
         "Error code: %s", av_err2str(ret));
