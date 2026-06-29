@@ -303,6 +303,11 @@ bool VideoStore::open() {
         codec_data = get_encoder_data("", "");
       }
 
+      // Try each candidate encoder in order; sets video_out_codec/video_out_ctx
+      // on success and clears them on total failure. Wrapped in a lambda so the
+      // whole sequence can be retried after releasing a previous event's encoder
+      // (below) without duplicating it.
+      auto attempt_open_encoders = [&]() {
       for (auto it = codec_data.begin(); it != codec_data.end(); it ++) {
         chosen_codec_data = *it;
         Debug(1, "Found video codec for %s", chosen_codec_data->codec_name);
@@ -454,12 +459,33 @@ bool VideoStore::open() {
           av_buffer_unref(&hw_device_ctx);
         }
       }  // end foreach codec
+      };  // end lambda attempt_open_encoders
+
+      attempt_open_encoders();
+
+      // Optimistic open: multiple encoders run concurrently when the card has
+      // capacity. If every candidate failed, a previous event on this monitor
+      // may still be flushing its encoder on the close thread, holding a
+      // hardware encoder session. Wait for that teardown to release it and retry
+      // once before giving up — this only serializes when we actually have to,
+      // and only when there was a close in flight to wait for.
+      if ((!video_out_codec || !video_out_ctx) && monitor && monitor->WaitForEventClose()) {
+        Info("Encoder failed to open and a previous event was still closing; "
+             "released its encoder, retrying open");
+        attempt_open_encoders();
+      }
 
       if (!video_out_codec || !video_out_ctx) {
-        // Every encoder failed to open (e.g. hardware unavailable). Rather than
-        // dropping the recording entirely, fall back to passthrough: copy the
-        // input stream and write its packets unchanged.
-        Warning("Can't open any video encoder; falling back to passthrough recording");
+        // Every encoder failed to open. On hardware encoders this is commonly
+        // an "insufficient resource" refusal from the card (e.g. NetInt Quadra
+        // ni_encoder_session_open inst_err_no 1022 =
+        // NI_RETCODE_NVME_SC_VPU_RSRC_INSUFFICIENT), surfaced to ffmpeg only as
+        // a generic external error. Rather than dropping the recording, fall
+        // back to passthrough: copy the input stream and write its packets
+        // unchanged. If this recurs, the card is over-subscribed — reduce the
+        // number of concurrent hardware encodes, the resolution, or the FPS.
+        Warning("Can't open any video encoder (card may be out of encoder capacity); "
+                "falling back to passthrough recording");
         if (video_out_ctx) avcodec_free_context(&video_out_ctx);
         video_passthrough_fallback = true;
 

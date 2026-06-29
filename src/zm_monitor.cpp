@@ -4052,6 +4052,9 @@ Event * Monitor::openEvent(
 void Monitor::closeEvent() {
   if (!event) return;
 
+  // close_event_thread can also be joined from an Event's encoder-open path
+  // (WaitForEventClose), so guard the join + reassignment of the thread object.
+  std::lock_guard<std::mutex> close_lck(close_event_thread_mutex);
   if (close_event_thread.joinable()) {
     Debug(1, "close event thread is joinable");
     close_event_thread.join();
@@ -4100,6 +4103,16 @@ void Monitor::closeEvent() {
   event = nullptr;
   if (shared_data) video_store_data->recording = {};
 }  // end bool Monitor::closeEvent()
+
+bool Monitor::WaitForEventClose() {
+  std::lock_guard<std::mutex> close_lck(close_event_thread_mutex);
+  if (close_event_thread.joinable()) {
+    Debug(1, "WaitForEventClose: joining in-progress event close");
+    close_event_thread.join();
+    return true;
+  }
+  return false;
+}  // end bool Monitor::WaitForEventClose()
 
 unsigned int Monitor::DetectMotion(const Image &comp_image,
                                    Event::StringSet &zoneSet) {
@@ -4514,19 +4527,15 @@ int Monitor::Pause() {
 #endif
 
   // Must close event before closing camera because it uses in_streams
-  if (close_event_thread.joinable()) {
-    Debug(4, "Joining event thread");
-    close_event_thread.join();
-    Debug(4, "Joined event thread");
-  }
+  WaitForEventClose();
   {
     std::lock_guard<std::mutex> lck(event_mutex);
     if (event) {
       Info("%s: image_count:%d - Closing event %" PRIu64 ", shutting down", name.c_str(), shared_data->capture_image_count, event->Id());
       closeEvent();
-      close_event_thread.join();
     }
   }
+  WaitForEventClose();
   if (camera) {
     camera->Close();
   }

@@ -786,6 +786,10 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   AVCodecContext *mAudioCodecContext;
   SwsContext   *convert_context;
   std::thread  close_event_thread;
+  // Guards the close_event_thread object so it can be joined from a different
+  // thread than the analysis thread that starts it (e.g. an Event's encoder
+  // open path waiting for a previous event to release its hardware encoder).
+  std::mutex   close_event_thread_mutex;
 
   std::vector<Zone> zones;
 
@@ -1199,6 +1203,10 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
     const std::string &cause,
     const Event::StringSetMap &noteSetMap);
   void closeEvent();
+  // Join the in-progress event-close thread, if any, so its Event teardown
+  // (which releases the hardware encoder session) completes. Safe to call from
+  // any thread. Returns true if a close thread was actually joined.
+  bool WaitForEventClose();
 
   ObjectDetectionOption ObjectDetection() const { return objectdetection; };
   const std::string &ObjectDetection_Model() const { return objectdetection_model; };
