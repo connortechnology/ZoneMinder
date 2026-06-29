@@ -2944,7 +2944,25 @@ std::pair<int, std::string> Monitor::Analyse_Quadra(std::shared_ptr<ZMPacket> pa
 
   if (quadra_yolo) {
     if (frame) {
-      if (!(shared_data->analysis_image_count % (motion_frame_skip+1))) {
+      // Dynamic catch-up: when AI inference can't keep up, the analysis thread
+      // blocks in receive_detection while the decoder races ahead, pinning a
+      // hw_frame per queued packet in the card's frame pool (eventually
+      // exhausting it). Running inference on a frame that is already seconds old
+      // is also pointless. So if we have fallen behind real time, skip inference
+      // (drawing the last detection instead) until we have caught back up. This
+      // bounds how far decode can outrun analysis and keeps the pool from
+      // filling.
+      FPSeconds ai_lag = std::chrono::system_clock::now() - packet->timestamp;
+      constexpr int kAiCatchupSeconds = 2;
+      bool ai_behind = ai_lag > Seconds(kAiCatchupSeconds);
+      if (ai_behind and !ai_behind_) {
+        Warning("AI is %.2fs behind real time; skipping inference to catch up", ai_lag.count());
+      } else if (!ai_behind and ai_behind_) {
+        Info("AI has caught up (%.2fs behind); resuming inference", ai_lag.count());
+      }
+      ai_behind_ = ai_behind;
+
+      if (!ai_behind and !(shared_data->analysis_image_count % (motion_frame_skip+1))) {
       //TODO if (packet->hw_frame or packet->in_frame) {
 #if 1
         SystemTimePoint starttime = std::chrono::system_clock::now();

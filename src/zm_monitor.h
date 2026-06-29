@@ -838,6 +838,7 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
 #endif
   nlohmann::json last_detections;
   int last_detection_count;
+  bool ai_behind_ = false;  // true while skipping AI inference to catch up
 
   // Per-class AI detection settings (keyed by class name for quick lookup)
   std::unordered_map<std::string, AIDetectionSetting> ai_detection_settings;
