@@ -147,6 +147,18 @@ bool VideoStore::open() {
     zm_dump_codecpar(video_in_stream->codecpar);
 
     if (monitor->GetOptVideoWriter() == Monitor::PASSTHROUGH) {
+      // A passthrough copy of a video stream with no dimensions (camera still
+      // negotiating, or a corrupt/partial stream — see "No width and height in
+      // video stream") produces a 0x0 muxer track with erratic timestamps that
+      // later abort the fragmented-mp4 muxer inside av_interleaved_write_frame
+      // (movenc get_cluster_duration av_assert0(next_dts >= 0)) when the event
+      // is finalized. Refuse to record video from it; the caller falls back to
+      // jpeg storage.
+      if (video_in_stream->codecpar->width <= 0 || video_in_stream->codecpar->height <= 0) {
+        Warning("Input video stream has invalid dimensions %dx%d; not recording video (jpeg fallback)",
+            video_in_stream->codecpar->width, video_in_stream->codecpar->height);
+        return false;
+      }
       video_out_stream = avformat_new_stream(oc, nullptr);
       if (!video_out_stream) {
         Error("Unable to create video out stream");
@@ -489,6 +501,13 @@ bool VideoStore::open() {
         if (video_out_ctx) avcodec_free_context(&video_out_ctx);
         video_passthrough_fallback = true;
 
+        // Same guard as the PASSTHROUGH path: a 0x0 input stream copied into the
+        // muxer aborts the fragmented-mp4 writer at finalize. Fall back to jpegs.
+        if (video_in_stream->codecpar->width <= 0 || video_in_stream->codecpar->height <= 0) {
+          Warning("Input video stream has invalid dimensions %dx%d; not recording video (jpeg fallback)",
+              video_in_stream->codecpar->width, video_in_stream->codecpar->height);
+          return false;
+        }
         video_out_stream = avformat_new_stream(oc, nullptr);
         if (!video_out_stream) {
           Error("Unable to create video out stream");
@@ -1809,6 +1828,15 @@ int VideoStore::write_packet(AVPacket *pkt, AVStream *stream) {
   // Snapshot the keyframe's dts before the write call may modify the packet.
   int64_t this_keyframe_dts = is_video_keyframe ? pkt->dts : AV_NOPTS_VALUE;
 
+  if (finalizing_) {
+    // If av_interleaved_write_frame() abort()s in the mp4 muxer, this is the
+    // last line logged and pins the offending stream/packet timestamps.
+    Info("finalize write: stream %d dts=%" PRId64 " pts=%" PRId64 " duration=%" PRId64
+         " size=%d keyframe=%d",
+         stream->index, pkt->dts, pkt->pts, pkt->duration, pkt->size,
+         (pkt->flags & AV_PKT_FLAG_KEY) ? 1 : 0);
+  }
+
   int ret = av_interleaved_write_frame(oc, pkt);
   if (ret != 0) {
     Error("Error writing packet: %s", av_make_error_string(ret).c_str());
@@ -1853,6 +1881,21 @@ void VideoStore::finalize() {
   finalized_ = true;
 
   if (!oc || !oc->pb) return;
+
+  // The final fragment flush below can abort() inside the mp4 muxer on
+  // inconsistent per-track timestamps. Log the state we are about to flush so a
+  // recurrence is diagnosable, and arm per-packet logging in write_packet.
+  finalizing_ = true;
+  for (int i = 0; next_dts and (i <= max_stream_index); i++) {
+    Info("finalize: stream %d last_dts=%" PRId64 " next_dts=%" PRId64 " last_duration=%" PRId64
+         " packets_written=%d reorder_queue=%zu",
+         i,
+         last_dts.count(i) ? last_dts.at(i) : (int64_t)AV_NOPTS_VALUE,
+         next_dts[i],
+         last_duration.count(i) ? last_duration.at(i) : (int64_t)0,
+         packets_written,
+         reorder_queues.count(i) ? reorder_queues.at(i).size() : (size_t)0);
+  }
 
   // Drain reorder queues before writing the trailer — the destructor would
   // otherwise try to run these packets through av_interleaved_write_frame()

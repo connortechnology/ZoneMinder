@@ -118,6 +118,13 @@ class VideoStore {
   // inconsistent and a subsequent call can trigger an internal ffmpeg abort.
   bool write_packet_failed_;
 
+  // Set while finalize() drains the reorder queues + writes the trailer. The
+  // fragmented-mp4 muxer can abort() (not just error) here on inconsistent
+  // timestamps (movenc get_cluster_duration av_assert0). When set, write_packet
+  // logs each packet's timestamps just before the mux call so the last log line
+  // before such an abort identifies the offending stream/packet.
+  bool finalizing_ = false;
+
   bool setup_resampler();
   int write_packet(AVPacket *pkt, AVStream *stream);
   // Pull one packet from the video encoder and route it through write_packet.
