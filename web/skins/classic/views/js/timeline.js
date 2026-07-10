@@ -164,9 +164,9 @@ function buildTimelineFilterQuery() {
 
 function filterTimeline() {
   const query = buildTimelineFilterQuery();
-  location.assign('?view=timeline' + query +
-    '&minTime=' + encodeURIComponent(minTime) +
-    '&maxTime=' + encodeURIComponent(maxTime));
+  // The StartDateTime filter fields carry the date range; don't append
+  // separate minTime/maxTime params so PHP extracts them from the filter terms.
+  location.assign('?view=timeline' + query);
 }
 
 function tlZoomBounds(event) {
