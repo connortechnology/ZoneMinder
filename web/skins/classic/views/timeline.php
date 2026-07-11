@@ -201,11 +201,27 @@ if ( isset($range) and validInt($range) ) {
 }
 
 $tree = false;
+$filter = new ZM\Filter();
 if ( isset($_REQUEST['filter']) ) {
-  $filter = ZM\Filter::parse($_REQUEST['filter']);
-  $filter->remove_invalid_terms();
-  $tree = $filter->tree();
+  $filterFull = ZM\Filter::parse($_REQUEST['filter']);
+  $filterFull->remove_invalid_terms();
+  // Keep $tree from the full filter so extractDatetimeRange / appendDatetimeRange
+  // can read and rewrite the datetime nodes for pan/zoom navigation.
+  $tree = $filterFull->tree();
   ZM\Debug(print_r($tree, true));
+  // Copy only non-datetime terms into $filter.  Datetime terms conflict with the
+  // timeline's own minTime/maxTime range, producing duplicate StartDateTime
+  // conditions in the SQL and unwanted date pickers in the filter widget.
+  $dateTimeAttrs = ['DateTime', 'StartDateTime', 'EndDateTime',
+    'Date', 'StartDate', 'EndDate', 'StartTime', 'EndTime'];
+  foreach ($filterFull->terms() as $term) {
+    if (isset($term['attr']) && !in_array($term['attr'], $dateTimeAttrs)) {
+      $filter->addTerm($term);
+    }
+  }
+}
+if (!$filter->has_term('Monitor')) {
+  $filter->addTerm(['cnj'=>'and', 'attr'=>'Monitor', 'op'=>'=', 'val'=>'', 'cookie'=>'timelineMonitor'], 0);
 }
 $tempMinTime = $tempMaxTime = $tempExpandable = false;
 extractDatetimeRange($tree, $tempMinTime, $tempMaxTime, $tempExpandable);
@@ -687,6 +703,10 @@ echo getNavBarHTML();
       <h2 class="align-self-end"><?php echo translate('Timeline') ?></h2>
     </div>
 
+    <div id="fbpanel" class="buttons">
+      <?php echo $filter->simple_widget(); ?>
+    </div>
+
     <div id="content" class="chartSize">
       <div id="instruction">
         <p><?php echo translate('TimelineTip1') ?></p>
@@ -694,11 +714,12 @@ echo getNavBarHTML();
         <p><?php echo translate('TimelineTip3') ?></p>
         <p><?php echo translate('TimelineTip4') ?></p>
       </div>
-      <div id="topPanel" class="graphWidth">
+<?php $cols = max(1, (int)ceil(sqrt(count($monitors)))); ?>
+      <div id="topPanel" class="graphWidth" style="display:grid; grid-template-columns:repeat(<?php echo $cols ?>, 1fr); gap:4px;">
 <?php
 foreach ( $monitors as $monitor ) {
 ?>
-        <div class="monitorPanel" style="width:<?php echo 100/count($monitors); ?>%; float:left;">
+        <div class="monitorPanel">
         <div class="imagePanel"<?php echo count($monitors)==1?' style="width: 50%; float: left;"' :''?>>
             <div class="imageHeight image">
               <img id="imageSrc<?php echo $monitor->Id() ?>" class="imageWidth" src="graphics/transparent.png" alt="<?php echo translate('ViewEvent') ?>" title="<?php echo translate('ViewEvent') ?>" loading="lazy" />

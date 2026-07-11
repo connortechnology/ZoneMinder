@@ -36,18 +36,9 @@
 
 #topPanel {
     position: relative;
-    /*min-height: 220px;*/
     margin: 4px auto 6px;
-    display: block;
     width: 100%;
-}
-#topPanel:after {
-  content: ".";
-  display: block;
-  height: 0;
-    font-size: 0;
-  clear: both;
-  visibility: hidden;
+    align-items: start;
 }
 
 #topPanel .imagePanel {
@@ -97,7 +88,7 @@
 }
 
 #topPanel #navPanel {
-  float: left;
+    grid-column: 1 / -1;
     width: 100%;
     height: 70px;
     margin: 4px auto;

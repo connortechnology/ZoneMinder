@@ -213,8 +213,6 @@ echo $navbar ?>
           <i class="material-icons">view_list</i>
           <span class="text">&nbsp;<?php echo translate('Select') ?></span>
         </button>
-      </div>
-      <div class="rightButtons">
         <button type="button" id="sortBtn" data-on-click-this="sortMonitors" title="<?php echo translate('Sort')?>">
         <i class="material-icons sort" title="Click and drag rows to change order">swap_vert</i>
         <span class="text"><?php echo translate('Sort') ?></span>

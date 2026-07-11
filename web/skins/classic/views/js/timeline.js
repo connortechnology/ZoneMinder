@@ -153,6 +153,22 @@ function loadEventImage(imagePath, zm_event, fid) {
   }
 }
 
+function buildTimelineFilterQuery() {
+  var query = '';
+  $j('#fieldsTable input, #fieldsTable select').each(function() {
+    const el = $j(this);
+    query += '&' + encodeURIComponent(el.attr('name')) + '=' + encodeURIComponent(el.val());
+  });
+  return query;
+}
+
+function filterTimeline() {
+  const query = buildTimelineFilterQuery();
+  // The StartDateTime filter fields carry the date range; don't append
+  // separate minTime/maxTime params so PHP extracts them from the filter terms.
+  location.assign('?view=timeline' + query);
+}
+
 function tlZoomBounds(event) {
   var target = event.target;
   var minTime = target.getAttribute('data-zoom-min-time');
@@ -215,6 +231,9 @@ function initPage() {
     const monitor = monitors[mid];
     showEventData(events[monitor.FirstEventId], 1);
   }
+
+  // Reload timeline when monitor filter changes
+  $j('#fieldsTable input, #fieldsTable select').on('change', filterTimeline);
 
   // Bind the data-on-click attributes associated with a div
   divDataOnClick();

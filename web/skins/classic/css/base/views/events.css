@@ -80,16 +80,26 @@ body.sticky #eventTable thead {
   */
 }
 
+/* Let bootstrap-table's search/columns controls float right on the same
+   line as the toolbar.  The old width:100% forced them onto a second row. */
 .bs-bars {
-  width: 100%;
+  width: auto;
 }
 
-#toolbar .row {
-  width: 100%;
+/* Lay out the toolbar button groups in a single flex row. */
+#toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
-#toolbar .row >div {
-  padding: 0;
+#leftButtons,
+#rightButtons {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
 }
 
 #downloadModal a.disabled {

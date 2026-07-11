@@ -85,29 +85,27 @@ echo getNavBarHTML();
   <div id="page">
 <?php echo getPageHeaderHTML() ?>
     <div id="content" class="container-fluid">
+          <div id="fbpanel" class="buttons">
+            <?php
+              if (!$filter->Id()) {
+                echo $filter->simple_widget();
+              } else {
+                echo $filter->widget();
+              }
+            ?>
+          </div>
+
       <!-- Toolbar button placement and styling handled by bootstrap-tables -->
-      <div id="toolbar" class="container-fluid">
-        <div class="row">
-          <div class="col-sm-1">
+      <div id="toolbar">
             <div id="leftButtons" class="buttons">
+<?php if (defined('ZM_WEB_SHOW_NAV_BUTTONS') and ZM_WEB_SHOW_NAV_BUTTONS) { ?>
               <button id="backBtn" class="btn btn-normal" data-toggle="tooltip" data-placement="top" title="<?php echo translate('Back') ?>" disabled><i class="fa fa-arrow-left"></i></button>
               <button id="refreshBtn" class="btn btn-normal" data-toggle="tooltip" data-placement="top" title="<?php echo translate('Refresh') ?>" ><i class="fa fa-refresh"></i></button>
+<?php } ?>
               <button id="tlineBtn" class="btn btn-normal" data-toggle="tooltip" data-placement="top" title="<?php echo translate('ShowTimeline') ?>" ><i class="fa fa-history"></i></button>
               <button id="filterBtn" class="btn btn-normal" data-toggle="tooltip" data-placement="top" title="<?php echo translate('Filter') ?>"><i class="fa fa-filter"></i></button>
               <a class="btn" href="#" data-flip-control-object="#fieldsTable"><i id="fbflip" class="material-icons" data-icon-visible="filter_alt_off" data-icon-hidden="filter_alt"></i></a>
             </div>
-          </div> <!-- .col-sm-1-->
-          <div class="col-sm-9">
-  <?php
-    if (!$filter->Id()) {
-      echo $filter->simple_widget();
-    } else {
-      echo $filter->widget();
-    }
-  ?>
-
-          </div> <!-- .col-sm-9-->
-          <div class="col-sm-2">
             <div id="rightButtons" class="buttons">
               <button id="viewBtn" class="btn btn-normal" data-toggle="tooltip" data-placement="top" title="<?php echo translate('View') ?>" disabled><i class="fa fa-binoculars"></i></button>
               <button id="archiveBtn" class="btn btn-normal" data-toggle="tooltip" data-placement="top" title="<?php echo translate('Archive') ?>" disabled><i class="fa fa-archive"></i></button>
@@ -117,8 +115,6 @@ echo getNavBarHTML();
               <button id="downloadBtn" class="btn btn-normal" data-toggle="tooltip" data-placement="top" title="<?php echo translate('DownloadVideo') ?>" disabled><i class="fa fa-download"></i></button>
               <button id="deleteBtn" class="btn btn-danger" data-toggle="tooltip" data-placement="top" title="<?php echo translate('Delete') ?>" disabled><i class="fa fa-trash"></i></button>
             </div><!--#rightButtons .buttons-->
-          </div> <!-- .col-sm-2-->
-        </div> <!-- .row-->
       </div> <!-- #toolbar -->
 
       <div id="events" class="table-responsive">
