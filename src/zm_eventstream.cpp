@@ -929,16 +929,12 @@ bool EventStream::sendFrame(Microseconds delta_us) {
       std::unique_ptr<Image> owned_image;
 
       if (!reuse_filepath_.empty()) {
-        if (!std::filesystem::exists(reuse_filepath_)) {
-          Debug(1, "File at %s does not exist", reuse_filepath_.c_str());
-        } else {
-          // Decode into the reused member instead of allocating a fresh Image each
-          // frame. ReadJpeg's WriteBuffer reuses the pixel allocation when the
-          // dimensions match (every frame of a given event), eliminating a ~2MB
-          // malloc/free per streamed frame.
-          reuse_image_.ReadJpeg(reuse_filepath_, ZM_COLOUR_RGB24, ZM_SUBPIX_ORDER_RGB);
-          image = &reuse_image_;
-        }
+        // Decode into the reused member instead of allocating a fresh Image each
+        // frame. ReadJpeg's WriteBuffer reuses the pixel allocation when the
+        // dimensions match (every frame of a given event), eliminating a ~2MB
+        // malloc/free per streamed frame.
+        reuse_image_.ReadJpeg(reuse_filepath_, ZM_COLOUR_RGB24, ZM_SUBPIX_ORDER_RGB);
+        image = &reuse_image_;
       } else if (ffmpeg_input) {
         // Get the frame from the mp4 input
         const FrameData *frame_data = &event_data->frames[curr_frame_id-1];

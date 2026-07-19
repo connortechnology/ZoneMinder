@@ -40,7 +40,6 @@ function ajaxRequest(params) {
     // We won't automatically refresh to avoid disturbing the user who has selected rows.
     console.debug("The user selected rows in the table, and the AJAX request was rejected.");
     requestMissed = true;
-    updateHeaderRequestStatus("stopped");
     return;
   }
   if (ajax && (ajax.readyState !== 4 && ajax.readyState !== 0)) {
@@ -60,11 +59,17 @@ function ajaxRequest(params) {
   if ($j('#filterServerId').val()) {
     params.data.ServerId = $j('#filterServerId').val();
   }
-  if ($j('#filterLevel').val()) {
-    params.data.level = $j('#filterLevel').val();
+  // #filterLevel is a multi-select; val() returns an array of chosen levels (or
+  // null when nothing is selected, which the server treats as "All").
+  const levels = $j('#filterLevel').val();
+  if (levels && levels.length) {
+    params.data.level = levels;
   }
-  if ($j('#filterComponent').val()) {
-    params.data.Component = $j('#filterComponent').val();
+  // #filterComponent is a multi-select; val() returns an array of chosen
+  // components (or null when nothing is selected, treated as "All").
+  const components = $j('#filterComponent').val();
+  if (components && components.length) {
+    params.data.Component = components;
   }
   if ($j('#filterStartDateTime').val()) {
     params.data.StartDateTime = $j('#filterStartDateTime').val();
@@ -84,6 +89,7 @@ function ajaxRequest(params) {
     timeout: 600000,
     success: function(data) {
       updateHeaderRequestStatus(secsToTime((Date.now() - startTime)/1000, 1));
+      updateHeaderStats(data);
       table.bootstrapTable('hideLoading');
       if (!data.rows.length && data.total > 0) {
         // The requested page is out of range; reset to page 1.
@@ -96,7 +102,6 @@ function ajaxRequest(params) {
         totalNotFiltered: data.totalNotFiltered,
         rows: processRows(data.rows)
       });
-      updateHeaderStats(data);
     },
     error: function(jqxhr) {
       if (jqxhr.statusText === "plannedAbort") {
@@ -149,7 +154,7 @@ function updateHeaderStats(data) {
   $j('#totalLogs').text(Number(data.total).toLocaleString());
   $j('#availLogs').text(Number(data.totalNotFiltered).toLocaleString());
   $j('#lastUpdate').text(data.updated);
-  $j('#displayLogs').text(startRow + ' to ' + stopRow);
+  $j('#displayLogs').text(Number(startRow).toLocaleString() + ' to ' + Number(stopRow).toLocaleString());
 }
 
 function manageClearLogsModalBtns() {
@@ -399,8 +404,13 @@ function initPage() {
       .datetimepicker({timeFormat: "HH:mm:ss", dateFormat: "yy-mm-dd", maxDate: 0, constrainInput: false, onClose: filterLog});
   $j('#filterServerId')
       .on('change', filterLog);
-  $j('#filterComponent')
-      .on('change', filterLog);
+}
+
+function paginationInfoToLocaleString() {
+  const block = $j('#logsTable').find('.pagination-info');
+  if (block.length) {
+    block.html(stringToLocaleString(block.html()));
+  }
 }
 
 function paginationInfoToLocaleString() {
@@ -423,10 +433,12 @@ function manageClearButtonAvailability(enable = null) {
 
   if (selections.length) {
     allowRequest = false; // We'll prevent table updates from interfering with the user who has selected rows.
+    updateHeaderRequestStatus("stopped");
     if (ajax && (ajax.readyState !== 4 && ajax.readyState !== 0)) {
       ajax.abort("plannedAbort"); // There may already be a previous request that hasn't completed.
     }
   } else {
+    if (readHeaderRequestStatus() === "stopped") updateHeaderRequestStatus("awaiting");
     if (requestMissed === true) {
       // A scheduled AJAX update was missed. We'll execute it out of order.
       allowRequest = true;
@@ -436,6 +448,10 @@ function manageClearButtonAvailability(enable = null) {
       updateHeaderRequestStatus("in process");
     }
   }
+}
+
+function readHeaderRequestStatus() {
+  return $j('#requestStatus').text().replace(/(\[|\])/g, '').trim();
 }
 
 function updateHeaderRequestStatus(text) {

@@ -301,8 +301,14 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
     char video_fifo_path[64]; /* 664 */
     char audio_fifo_path[64]; /* 728 */
     char janus_pin[64];       /* 792 */
-    /* 856 total? */
   } SharedData;
+  // Cross-process ABI guard. The struct is naturally aligned (NOT packed), so
+  // two 4-byte pads exist (before capture_fps and before the startup_time
+  // union); the /* +N */ comments above are the packed-layout ideal and do NOT
+  // reflect real offsets. zmc/zma/zms and the Perl (Memory.pm, which computes
+  // alignment) SHM reader assume this exact layout. If it changes, update the
+  // readers in lockstep and bump the size here.
+  static_assert(sizeof(SharedData) == 896, "SharedData layout changed; update Memory.pm and Monitor.php offsets");
 
   enum TriggerState : uint32 { TRIGGER_CANCEL, TRIGGER_ON, TRIGGER_OFF };
 
@@ -761,6 +767,9 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   std::vector<Image *> image_buffer;
   std::vector<Image *> analysis_image_buffer;
   AVPixelFormat *image_pixelformats;
+  // Per-slot cross-process format for the analysis image ring (one entry per
+  // analysis_image_buffer slot), mirroring image_pixelformats for the capture
+  // ring. Replaces the former single alarm_image_pixelformat.
   AVPixelFormat *analysis_image_pixelformats;
   size_t shm_slot_size;  // per-slot byte capacity, sized to RGBA upper bound
 

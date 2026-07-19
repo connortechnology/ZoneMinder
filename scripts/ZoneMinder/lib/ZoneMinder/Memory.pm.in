@@ -147,10 +147,10 @@ our %mem_data = (
   shared_data => { type=>'SharedData', seq=>$mem_seq++, contents=> {
     size             => { type=>'uint32', seq=>$mem_seq++ },
     last_capture_index => { type=>'int32', seq=>$mem_seq++ },
-    last_write_index => { type=>'int32', seq=>$mem_seq++ },
+    last_decoder_index => { type=>'int32', seq=>$mem_seq++ },
     last_read_index  => { type=>'int32', seq=>$mem_seq++ },
     last_analysis_index  => { type=>'int32', seq=>$mem_seq++ },
-    image_count      => { type=>'int32', seq=>$mem_seq++ },
+    capture_image_count => { type=>'int32', seq=>$mem_seq++ },
     decoder_image_count => { type=>'int32', seq=>$mem_seq++ },
     analysis_image_count      => { type=>'int32', seq=>$mem_seq++ },
     state            => { type=>'uint32', seq=>$mem_seq++ },
@@ -684,7 +684,7 @@ if ( zmMemVerify( $monitor ) ) {
 }
 
 ( $lri, $lwi ) = zmMemRead( $monitor, [ 'shared_data:last_read_index',
-    'shared_data:last_write_index'
+    'shared_data:last_capture_index'
 ]
 );
 zmMemWrite( $monitor, { 'trigger_data:trigger_showtext' => "Some Text" } );
@@ -845,7 +845,7 @@ analysing         Flag indicating whether this monitor is presently analysing
 recording         Flag indicating whether this monitor is presently recording
 signal            Flag indicating whether this monitor is receiving a valid signal
 state             The current monitor state, see the STATE constants below
-last_write_index  The last index, in the image buffer, that an image has been saved to
+last_capture_index The last index, in the image buffer, that an image has been saved to
 last_read_index   The last index, in the image buffer, that an image has been analysed from
 last_write_time   The time (in utc seconds) when the last image was captured
 last_read_time    The time (in utc seconds) when the last image was analysed

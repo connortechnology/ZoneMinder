@@ -588,8 +588,56 @@ function MonitorStream(monitorData) {
     );
   };
 
+  // When a go2rtc player connects but the source video codec cannot be decoded by
+  // this browser (e.g. an H.265 camera viewed in Chrome, which supports HEVC over
+  // neither WebRTC nor MSE), go2rtc negotiates the video track as inactive and sends
+  // only audio. The <video> then "plays" audio with no picture and stays at 0x0, so
+  // the normal 'error' handler never fires and the player hangs on "Loading...".
+  // Watch for a decoded video frame; if none arrives in time, treat it as a playback
+  // failure and fall back to the next player (ultimately ZMS MJPEG).
+  this.NO_VIDEO_TIMEOUT = 8000;
+  // The transcode stream has to cold-start ffmpeg on the go2rtc host and wait for a
+  // keyframe, so give it a longer grace period than the native-stream check.
+  this.TRANSCODE_NO_VIDEO_TIMEOUT = 15000;
+  this.noVideoWatchdog = null;
+  this.go2rtcTranscodeTried = false;
+
+  this.clearNoVideoWatchdog = function() {
+    if (this.noVideoWatchdog) {
+      clearTimeout(this.noVideoWatchdog);
+      this.noVideoWatchdog = null;
+    }
+  };
+
+  this.startNoVideoWatchdog = function(timeout) {
+    this.clearNoVideoWatchdog();
+    const self = this;
+    const t = timeout || this.NO_VIDEO_TIMEOUT;
+    this.noVideoWatchdog = setTimeout(function() {
+      self.noVideoWatchdog = null;
+      if (!self.started || -1 === self.activePlayer.indexOf('go2rtc')) return;
+      const v = self.getAVStream();
+      if (v && v.videoWidth > 0 && v.videoHeight > 0) return; // video is decoding fine
+      if (!self.go2rtcTranscodeTried) {
+        // The source codec is undecodable by this browser (e.g. H.265 in Chrome).
+        // Before giving up on go2rtc, request its server-side H.264 transcode of this
+        // monitor ("<id>_h264"), which go2rtc produces on demand.
+        self.go2rtcTranscodeTried = true;
+        console.warn(`Monitor ID=${self.id}: player "${self.player}" produced no video within ${self.NO_VIDEO_TIMEOUT}ms (native codec likely unsupported, e.g. H.265); requesting go2rtc H.264 transcode stream ${self.id}_h264.`);
+        self.updateStreamInfo('', 'No video - trying H.264 transcode');
+        self.select_go2rtc(self.currentChannelStream); // restarts the watchdog with the transcode timeout
+        return;
+      }
+      console.warn(`Monitor ID=${self.id}: H.264 transcode also produced no video; falling back to the next player.`);
+      self.updateStreamInfo('', 'No video - trying next player');
+      self.streamErrorRegistration();
+      self.selectNextPlayer(self.player);
+    }, t);
+  };
+
   this.start = function(streamChannel = 'default') {
     this.writeTextInfoBlock("Loading...");
+    this.go2rtcTranscodeTried = false; // a fresh start re-probes the native stream first
     if (streamChannel === null || streamChannel === '' || currentView == 'montage') streamChannel = 'default';
     // Normalize channel name for internal tracking
     if (streamChannel == 'default') {
@@ -728,6 +776,7 @@ function MonitorStream(monitorData) {
     console.debug(`! ${dateTimeToISOLocal(new Date())} Stream for ID=${this.id} STOPPING`);
     this.statusCmdTimer = clearInterval(this.statusCmdTimer);
     this.streamCmdTimer = clearInterval(this.streamCmdTimer);
+    this.clearNoVideoWatchdog();
     this.mediaStream = this.audioTrack = this.videoTrack = null;
 
     if (-1 !== this.activePlayer.indexOf('zms')) {
@@ -756,10 +805,8 @@ function MonitorStream(monitorData) {
         stream.srcObject = null;
         this.webrtc = null;
       }
-      if (this.hls) {
-        this.hls.destroy();
-        this.hls = null;
-      }
+      if (this.hls) hlsDestroy(this);
+
       if (-1 !== this.activePlayer.indexOf('mse')) {
         this.stopMse();
       }
@@ -795,7 +842,7 @@ function MonitorStream(monitorData) {
           Very, very rarely, on the MONTAGE PAGE THERE MAY BE AN ERROR OF THE TYPE: TypeError: Failed to execute 'remove' on 'SourceBuffer': The start provided (0) is outside the range (0, 0).
           Possibly due to high CPU load, the browser does not have time to process or the "src" attribute was removed from the object.
           */
-          this.mseSourceBuffer.remove(0, Infinity);
+          if (this.mse.sourceBuffers.length > 0) this.mseSourceBuffer.remove(0, Infinity);
         } catch (e) {
           console.warn(`${dateTimeToISOLocal(new Date())} An error occurred while cleaning Source Buffer for ID=${this.id}`, e);
           reject(e);
@@ -1742,14 +1789,22 @@ function MonitorStream(monitorData) {
       const webrtcUrl = Go2RTCModUrl;
       this.currentChannelStream = streamChannel;
       const streamSuffix = this.getStreamSuffix(streamChannel);
-      console.log('go2rtc stream:', this.id + streamSuffix);
+      // When the native stream produced no decodable video, request go2rtc's
+      // server-side H.264 transcode of the primary stream instead.
+      const streamName = this.go2rtcTranscodeTried ? (this.id + '_h264') : (this.id + streamSuffix);
+      console.log('go2rtc stream:', streamName);
       webrtcUrl.protocol = (url.protocol=='https:') ? 'wss:' : 'ws';
       webrtcUrl.pathname += "/ws";
-      webrtcUrl.search = 'src=' + this.id + streamSuffix;
+      webrtcUrl.search = 'src=' + streamName;
       stream.src = webrtcUrl.href;
 
       this.webrtc = stream; // track separately do to api differences between video tag and video-stream
-      if (-1 != this.player.indexOf('_')) {
+      if (this.go2rtcTranscodeTried) {
+        // Force MSE for the transcode: go2rtc's on-the-fly H.264 does not carry the
+        // periodic parameter sets WebRTC needs, so over WebRTC the browser receives
+        // packets but assembles no frames.  MSE (fragmented MP4) decodes it fine.
+        stream.mode = 'mse';
+      } else if (-1 != this.player.indexOf('_')) {
         stream.mode = this.player.substring(this.player.indexOf('_')+1);
       }
       const video_el = this.getAVStream();
@@ -1763,6 +1818,7 @@ function MonitorStream(monitorData) {
 
       if (typeof observerMontage !== 'undefined') observerMontage.observe(stream);
       this.activePlayer = 'go2rtc';
+      this.startNoVideoWatchdog(this.go2rtcTranscodeTried ? this.TRANSCODE_NO_VIDEO_TIMEOUT : this.NO_VIDEO_TIMEOUT);
     } else {
       alert("ZM_GO2RTC_PATH is empty. Go to Options->System and set ZM_GO2RTC_PATH accordingly.");
     }
@@ -1802,17 +1858,41 @@ function MonitorStream(monitorData) {
             maxBufferLength: 10,
             maxMaxBufferLength: 30,
           });
+
+          /* For debug ALL events HLS
+          const self = this;
+          Object.keys(Hls.Events).forEach(function(eventName) {
+            self.hls.on(Hls.Events[eventName], function(event, data) {
+              console.debug('HLS Event = ', eventName);
+              console.debug('HLS Event data = ', data);
+            });
+          });
+          */
+
+          this.hls.on(Hls.Events.MEDIA_ATTACHING, function(event, data) {
+            console.debug(`HLS Event = MEDIA_ATTACHING for monitor ID=${this.id}`);
+          }, this);
+          this.hls.on(Hls.Events.BUFFER_CODECS, function(event, data) {
+            // Triggers if there is an audio track.
+            console.log(`For monitor with ID=${this.id}, the "${data.audio.codec}" audio codec is used.`);
+            if (data.audio.codec.indexOf('mp4a.40.') > -1) {
+              // AAC: mp4a.40.2 - HLS can't play it, so the "Loading" status will always be displayed.
+              // PCM, G.711A, G.711Mu, G.726, G.723 - no audio track
+              this.updateStreamInfo('', `Error. AAC codec "${data.audio.codec}" is not supported.`); //HLS
+              this.streamErrorRegistration();
+              hlsDestroy(this);
+              this.restart(this.currentChannelStream);
+            }
+          }, this);
           this.hls.on(Hls.Events.MEDIA_ATTACHED, function(event, data) {
             console.log(`Video and hls.js are now bound together for monitor ID=${this.id}`);
-            this.updateStreamInfo('', ''); //HLS
-            //getTracksFromStream(this); //HLS
           }, this);
           this.hls.on(Hls.Events.ERROR, function(event, data) {
             console.warn("HLS Event = ERROR", "\n", "event:", event, "\n", "errorType:", data.type, "\n", "errorDetails:", data.details, "\n", "errorFatal:", data.fatal);
+            if (!data || !data.fatal) return;
             this.updateStreamInfo('', 'Error'); //HLS
             this.streamErrorRegistration();
-            if (!data || !data.fatal) return;
-            this.hls.destroy();
+            hlsDestroy(this);
             this.restart(this.currentChannelStream);
           }, this);
           this.hls.loadSource(hlsUrl.href);
@@ -1820,6 +1900,11 @@ function MonitorStream(monitorData) {
         } else if (stream.canPlayType('application/vnd.apple.mpegurl')) {
           stream.src = hlsUrl.href;
         }
+
+        video_el.onplay = (event) => {
+          this.updateStreamInfo('', '');
+          this.resetCountStreamErrors(this.activePlayer);
+        };
         this.activePlayer = 'rtsp2web_hls';
       } else if (-1 !== this.player.indexOf('mse')) {
         const mseUrl = rtsp2webModUrl;
@@ -1976,15 +2061,6 @@ function MonitorStream(monitorData) {
     }
   };
 
-  this.streamErrorRegistration = function() {
-    const currentPlayer = this.player;
-    for (const key in this.playerPriority) {
-      if (-1 !== currentPlayer.indexOf(this.playerPriority[key]['name'])) {
-        this.playerPriority[key]['countErrors'] = parseInt(this.playerPriority[key]['countErrors'], 10) + 1;
-      }
-    }
-  };
-
   this.selectNextPlayer = function(currentPlayer = null) {
     if (this.defaultPlayer == this.player) {
       // This means we need to start the bypass from the beginning, since we started playback from the default player, which may be in the middle of the list.
@@ -2021,6 +2097,16 @@ function MonitorStream(monitorData) {
     if (!foundNextPlayer) {
       this.player = 'zms';
       this.restart(this.currentChannelStream);
+    }
+  };
+
+  this.streamErrorRegistration = function() {
+    const currentPlayer = this.player;
+    for (const key in this.playerPriority) {
+      if (-1 !== currentPlayer.indexOf(this.playerPriority[key]['name'])) {
+        this.playerPriority[key]['countErrors'] = parseInt(this.playerPriority[key]['countErrors'], 10) + 1;
+        break;
+      }
     }
   };
 } // end class MonitorStream
@@ -2248,7 +2334,7 @@ function startRTSP2WebPlay(videoEl, url, stream) {
         }
       },
       error: function(xhr, status, error) {
-        console.warn('Error request localDescription:', error, xhr.responseText);
+        console.warn('RTSP2Web_webrtc Error request localDescription:', error, xhr.responseText);
         stream.updateStreamInfo('', 'Error'); //WEBRTC
         stream.streamErrorRegistration();
         stream.restart(stream.currentChannelStream);

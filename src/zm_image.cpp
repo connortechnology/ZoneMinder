@@ -395,8 +395,17 @@ bool Image::Assign(const AVFrame *frame) {
   }
   zm_dump_video_frame(frame, "source frame in Image::Assign");
 
-  AVPixelFormat format = (AVPixelFormat)AVPixFormat();
-  AVPixelFormat src_fmt = static_cast<AVPixelFormat>(frame->format);
+  // imagePixFormat is the canonical destination format; the deprecated
+  // AVPixFormat() getter re-derives via (colours, subpixelorder) and would
+  // pick the wrong swscale target if those legacy fields drift out of sync
+  // (e.g. the GRAY8/YUV420P alias collision).
+  const AVPixelFormat format = imagePixFormat;
+  // Map deprecated YUVJ* formats to their non-J equivalents before handing the
+  // format to swscale. Passing YUVJ420P/YUVJ422P/etc directly makes swscale emit
+  // "deprecated pixel format used, make sure you did set range correctly" (seen
+  // in nph-zms). This mirrors what SWScale::Convert already does.
+  const AVPixelFormat orig_src_fmt = static_cast<AVPixelFormat>(frame->format);
+  const AVPixelFormat src_fmt = fix_deprecated_pix_fmt(orig_src_fmt);
 
   // If source and destination format + dimensions match, do a direct plane
   // copy instead of running through sws_scale. This avoids the overhead of
@@ -432,6 +441,7 @@ bool Image::Assign(const AVFrame *frame) {
     Error("Unable to create conversion context");
     return false;
   }
+  zm_sws_set_input_range(sws_convert_context, orig_src_fmt);
   bool result = Assign(frame, sws_convert_context);
   update_function_pointers();
   return result;
@@ -1096,6 +1106,11 @@ Image *Image::HighlightEdges(
   unsigned int hi_x = limits ? limits->Hi().x_ : width - 1;
   unsigned int hi_y = limits ? limits->Hi().y_ : height - 1;
 
+  // Source (this) is GRAY8 (guaranteed by the Panic above) with linesize per
+  // row. Use it when looking up neighbour pixels (p ± src_linesize) so we
+  // follow the actual row stride rather than `width`.
+  const unsigned int src_linesize = linesize;
+
   if ( p_pixfmt == AV_PIX_FMT_GRAY8 ) {
     for ( unsigned int y = lo_y; y <= hi_y; y++ ) {
       const uint8_t* p = buffer + (y * linesize) + lo_x;
@@ -1155,6 +1170,33 @@ Image *Image::HighlightEdges(
         }
         if ( edge ) {
           *phigh = colour;
+        }
+      }
+    }
+  } else if ( zm_is_yuv420(p_pixfmt) ) {
+    // Single alarm colour over a transparent (Y=0) background; Overlay() onto
+    // a YUV420 image keys on a non-zero luma marker. Write the colour's luma
+    // at each edge pixel and its chroma at the shared 2x2 chroma sample.
+    const YUV yuv = brg_to_yuv(colour);
+    const uint8_t Yc = Y_VAL(yuv), Uc = U_VAL(yuv), Vc = V_VAL(yuv);
+    uint8_t *hplane[4] = {};
+    int hstride[4] = {};
+    if (av_image_fill_arrays(hplane, hstride, high_buff, p_pixfmt, width, height, 32) < 0) {
+      Error("HighlightEdges: av_image_fill_arrays failed for YUV420 %ux%u", width, height);
+      return high_image;
+    }
+    for ( unsigned int y = lo_y; y <= hi_y; y++ ) {
+      const uint8_t* p = buffer + (y * src_linesize) + lo_x;
+      for ( unsigned int x = lo_x; x <= hi_x; x++, p++ ) {
+        bool edge = false;
+        if ( *p ) {
+          edge = (x > 0 && !*(p-1)) || (x < (width-1) && !*(p+1))
+              || (y > 0 && !*(p-src_linesize)) || (y < (height-1) && !*(p+src_linesize));
+        }
+        if ( edge ) {
+          hplane[0][y * hstride[0] + x] = Yc ? Yc : 1;  // keep the luma marker non-zero
+          hplane[1][(y / 2) * hstride[1] + (x / 2)] = Uc;
+          hplane[2][(y / 2) * hstride[2] + (x / 2)] = Vc;
         }
       }
     }
@@ -2122,11 +2164,62 @@ void Image::Overlay( const Image &image ) {
     return;
   }
 
-  /* Grayscale on top of YUV420P - overlay on Y plane only with linesize handling */
-  if (zm_is_yuv420(imagePixFormat) && image.imagePixFormat == AV_PIX_FMT_GRAY8) {
-    Debug(1, "Overlaying GRAY8 on YUV420P Y-plane %dx%d, dest linesize %d, src linesize %d",
-          width, height, linesize, image.linesize);
-    // Overlay on Y plane only, respecting linesize for both images
+  // Drive every branch row-by-row using each image's own linesize. Walking
+  // linearly with `buffer + size` as the end was unsafe in two ways:
+  // (a) source and destination linesizes can differ (e.g. one came in via
+  // AssignDirect with a held buffer at a non-FFALIGN stride), so a shared
+  // index drifted across rows; (b) the destination's `size` includes chroma
+  // planes for planar YUV destinations, so iterating to `buffer + size`
+  // walked past the source's Y plane and clobbered the destination's
+  // chroma. After Colourise() the destination's linesize is updated to the
+  // new format's stride, so we re-read it inside each branch.
+
+  /* YUV420 on top of YUV420 - copy luma + chroma using luma as the mask */
+  if ( zm_is_yuv420(imagePixFormat) && zm_is_yuv420(image.imagePixFormat) ) {
+    // The overlay (a zone alarm highlight) is built in the target's format
+    // with a Clear()ed (Y=0) transparent background, so a non-zero source
+    // luma marks a pixel to paint. Copy that luma, and copy the shared
+    // chroma sample whenever any of the luma pixels it covers is marked.
+    uint8_t *dplane[4] = {};
+    int dstride[4] = {};
+    const uint8_t *splane[4] = {};
+    int sstride[4] = {};
+    if (av_image_fill_arrays(dplane, dstride, buffer, imagePixFormat, width, height, 32) < 0
+        || av_image_fill_arrays(const_cast<uint8_t **>(splane), sstride, image.buffer,
+                                image.imagePixFormat, width, height, 32) < 0) {
+      Error("Overlay: av_image_fill_arrays failed for YUV420 %ux%u", width, height);
+      return;
+    }
+    for (unsigned int y = 0; y < height; y++) {
+      const uint8_t *psrc = splane[0] + y * sstride[0];
+      uint8_t *pdest = dplane[0] + y * dstride[0];
+      for (unsigned int x = 0; x < width; x++) {
+        if (psrc[x]) pdest[x] = psrc[x];
+      }
+    }
+    const unsigned int cw = (width + 1) / 2;
+    const unsigned int ch = (height + 1) / 2;
+    for (unsigned int cy = 0; cy < ch; cy++) {
+      for (unsigned int cx = 0; cx < cw; cx++) {
+        bool marked = false;
+        for (unsigned int dy = 0; dy < 2 && !marked; dy++) {
+          const unsigned int ly = cy * 2 + dy;
+          if (ly >= height) break;
+          for (unsigned int dx = 0; dx < 2; dx++) {
+            const unsigned int lx = cx * 2 + dx;
+            if (lx < width && splane[0][ly * sstride[0] + lx]) { marked = true; break; }
+          }
+        }
+        if (marked) {
+          dplane[1][cy * dstride[1] + cx] = splane[1][cy * sstride[1] + cx];
+          dplane[2][cy * dstride[2] + cx] = splane[2][cy * sstride[2] + cx];
+        }
+      }
+    }
+
+    /* Grayscale/YUV420 on top of grayscale/YUV420 - complete */
+  } else if ( zm_bytes_per_pixel(imagePixFormat) == 1 && zm_bytes_per_pixel(image.imagePixFormat) == 1 ) {
+    // Overlay only the luma/primary plane. Width is shared (panic above).
     for (unsigned int y = 0; y < height; y++) {
       uint8_t* pdest = buffer + (y * linesize);
       const uint8_t* psrc = image.buffer + (y * image.linesize);

@@ -1285,7 +1285,7 @@ bool Monitor::connect() {
     shared_data->last_capture_index = image_buffer_count;
     shared_data->last_decoder_index = image_buffer_count;
     shared_data->last_read_index = image_buffer_count;
-    shared_data->last_analysis_index = image_buffer_count;
+    shared_data->last_analysis_index = image_buffer_count; // sentinel: nothing published yet
     shared_data->capture_image_count = 0;
     shared_data->decoder_image_count = 0;
     shared_data->analysis_image_count = 0;
@@ -1457,6 +1457,8 @@ bool Monitor::disconnect() {
     // be free'd.
     delete image_buffer[i];
     image_buffer[i] = nullptr;
+    // analysis_image_buffer entries point into the same SHM mapping (with
+    // HoldBuffer set) so deleting them won't free the SHM bytes.
     delete analysis_image_buffer[i];
     analysis_image_buffer[i] = nullptr;
   }
@@ -3550,28 +3552,8 @@ int Monitor::Capture() {
 
 bool Monitor::setupConvertContext(const AVFrame *input_frame, const Image *image) {
   AVPixelFormat imagePixFormat = image->AVPixFormat();
-  AVPixelFormat inputPixFormat;
-  bool changeColorspaceDetails = false;
-  switch (input_frame->format) {
-  case AV_PIX_FMT_YUVJ420P:
-    inputPixFormat = AV_PIX_FMT_YUVJ420P;
-    changeColorspaceDetails = true;
-    break;
-  case AV_PIX_FMT_YUVJ422P:
-    inputPixFormat = AV_PIX_FMT_YUV422P;
-    changeColorspaceDetails = true;
-    break;
-  case AV_PIX_FMT_YUVJ444P:
-    inputPixFormat = AV_PIX_FMT_YUV444P;
-    changeColorspaceDetails = true;
-    break;
-  case AV_PIX_FMT_YUVJ440P:
-    inputPixFormat = AV_PIX_FMT_YUV440P;
-    changeColorspaceDetails = true;
-    break;
-  default:
-    inputPixFormat = (AVPixelFormat)input_frame->format;
-  }
+  AVPixelFormat origPixFormat = (AVPixelFormat)input_frame->format;
+  AVPixelFormat inputPixFormat = fix_deprecated_pix_fmt(origPixFormat);
 
   convert_context = sws_getContext(
       input_frame->width, input_frame->height, inputPixFormat, image->Width(),
@@ -3583,20 +3565,13 @@ bool Monitor::setupConvertContext(const AVFrame *input_frame, const Image *image
   } else {
     Debug(1, "Setup conversion context for %dx%d %s to %dx%d %s",
           input_frame->width, input_frame->height,
-          av_get_pix_fmt_name(inputPixFormat), image->Width(), image->Height(),
-          av_get_pix_fmt_name(imagePixFormat));
-    if (changeColorspaceDetails) {
-      // change the range of input data by first reading the current color space and then setting it's range as yuvj.
-      int dummy[4];
-      int srcRange, dstRange;
-      int brightness, contrast, saturation;
-      sws_getColorspaceDetails(convert_context, (int **)&dummy, &srcRange,
-                               (int **)&dummy, &dstRange, &brightness,
-                               &contrast, &saturation);
-      const int *coefs = sws_getCoefficients(SWS_CS_DEFAULT);
-      srcRange = 1;  // this marks that values are according to yuvj
-      sws_setColorspaceDetails(convert_context, coefs, srcRange, coefs, dstRange, brightness, contrast, saturation);
-    }
+          av_get_pix_fmt_name(inputPixFormat),
+          image->Width(), image->Height(),
+          av_get_pix_fmt_name(imagePixFormat)
+         );
+    // Mark the input as full range when the source was a YUVJ* format so the
+    // conversion maths doesn't crush full-range luma into limited range.
+    zm_sws_set_input_range(convert_context, origPixFormat);
   }
   return (convert_context != nullptr);
 } //end bool Monitor::setupConvertContext(const AVFrame *input_frame, const Image *image) 
