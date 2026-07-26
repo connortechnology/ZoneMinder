@@ -399,18 +399,25 @@ bool Image::Assign(const AVFrame *frame) {
   // AVPixFormat() getter re-derives via (colours, subpixelorder) and would
   // pick the wrong swscale target if those legacy fields drift out of sync
   // (e.g. the GRAY8/YUV420P alias collision).
-  const AVPixelFormat format = imagePixFormat;
+  const AVPixelFormat orig_dst_fmt = imagePixFormat;
   // Map deprecated YUVJ* formats to their non-J equivalents before handing the
-  // format to swscale. Passing YUVJ420P/YUVJ422P/etc directly makes swscale emit
-  // "deprecated pixel format used, make sure you did set range correctly" (seen
-  // in nph-zms). This mirrors what SWScale::Convert already does.
+  // formats to swscale. Passing YUVJ420P/YUVJ422P/etc directly makes swscale
+  // emit "deprecated pixel format used, make sure you did set range correctly",
+  // and because swscale rewrites the format inside the context the cache lookup
+  // in sws_getCachedContext() never matches again: the context is torn down and
+  // rebuilt for every single frame. BOTH ends have to be fixed up - fixing only
+  // the source left every MJPEG monitor rebuilding its context per frame.
   const AVPixelFormat orig_src_fmt = static_cast<AVPixelFormat>(frame->format);
   const AVPixelFormat src_fmt = fix_deprecated_pix_fmt(orig_src_fmt);
+  const AVPixelFormat format = fix_deprecated_pix_fmt(orig_dst_fmt);
 
   // If source and destination format + dimensions match, do a direct plane
   // copy instead of running through sws_scale. This avoids the overhead of
   // the swscale pipeline for identity conversions (e.g. YUVJ422P→YUVJ422P).
+  // The ranges have to match too: YUVJ422P->YUV422P shares a plane layout but
+  // needs the full->limited range conversion that only swscale does.
   if (src_fmt == format
+      && pix_fmt_is_jpeg_range(orig_src_fmt) == pix_fmt_is_jpeg_range(orig_dst_fmt)
       && frame->width == static_cast<int>(width)
       && frame->height == static_cast<int>(height)) {
     Debug(4, "Same format %s %dx%d, using av_image_copy",
@@ -441,7 +448,7 @@ bool Image::Assign(const AVFrame *frame) {
     Error("Unable to create conversion context");
     return false;
   }
-  zm_sws_set_input_range(sws_convert_context, orig_src_fmt);
+  zm_sws_set_ranges(sws_convert_context, orig_src_fmt, orig_dst_fmt);
   bool result = Assign(frame, sws_convert_context);
   update_function_pointers();
   return result;

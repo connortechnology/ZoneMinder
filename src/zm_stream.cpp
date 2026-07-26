@@ -126,18 +126,23 @@ bool StreamBase::initContexts(int in_width, int in_height, AVPixelFormat format,
     sws_freeContext(mJpegSwsContext);
   }
 
+  // Hand swscale the non-deprecated formats and state the ranges explicitly.
+  // Passing YUVJ* straight in makes it log "deprecated pixel format used, make
+  // sure you did set range correctly" for every context it builds - once per
+  // zms request.
   mJpegSwsContext = sws_getContext(
-      //monitor->Width(), monitor->Height(), 
+      //monitor->Width(), monitor->Height(),
       // theoretically, the stream can be any size not necessarily monitor size. I think. This is here more for format conversion than scaling.
       // No we are doing scaling here too. It got removed from prepareImage
-      in_width, in_height, format,
-      out_width, out_height, mJpegCodecContext->pix_fmt,
+      in_width, in_height, fix_deprecated_pix_fmt(format),
+      out_width, out_height, fix_deprecated_pix_fmt(mJpegCodecContext->pix_fmt),
       SWS_BICUBIC, nullptr, nullptr, nullptr);
 
   if (!mJpegSwsContext) {
     Warning("Failed to alloc swscontext");
     return false;
   } else {
+    zm_sws_set_ranges(mJpegSwsContext, format, mJpegCodecContext->pix_fmt);
     Debug(1, "Configured swsContext to %dx%d %d %s to %dx%d %d %s",
         in_width, in_height, format, av_get_pix_fmt_name(format),
         out_width, out_height, mJpegCodecContext->pix_fmt, av_get_pix_fmt_name(mJpegCodecContext->pix_fmt));

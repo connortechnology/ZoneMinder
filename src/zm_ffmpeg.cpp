@@ -698,14 +698,18 @@ bool pix_fmt_is_jpeg_range(enum AVPixelFormat fmt) {
   }
 }
 
-void zm_sws_set_input_range(struct SwsContext *ctx, enum AVPixelFormat original_src_fmt) {
-  // swscale assumes limited (MPEG) input range by default. When the decoded
-  // source was a full-range JPEG format (YUVJ*) that got mapped to its non-J
+void zm_sws_set_ranges(struct SwsContext *ctx,
+                       enum AVPixelFormat original_src_fmt,
+                       enum AVPixelFormat original_dst_fmt) {
+  // swscale assumes limited (MPEG) range on both ends by default. When either
+  // end was a full-range JPEG format (YUVJ*) that got mapped to its non-J
   // equivalent by fix_deprecated_pix_fmt(), swscale would otherwise treat the
-  // full-range samples as limited and wash the colours out. Tell it the input
-  // is full range so the YUV->RGB / YUV->YUV maths is correct. Pass the
-  // ORIGINAL (pre-fix) format so we can tell whether the source was full range.
-  if (!pix_fmt_is_jpeg_range(original_src_fmt)) return;
+  // full-range samples as limited and wash the colours out (or crush them, on
+  // output). Tell it which ends are full range so the maths is correct. Pass
+  // the ORIGINAL (pre-fix) formats so we can tell what the caller really has.
+  const int want_src_range = pix_fmt_is_jpeg_range(original_src_fmt) ? 1 : 0;
+  const int want_dst_range = pix_fmt_is_jpeg_range(original_dst_fmt) ? 1 : 0;
+  if (!want_src_range and !want_dst_range) return;
 
   int *inv_table, *table;
   int srcRange, dstRange, brightness, contrast, saturation;
@@ -714,9 +718,12 @@ void zm_sws_set_input_range(struct SwsContext *ctx, enum AVPixelFormat original_
   if (sws_getColorspaceDetails(ctx, &inv_table, &srcRange, &table, &dstRange,
                                &brightness, &contrast, &saturation) < 0)
     return;
-  if (srcRange == 1) return;  // already full range
-  srcRange = 1;
-  sws_setColorspaceDetails(ctx, inv_table, srcRange, table, dstRange,
+  // Only push a full-range flag on, never off: a caller that handed us a
+  // non-J format may legitimately have set full range itself.
+  const int new_src_range = srcRange | want_src_range;
+  const int new_dst_range = dstRange | want_dst_range;
+  if (new_src_range == srcRange and new_dst_range == dstRange) return;
+  sws_setColorspaceDetails(ctx, inv_table, new_src_range, table, new_dst_range,
                            brightness, contrast, saturation);
 }
 
