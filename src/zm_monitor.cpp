@@ -2055,7 +2055,9 @@ void Monitor::CheckAction() {
       if ( Enabled() && !Active() ) {
         Info("Received resume indication at count %d", shared_data->capture_image_count);
         shared_data->analysing = analysing;
-        ref_image.DumpImgBuffer();  // Will get re-assigned by analysis thread
+        // Analysis thread owns ref_image; ask it to drop the pre-suspend
+        // reference rather than freeing the buffer under it here (refs #4983).
+        ref_image_reset_ = true;
         shared_data->alarm_x = shared_data->alarm_y = -1;
       }
       shared_data->action &= ~RESUME;
@@ -2068,7 +2070,8 @@ void Monitor::CheckAction() {
       Info("Auto resuming at count %d", shared_data->capture_image_count);
       auto_resume_time = {};
       shared_data->analysing = analysing;
-      ref_image.DumpImgBuffer();  // Will get re-assigned by analysis thread
+      // See RESUME above: defer the reference-image reset to the analysis thread.
+      ref_image_reset_ = true;
     }
   }
 }
@@ -2214,6 +2217,15 @@ int Monitor::Analyse() {
   analysis_image_count ++;
 
   std::shared_ptr<ZMPacket> packet = packet_lock.packet_;
+
+  // The capture thread requested that we drop the pre-suspend reference image.
+  // Do it here, on the thread that owns ref_image, so the buffer is never freed
+  // out from under an in-flight Delta/Blend (refs #4983). The subsequent
+  // !ref_image.Buffer() checks re-seed it from the next frame.
+  if (ref_image_reset_.exchange(false)) {
+    Debug(1, "Resetting reference image on resume");
+    ref_image.DumpImgBuffer();
+  }
 
   // Is it possible for packet->score to be ! -1 ? Not if everything is working correctly
   if (packet->score != -1) {
@@ -3899,6 +3911,7 @@ bool Monitor::applyDeinterlacing(std::shared_ptr<ZMPacket> &packet, Image *captu
 void Monitor::flushDecoderQueue() {
   // Called from DecoderThread::Run() as the decoder thread exits, so no
   // concurrent access to decoder_queue: the thread that mutates it is us.
+  decoder_requires_next_packet = false;
   if (decoder_queue.empty()) return;
   Debug(1, "Flushing %zu in-flight entries from decoder_queue", decoder_queue.size());
   for (auto &lock : decoder_queue) {

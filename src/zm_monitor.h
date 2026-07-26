@@ -22,6 +22,7 @@
 
 #include <sys/time.h>
 
+#include <atomic>
 #include <list>
 #include <memory>
 #include <unordered_map>
@@ -822,6 +823,12 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
 
   Image        delta_image;
   Image        ref_image;
+  // ref_image is owned by the analysis thread (Analyse/DetectMotion). The
+  // capture thread (CheckAction) must not touch its buffer directly; on
+  // suspend-resume it sets this flag instead and the analysis thread drops the
+  // stale reference itself on its next pass. Prevents a use-after-free/null
+  // deref race in Image::Delta (refs #4983).
+  std::atomic<bool> ref_image_reset_{false};
   Image        write_image;    // Used when creating snapshot images
   std::string diag_path_ref;
   std::string diag_path_delta;
@@ -1269,6 +1276,11 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
  private:
   int OpenDecoder();
   int CloseDecoder();
+  // True after a keyframe is sent until the decoder outputs the first frame.
+  // Used by keyframe-based decoding modes to feed any required follow-up packets.
+  // A future improvement could eliminate mode-specific checks by relying solely
+  // on this flag to track the decoder state.
+  bool decoder_requires_next_packet = false;
 };
 
 #define MOD_ADD(var, delta, limit) (((var) + (limit) + (delta)) % (limit))
