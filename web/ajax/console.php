@@ -420,7 +420,7 @@ function queryRequest() {
       $row['CaptureBandwidth'] = '';
     }
     $row['Analysing'] = isset($monitor['Analysing']) ? $monitor['Analysing'] : 'None';
-    $row['ObjectDetection'] = isset($monitor['ObjectDetection']) ? $monitor['ObjectDetection'] : 'None';
+    $row['ObjectDetection'] = isset($monitor['ObjectDetection']) ? $monitor['ObjectDetection'] : 'none';
     $row['Recording'] = isset($monitor['Recording']) ? $monitor['Recording'] : 'None';
     // console.js treats this as both an enable flag AND the text to display:
     //   if (row.ONVIF_Event_Listener) html += "Use ONVIF '" + row.ONVIF_Event_Listener + "'"

@@ -417,7 +417,7 @@ void Monitor::Load(MYSQL_ROW dbrow, bool load_zones = true, Purpose p = QUERY) {
   col++;
   analysis_image_opacity = dbrow[col] ? atoi(dbrow[col]) : 128;
   col++;
-  std::string od = dbrow[col]; col++;
+  std::string od = dbrow[col] ? dbrow[col] : "none"; col++;
   if (od == "none") {
     objectdetection = OBJECT_DETECTION_NONE;
   } else if (od == "mx_accl") {

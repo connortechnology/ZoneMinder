@@ -284,7 +284,7 @@ function processRows(rows) {
       if (row.CaptureFPS) {
         fps_string = row.CaptureFPS;
       }
-      if (row.AnalysisFPS && (row.Analysing != 'None' || row.ObjectDetection != 'None')) {
+      if (row.AnalysisFPS && (row.Analysing != 'None' || row.ObjectDetection != 'none')) {
         fps_string += '/' + row.AnalysisFPS;
       }
       if (fps_string) fps_string += ' fps';
