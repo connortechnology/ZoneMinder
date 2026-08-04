@@ -467,6 +467,10 @@ class ZM_Object {
         $this->{'Id'} = dbInsertId();
       return true;
     }
+    // dbQuery swallows the PDOException, so without this the caller's
+    // get_last_error() is empty and the real reason (a missing column, a
+    // constraint violation) never reaches the user - it only lands in the log.
+    $this->_last_error = dbLastError();
     return false;
   } // end function insert
 
