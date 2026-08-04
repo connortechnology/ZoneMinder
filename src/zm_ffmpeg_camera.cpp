@@ -364,6 +364,26 @@ int FfmpegCamera::PreCapture() {
   return 0;
 }
 
+int SeekToStart(AVFormatContext *ctx) {
+  int ret = avformat_seek_file(ctx, -1, INT64_MIN, 0, INT64_MAX, AVSEEK_FLAG_BACKWARD);
+  if (ret >= 0) return ret;
+
+  ret = av_seek_frame(ctx, -1, 0, AVSEEK_FLAG_BACKWARD);
+  if (ret >= 0) return ret;
+
+  /* Raw elementary streams (.h264/.265/.m1v) carry no index and usually no
+   * timestamps at all - start_time and duration come back as AV_NOPTS_VALUE - so
+   * both seeks above fail with a bare -1. That is ffmpeg's generic failure, but
+   * because AVERROR(EPERM) is also -1 it renders as "Operation not permitted",
+   * which reads like a filesystem problem and is not one.
+   *
+   * Rewinding such a stream is still trivial: seek the byte position to 0. The
+   * demuxer re-parses from the first start code, which is exactly what looping
+   * needs.
+   */
+  return av_seek_frame(ctx, -1, 0, AVSEEK_FLAG_BYTE | AVSEEK_FLAG_BACKWARD);
+}
+
 bool FfmpegCamera::loopSeekToStart(AVFormatContext *ctx) {
   if (!(ctx->pb && ctx->pb->seekable)) {
     Debug(1, "loop: input is not seekable, cannot loop");
@@ -389,12 +409,9 @@ bool FfmpegCamera::loopSeekToStart(AVFormatContext *ctx) {
     mLoopAudioOffset = mLastAudioDTS + mLoopAudioFrameDuration - start;
   }
 
-  int ret = avformat_seek_file(ctx, -1, INT64_MIN, 0, INT64_MAX, AVSEEK_FLAG_BACKWARD);
+  int ret = SeekToStart(ctx);
   if (ret < 0) {
-    ret = av_seek_frame(ctx, -1, 0, AVSEEK_FLAG_BACKWARD);
-  }
-  if (ret < 0) {
-    Warning("loop: seek to start failed: %s", av_make_error_string(ret).c_str());
+    Warning("loop: seek to start failed: %s (%d)", av_make_error_string(ret).c_str(), ret);
     return false;
   }
   Debug(1, "loop: sought to start; offsets video=%" PRId64 " audio=%" PRId64,

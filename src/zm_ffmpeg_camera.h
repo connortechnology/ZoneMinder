@@ -44,6 +44,13 @@ struct RealtimePaceDecision {
 };
 RealtimePaceDecision ComputeRealtimePace(
     int64_t ts_us, int64_t anchor_ts_us, Microseconds elapsed, Microseconds cap);
+
+// Rewind an input to its first packet, factored out of FfmpegCamera so it can be
+// unit-tested against a real demuxer without a camera instance. Tries the
+// timestamp seeks first and falls back to a byte seek, which is the only thing
+// that works for raw elementary streams. Returns the ffmpeg error of the last
+// attempt, or >= 0 on success.
+int SeekToStart(AVFormatContext *ctx);
 //
 // Class representing 'ffmpeg' cameras, i.e. those which are
 // accessed using ffmpeg multimedia framework

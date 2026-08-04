@@ -84,3 +84,160 @@ TEST_CASE("ComputeRealtimePace: a delay right at the cap still sleeps") {
   REQUIRE_FALSE(d.reanchor);
   REQUIRE(d.sleep == kCap);
 }
+
+// SeekToStart() rewinds an input for loop-on-EOF playback.
+//
+// The case that matters is a raw elementary stream (.h264/.265): no container,
+// no index, and no timestamps at all - start_time and duration both come back
+// AV_NOPTS_VALUE. Every timestamp-based seek ffmpeg offers fails on those with a
+// bare -1, which av_strerror renders as "Operation not permitted" because
+// AVERROR(EPERM) is also -1. That reads like a filesystem permissions problem
+// and is not one. Only a byte seek rewinds such a stream.
+
+namespace {
+
+// Encode a few frames straight to a file with no muxer, producing a raw
+// elementary stream. Returns false if this ffmpeg build lacks the encoder.
+bool WriteElementaryStream(const std::string &path, const AVCodec *codec) {
+  if (!codec) return false;
+
+  AVCodecContext *ctx = avcodec_alloc_context3(codec);
+  if (!ctx) return false;
+  ctx->width = 64;
+  ctx->height = 64;
+  ctx->time_base = AVRational{1, 25};
+  ctx->framerate = AVRational{25, 1};
+  ctx->pix_fmt = AV_PIX_FMT_YUV420P;
+  ctx->gop_size = 2;
+  ctx->bit_rate = 200000;
+
+  if (avcodec_open2(ctx, codec, nullptr) < 0) {
+    avcodec_free_context(&ctx);
+    return false;
+  }
+
+  AVFrame *frame = av_frame_alloc();
+  frame->width = ctx->width;
+  frame->height = ctx->height;
+  frame->format = ctx->pix_fmt;
+  FILE *out = nullptr;
+  bool ok = (av_frame_get_buffer(frame, 32) >= 0);
+  if (ok) {
+    out = fopen(path.c_str(), "wb");
+    ok = (out != nullptr);
+  }
+
+  if (ok) {
+    AVPacket *pkt = av_packet_alloc();
+    for (int i = 0; i < 25; i++) {
+      av_frame_make_writable(frame);
+      // A moving luma ramp so successive frames genuinely differ.
+      for (int y = 0; y < ctx->height; y++) {
+        memset(frame->data[0] + y * frame->linesize[0], (i * 8 + y) & 0xff, ctx->width);
+      }
+      for (int y = 0; y < ctx->height / 2; y++) {
+        memset(frame->data[1] + y * frame->linesize[1], 128, ctx->width / 2);
+        memset(frame->data[2] + y * frame->linesize[2], 128, ctx->width / 2);
+      }
+      frame->pts = i;
+      if (avcodec_send_frame(ctx, frame) >= 0) {
+        while (avcodec_receive_packet(ctx, pkt) >= 0) {
+          fwrite(pkt->data, 1, pkt->size, out);
+          av_packet_unref(pkt);
+        }
+      }
+    }
+    avcodec_send_frame(ctx, nullptr);
+    while (avcodec_receive_packet(ctx, pkt) >= 0) {
+      fwrite(pkt->data, 1, pkt->size, out);
+      av_packet_unref(pkt);
+    }
+    av_packet_free(&pkt);
+    fclose(out);
+  }
+
+  av_frame_free(&frame);
+  avcodec_free_context(&ctx);
+  return ok;
+}
+
+// Advance into the file so a rewind has something to undo.
+int ReadSome(AVFormatContext *ctx, int want) {
+  AVPacket *pkt = av_packet_alloc();
+  int read = 0;
+  while (read < want && av_read_frame(ctx, pkt) >= 0) {
+    av_packet_unref(pkt);
+    read++;
+  }
+  av_packet_free(&pkt);
+  return read;
+}
+
+}  // namespace
+
+TEST_CASE("SeekToStart: rewinds a raw stream that has no timestamps to seek by") {
+  // libx264 by name rather than by codec id: resolving H264 generically can land
+  // on a hardware encoder that will not open in a test environment.
+  const std::string path = "/tmp/zm_seektostart_raw.h264";
+  if (!WriteElementaryStream(path, avcodec_find_encoder_by_name("libx264"))) {
+    WARN("no libx264 encoder in this ffmpeg build; skipping raw-stream seek test");
+    return;
+  }
+
+  AVFormatContext *ctx = nullptr;
+  REQUIRE(avformat_open_input(&ctx, path.c_str(), nullptr, nullptr) >= 0);
+  avformat_find_stream_info(ctx, nullptr);
+
+  // This fixture must actually be the no-timestamp case, otherwise the test
+  // silently stops covering the bug it exists for.
+  REQUIRE(ctx->duration == AV_NOPTS_VALUE);
+
+  REQUIRE(ReadSome(ctx, 10) > 0);
+  REQUIRE(avio_tell(ctx->pb) > 0);
+
+  // The two timestamp seeks the old code relied on both fail here.
+  REQUIRE(avformat_seek_file(ctx, -1, INT64_MIN, 0, INT64_MAX, AVSEEK_FLAG_BACKWARD) < 0);
+  REQUIRE(av_seek_frame(ctx, -1, 0, AVSEEK_FLAG_BACKWARD) < 0);
+
+  // SeekToStart falls through to the byte seek and rewinds.
+  REQUIRE(SeekToStart(ctx) >= 0);
+  REQUIRE(avio_tell(ctx->pb) == 0);
+
+  // And the stream is genuinely usable again, not merely repositioned.
+  AVPacket *pkt = av_packet_alloc();
+  REQUIRE(av_read_frame(ctx, pkt) >= 0);
+  REQUIRE(pkt->size > 0);
+  av_packet_free(&pkt);
+
+  avformat_close_input(&ctx);
+  std::remove(path.c_str());
+}
+
+TEST_CASE("SeekToStart: still rewinds when timestamp seeking does work") {
+  // mpeg1video in a raw stream gets a duration estimated from bitrate, so the
+  // timestamp seek succeeds and SeekToStart returns on its first branch. Guards
+  // the byte-seek fallback against regressing the ordinary path.
+  const std::string path = "/tmp/zm_seektostart_ts.m1v";
+  if (!WriteElementaryStream(path, avcodec_find_encoder(AV_CODEC_ID_MPEG1VIDEO))) {
+    WARN("no mpeg1video encoder in this ffmpeg build; skipping");
+    return;
+  }
+
+  AVFormatContext *ctx = nullptr;
+  REQUIRE(avformat_open_input(&ctx, path.c_str(), nullptr, nullptr) >= 0);
+  avformat_find_stream_info(ctx, nullptr);
+
+  REQUIRE(ReadSome(ctx, 10) > 0);
+  REQUIRE(avformat_seek_file(ctx, -1, INT64_MIN, 0, INT64_MAX, AVSEEK_FLAG_BACKWARD) >= 0);
+
+  // Drain to EOF, which is the state loop-on-EOF actually calls this from.
+  ReadSome(ctx, 1000);
+  REQUIRE(SeekToStart(ctx) >= 0);
+
+  AVPacket *pkt = av_packet_alloc();
+  REQUIRE(av_read_frame(ctx, pkt) >= 0);
+  av_packet_free(&pkt);
+
+  avformat_close_input(&ctx);
+  std::remove(path.c_str());
+}
