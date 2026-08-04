@@ -438,11 +438,15 @@ int ni_set_network_input(NiNetworkContext *network_ctx, bool hwframe,
           goto out;
         }
     } else {
-      // in_frame should already have been scaled
-      ret = ni_device_session_write(&network_ctx->npu_api_ctx, in_frame, NI_DEVICE_TYPE_AI);
-      if (ret < 0) {
+      // in_frame should already have been scaled.
+      // ni_device_session_write returns the number of bytes accepted, so keep it
+      // out of ret: a successful write must still leave this function returning
+      // 0, the same as the hwframe path above. Assigning it to ret made success
+      // look like an error code to every caller in software-frame mode.
+      int written = ni_device_session_write(&network_ctx->npu_api_ctx, in_frame, NI_DEVICE_TYPE_AI);
+      if (written < 0) {
         return NIERROR(EIO);
-      } else if (ret == 0) {
+      } else if (written == 0) {
         return NIERROR(EAGAIN);
       }
     }
