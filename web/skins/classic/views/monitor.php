@@ -1162,6 +1162,30 @@ echo htmlSelect('newMonitor[Decoder]', $decoders, $monitor->Decoder());
               <input type="number" name="newMonitor[ObjectDetectionNMSThreshold]" value="<?php echo validHtmlStr($monitor->ObjectDetectionNMSThreshold()) ?>" min="0" step="any" max="100"/>
             </li>
 <?php } ?>
+<?php if (defined('ZM_HAVE_QUADRA') and ZM_HAVE_QUADRA) {
+        # Licence plate recognition is chained after Quadra object detection, so
+        # it only applies when the Quadra backend is selected.
+        $quadra_models = ['' => translate('None')];
+        if (defined('ZM_DIR_MODELS') and ZM_DIR_MODELS) {
+          foreach (glob(ZM_DIR_MODELS.'/*.nb') as $model) {
+            $model = basename($model);
+            $quadra_models[$model] = $model;
+          }
+        }
+?>
+            <li id="LPREnabled" class="LPREnabled">
+              <label><?php echo translate('Licence Plate Recognition')?></label>
+              <?php echo html_radio('newMonitor[LPREnabled]', array('1'=>translate('Enabled'), '0'=>translate('Disabled')), $monitor->LPREnabled()); ?>
+            </li>
+            <li id="LPRDetectionModel" class="LPRDetectionModel">
+              <label><?php echo translate('Plate Detection Model')?></label>
+<?php     echo htmlSelect('newMonitor[LPRDetectionModel]', $quadra_models, $monitor->LPRDetectionModel()); ?>
+            </li>
+            <li id="LPRRecognitionModel" class="LPRRecognitionModel">
+              <label><?php echo translate('Plate Recognition Model')?></label>
+<?php     echo htmlSelect('newMonitor[LPRRecognitionModel]', $quadra_models, $monitor->LPRRecognitionModel()); ?>
+            </li>
+<?php } ?>
             <li id="function_use_Amcrest_API" class="use_Amcreat_API">
               <label><?php echo translate('use_Amcrest_API') ?></label>
               <?php echo html_radio('newMonitor[use_Amcrest_API]', array('1'=>translate('Enabled'), '0'=>translate('Disabled')), $monitor->use_Amcrest_API()); ?>

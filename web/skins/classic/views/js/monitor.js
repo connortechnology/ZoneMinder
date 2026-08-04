@@ -1068,6 +1068,11 @@ function ObjectDetection_onChange(od_select) {
   } else {
     console.log('unknown object detection:', od);
   }
+
+  // Plate recognition is chained after the Quadra detector, so it is only
+  // reachable when that backend is selected.
+  const lpr_rows = ['#LPREnabled', '#LPRDetectionModel', '#LPRRecognitionModel'];
+  lpr_rows.forEach((row) => (od == 'quadra' ? $j(row).show() : $j(row).hide()));
 }
 
 window.addEventListener('DOMContentLoaded', initPage);

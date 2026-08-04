@@ -83,6 +83,7 @@ std::string load_monitor_sql =
   "SELECT `Id`, `Name`, `Deleted`, `ServerId`, `StorageId`, `Type`, "
   "`Capturing`+0, `Analysing`+0, `AnalysisSource`+0, `AnalysisImage`+0, `AnalysisImageOpacity`, "
    "`ObjectDetection`, `ObjectDetectionModel`, `ObjectDetectionObjectThreshold`, `ObjectDetectionNMSThreshold`, "
+   "`LPREnabled`, `LPRDetectionModel`, `LPRRecognitionModel`, "
   "`Recording`+0, `RecordingSource`+0, `Decoding`+0, "
   "`RTSP2WebEnabled`, `RTSP2WebType`, `StreamChannel`+0,"
   "`Go2RTCEnabled`, "
@@ -147,6 +148,9 @@ Monitor::Monitor() :
   objectdetection_model(""),
   objectdetection_object_threshold(0.4),
   objectdetection_nms_threshold(0.25),
+  lpr_enabled(false),
+  lpr_detection_model(""),
+  lpr_recognition_model(""),
   recording(RECORDING_ALWAYS),
   decoding(DECODING_ALWAYS),
   RTSP2Web_enabled(false),
@@ -300,7 +304,9 @@ Monitor::Monitor() :
 #if HAVE_QUADRA
   //quadra(nullptr),
   quadra_yolo(nullptr),
+  quadra_lpr(nullptr),
   quadra_retries(0),
+  quadra_lpr_retries(0),
 #endif
 #if HAVE_MX_ACCL
   mx_accl(nullptr),
@@ -431,6 +437,13 @@ void Monitor::Load(MYSQL_ROW dbrow, bool load_zones = true, Purpose p = QUERY) {
   objectdetection_object_threshold = dbrow[col] ? atof(dbrow[col]) : 0.0;
   col++;
   objectdetection_nms_threshold = dbrow[col] ? atof(dbrow[col]) : 0.0;
+  col++;
+
+  lpr_enabled = dbrow[col] ? atoi(dbrow[col]) : 0;
+  col++;
+  lpr_detection_model = dbrow[col] ? dbrow[col] : "";
+  col++;
+  lpr_recognition_model = dbrow[col] ? dbrow[col] : "";
   col++;
 
   recording = (RecordingOption)atoi(dbrow[col]);
@@ -3036,6 +3049,47 @@ std::pair<int, std::string> Monitor::Analyse_Quadra(std::shared_ptr<ZMPacket> pa
       } // end if skip_frame
     } // end if has input_frame/hw_frame
   } // end yolo
+
+  /* Licence plate recognition runs as a second pipeline chained after the yolo
+   * pass, on the same frames and subject to the same catch-up and frame-skip
+   * rules, so it never pulls the analysis thread further behind real time than
+   * object detection alone already would.
+   */
+  if (lpr_enabled and frame and !ai_behind_
+      and !(shared_data->analysis_image_count % (motion_frame_skip+1))) {
+    if (!quadra_lpr and mVideoCodecContext and (quadra_lpr_retries < 10)) {
+      int deviceid = (frame->format == AV_PIX_FMT_NI_QUAD) ? ni_get_cardno(frame) : -1;
+      quadra_lpr = new Quadra_LPR(this, frame->format == AV_PIX_FMT_NI_QUAD);
+      if (!quadra_lpr->setup(camera->getVideoStream(), mVideoCodecContext,
+                             staticConfig.DIR_MODELS+"/"+lpr_detection_model,
+                             staticConfig.DIR_MODELS+"/"+lpr_recognition_model,
+                             deviceid)) {
+        Warning("Failed to set up Quadra LPR");
+        delete quadra_lpr;
+        quadra_lpr = nullptr;
+        quadra_lpr_retries++;
+      } else {
+        Info("Quadra LPR ready on card %d", deviceid);
+      }
+    }
+
+    if (quadra_lpr) {
+      SystemTimePoint starttime = std::chrono::system_clock::now();
+      int ret = quadra_lpr->detect(packet);
+      FPSeconds elapsed = std::chrono::system_clock::now() - starttime;
+      if (ret < 0) {
+        Warning("Quadra LPR failed; tearing down the session");
+        delete quadra_lpr;
+        quadra_lpr = nullptr;
+        quadra_lpr_retries++;
+      } else if (ret > 0) {
+        Debug(1, "Quadra LPR recognised %d plate(s) in %.2f seconds", ret, elapsed.count());
+      } else if (elapsed > Seconds(1)) {
+        Warning("Quadra LPR is too slow: %.2f seconds", elapsed.count());
+      }
+    }
+  } // end lpr
+
   return std::make_pair(score, cause);
 } // end Monitor::Analyse_Quadra(Packet)
 #endif
@@ -3594,6 +3648,10 @@ int Monitor::CloseDecoder() {
   if (quadra_yolo) {
     delete quadra_yolo;
     quadra_yolo = nullptr;
+  }
+  if (quadra_lpr) {
+    delete quadra_lpr;
+    quadra_lpr = nullptr;
   }
 #endif
 
@@ -4528,6 +4586,11 @@ int Monitor::Pause() {
     if (quadra_yolo) {
       delete quadra_yolo;
       quadra_yolo = nullptr;
+    }
+
+    if (quadra_lpr) {
+      delete quadra_lpr;
+      quadra_lpr = nullptr;
     }
   }
 #endif
