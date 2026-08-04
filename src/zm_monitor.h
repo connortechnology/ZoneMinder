@@ -55,6 +55,7 @@ extern "C" {
 #include <ni_util.h>
 }
 #include "zm_netint_yolo.h"
+#include "zm_netint_lpr.h"
 #endif
 #if HAVE_MX_ACCL_H
 #include "zm_mx_accl.h"
@@ -587,6 +588,9 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   std::string objectdetection_model;
   float   objectdetection_object_threshold;
   float   objectdetection_nms_threshold;
+  bool    lpr_enabled;                // Run licence plate recognition after object detection
+  std::string lpr_detection_model;    // .nb locating plates and their corners
+  std::string lpr_recognition_model;  // .nb turning a deskewed plate into text
   RecordingOption recording;          // None, OnMotion, Always
   RecordingSourceOption recording_source;   // Primary, Secondary, Both
 
@@ -841,7 +845,9 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
 #if HAVE_QUADRA
   //Quadra_Yolo *quadra;
   Quadra_Yolo *quadra_yolo;
+  Quadra_LPR *quadra_lpr;
   int quadra_retries;
+  int quadra_lpr_retries;
   std::mutex   quadra_mutex;
 #endif
 #if HAVE_MX_ACCL_H
@@ -1229,6 +1235,9 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   const std::string &ObjectDetection_Model() const { return objectdetection_model; };
   float ObjectDetection_Object_Threshold() const { return objectdetection_object_threshold; };
   float ObjectDetection_NMS_Threshold() const { return objectdetection_nms_threshold; };
+  bool LPR_Enabled() const { return lpr_enabled; };
+  const std::string &LPR_Detection_Model() const { return lpr_detection_model; };
+  const std::string &LPR_Recognition_Model() const { return lpr_recognition_model; };
 
   void Reload();
   void ReloadZones();

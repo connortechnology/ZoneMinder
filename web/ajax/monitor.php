@@ -35,6 +35,29 @@ if ( canView('Monitors') || (isset($_REQUEST['mid']) && $_REQUEST['mid'] !== '' 
       ajaxError(translate('ErrorVerifyingMonitorName'));
     }
     break;
+
+  case 'validateFilePath' :
+    // Reporting whether a path exists is a filesystem probe, so require edit
+    // rights rather than the view rights that gate the rest of this endpoint.
+    if (!canEdit('Monitors', $mid)) {
+      ajaxError(translate('insufficientPermissionsUser').' "'.validHtmlStr($user->Username()).'"');
+    }
+    $path = $_REQUEST['path'] ?? '';
+    if (!is_string($path) or $path === '') {
+      ajaxError(translate('RequestMissing').' "path".');
+    }
+    if (!preg_match('#^file://#i', $path)) {
+      // Not a local file url, so there is nothing here to check.
+      ajaxResponse(array('checked'=>false));
+    }
+    // file:///path and file://localhost/path both denote a local path.
+    $file = urldecode(preg_replace('#^file://(localhost)?#i', '', $path));
+    ajaxResponse(array(
+      'checked' => true,
+      'exists' => file_exists($file),
+      'readable' => is_readable($file),
+    ));
+    break;
   } // end switch action
 } // end if canView('Monitors')
 

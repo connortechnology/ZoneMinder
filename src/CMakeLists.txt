@@ -53,6 +53,7 @@ set(ZM_BIN_SRC_FILES
   zm_mqtt.cpp
   zm_object_classes.cpp
   zm_netint_ai.cpp
+  zm_netint_lpr.cpp
   zm_netint_yolo.cpp
   zm_ffmpeg.cpp
   zm_ffmpeg_camera.cpp

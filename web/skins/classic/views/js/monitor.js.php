@@ -47,6 +47,9 @@ if ($query) {
 echo 'const mid='.$mid.';'.PHP_EOL;
 ?>
 
+const fileNotFoundWarning = "<?php echo translate('SourceFileNotFound') ?>";
+const fileNotReadableWarning = "<?php echo translate('SourceFileNotReadable') ?>";
+
 function validateForm(form) {
   const errors = new Array();
   const warnings = new Array();
@@ -172,6 +175,21 @@ function validateForm(form) {
         errors[errors.length] = "<?php echo translate('BadSignalCheckColour') ?>";
     if ( !form.elements['newMonitor[WebColour]'].value || !form.elements['newMonitor[WebColour]'].value.match( /^[#0-9a-zA-Z]+$/ ) )
       errors[errors.length] = "<?php echo translate('BadWebColour') ?>";
+  }
+
+  // Source Options are handed to av_dict_parse_string(..., "=", ",", 0), which
+  // rejects the whole string if any entry is not name=value. The capture daemon
+  // only logs a warning and carries on without them, so catch it here where the
+  // user can still see it.
+  const source_options = form.elements['newMonitor[Options]'];
+  if (source_options && source_options.value) {
+    // A comma escaped as \, is part of a value, so don't split on it.
+    const bad_options = source_options.value
+        .split(/(?<!\\),/)
+        .filter((entry) => entry.trim() && !entry.match(/^\s*[^=\s][^=]*=/));
+    if (bad_options.length) {
+      errors[errors.length] = "<?php echo translate('BadSourceOptions') ?>" + ': ' + bad_options.join(', ');
+    }
   }
 
   if ( form.elements['newMonitor[RTSPStreamName]'] && form.elements['newMonitor[RTSPStreamName]'].value
