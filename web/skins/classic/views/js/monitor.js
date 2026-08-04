@@ -416,6 +416,8 @@ function initPage() {
 
   const form = document.getElementById('contentForm');
 
+  setupSourcePathCheck(form);
+
   //manage the Janus settings div
 
   const janusEnabled = form.elements['newMonitor[JanusEnabled]'];
@@ -1034,6 +1036,63 @@ function ControlEdit_onClick() {
 
 function ControlList_onClick() {
   window.location = '?view=options&tab=control';
+}
+
+/**
+ * Warn, while the user types, when a file:// source path does not resolve on the
+ * ZoneMinder server. Deliberately advisory rather than a submit-blocking error:
+ * the path may legitimately not exist yet, and the server doing the capture may
+ * not be the one serving this page.
+ * @param {HTMLFormElement} form the monitor edit form
+ */
+function setupSourcePathCheck(form) {
+  const path_input = form.elements['newMonitor[Path]'];
+  if (!path_input) return;
+
+  const warning = document.createElement('span');
+  warning.className = 'warning';
+  warning.style.display = 'none';
+  path_input.parentNode.appendChild(warning);
+
+  const show = function(text) {
+    warning.textContent = text;
+    warning.style.display = text ? '' : 'none';
+  };
+
+  let timer = null;
+  let sequence = 0;
+  const check = function() {
+    const value = path_input.value.trim();
+    if (!value.match(/^file:\/\//i)) {
+      show('');
+      return;
+    }
+    // Responses can arrive out of order while typing, so ignore any that is not
+    // the most recent request.
+    const request = ++sequence;
+    $j.getJSON(thisUrl, {request: 'monitor', action: 'validateFilePath', mid: mid, path: value})
+        .done(function(data) {
+          if (request !== sequence) return;
+          if (!data || !data.checked) {
+            show('');
+          } else if (!data.exists) {
+            show(fileNotFoundWarning);
+          } else if (!data.readable) {
+            show(fileNotReadableWarning);
+          } else {
+            show('');
+          }
+        })
+        .fail(function() {
+          if (request === sequence) show('');
+        });
+  };
+
+  path_input.addEventListener('input', function() {
+    clearTimeout(timer);
+    timer = setTimeout(check, 400);
+  });
+  check();
 }
 
 function ObjectDetection_onChange(od_select) {
