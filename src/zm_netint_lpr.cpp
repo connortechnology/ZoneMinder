@@ -161,13 +161,29 @@ void perspective_coeffs(const double l[4][2], int out_w, int out_h, double f[9])
   f[8] = q * w * h;
 }
 
+std::string ascii_label(const std::string &utf8) {
+  std::string out;
+  for (const std::string &cp : utf8_codepoints(utf8)) {
+    // Single-byte codepoints below 0x80 are what the bitmap font is indexed by;
+    // everything else collapses to one '?' rather than a run of blank glyphs.
+    if (cp.size() == 1 && static_cast<unsigned char>(cp[0]) < 0x80) {
+      out += cp;
+    } else {
+      out += '?';
+    }
+  }
+  return out;
+}
+
 }  // namespace zm_lpr
 
 #if HAVE_QUADRA
 
+#include "zm_image.h"
 #include "zm_logger.h"
 #include "zm_monitor.h"
 #include "zm_packet.h"
+#include "zm_vector2.h"
 
 #include "ni_yolo_utils.h"
 
@@ -305,7 +321,8 @@ Quadra_LPR::Quadra_LPR(Monitor *p_monitor, bool p_use_hwframe) :
   obj_thresh(0.25),
   nms_thresh(0.45),
   use_hwframe(p_use_hwframe),
-  models_created(false)
+  models_created(false),
+  draw_annotations(true)
 {
   obj_thresh = monitor->ObjectDetection_Object_Threshold();
   nms_thresh = monitor->ObjectDetection_NMS_Threshold();
@@ -763,6 +780,35 @@ int Quadra_LPR::recognise_plate(AVFrame *avframe, const PlateBox &plate, std::st
   return text.empty() ? 0 : 1;
 }
 
+void Quadra_LPR::annotate(AVFrame *frame, const std::vector<RecognisedPlate> &plates) {
+  // Wraps the frame's buffer directly, so the drawing lands on the frame itself
+  // rather than a copy - the same thing Quadra_Yolo relies on.
+  Image image(frame);
+  const int label_size = monitor->LabelSize();
+  const int line_width = std::max(1, label_size);
+
+  for (const RecognisedPlate &plate : plates) {
+    const Rgb colour = kRGBRed;
+    for (int i = 0; i < line_width; i++) {
+      image.DrawBox(plate.box.left + i, plate.box.top + i,
+                    plate.box.right - 2 * i, plate.box.bottom - 2 * i, colour);
+    }
+
+    /* Put the label above the box where there is room, otherwise just below the
+     * top edge, so a plate near the top of the frame does not lose its number
+     * off-screen. Annotate clamps to the image, but clamping alone would drop it
+     * on top of the box.
+     */
+    const int text_height = 8 * label_size;
+    int label_y = plate.box.top - text_height - 1;
+    if (label_y < 0) label_y = plate.box.top + 1;
+
+    image.Annotate(zm_lpr::ascii_label(plate.text),
+                   Vector2(plate.box.left, label_y),
+                   label_size, kRGBWhite, kRGBBlack);
+  }
+}
+
 AVFrame *Quadra_LPR::software_frame(const std::shared_ptr<ZMPacket> &packet, bool *owned) {
   *owned = false;
 
@@ -821,6 +867,7 @@ int Quadra_LPR::detect(const std::shared_ptr<ZMPacket> &packet) {
 
   Debug(1, "LPR: %zu plate(s) detected in frame %d", plates.size(), packet->image_index);
 
+  std::vector<RecognisedPlate> recognised_plates;
   int recognised = 0;
   for (const PlateBox &plate : plates) {
     std::string text;
@@ -831,6 +878,7 @@ int Quadra_LPR::detect(const std::shared_ptr<ZMPacket> &packet) {
     if (ret == 0) {
       continue;  // nothing legible on this plate
     }
+    recognised_plates.push_back({plate.box, text});
 
     Debug(1, "LPR: plate '%s' at (%d,%d)-(%d,%d) prob %.2f",
           text.c_str(), plate.box.left, plate.box.top, plate.box.right, plate.box.bottom,
@@ -847,6 +895,34 @@ int Quadra_LPR::detect(const std::shared_ptr<ZMPacket> &packet) {
         {"text", text},
     });
     recognised++;
+  }
+
+  if (draw_annotations && !recognised_plates.empty()) {
+    /* Prefer a frame an earlier stage has already annotated, so yolo boxes and
+     * plate boxes end up on the same image rather than one replacing the other.
+     */
+    AVFrame *target = packet->ai_frame ? packet->ai_frame.get() : avframe;
+    annotate(target, recognised_plates);
+
+    if (!packet->ai_frame) {
+      /* Nothing has published an ai frame for this packet, so publish ours -
+       * otherwise the drawing we just did is never shown. When the frame came
+       * from a hardware download we already own it and can hand it straight
+       * over; when it is the decoded in_frame we pass a new reference to the
+       * same buffer, which is what makes the annotation visible in both.
+       */
+      if (owned) {
+        packet->set_ai_frame(avframe);
+        guard.owned = false;  // ownership transferred to the packet
+      } else {
+        AVFrame *ref = av_frame_clone(avframe);
+        if (ref) {
+          packet->set_ai_frame(ref);
+        } else {
+          Error("LPR: cannot reference frame for annotation");
+        }
+      }
+    }
   }
 
   return recognised;

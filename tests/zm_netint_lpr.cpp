@@ -313,3 +313,31 @@ TEST_CASE("zm_lpr::perspective_coeffs", "[lpr]") {
     REQUIRE(has_projective);
   }
 }
+
+TEST_CASE("zm_lpr::ascii_label", "[lpr]") {
+  SECTION("leaves an ASCII plate untouched") {
+    // The North American case: nothing to substitute.
+    REQUIRE(zm_lpr::ascii_label("ABCD123") == "ABCD123");
+  }
+
+  SECTION("collapses each multi-byte codepoint to one placeholder") {
+    // A real decode from the bundled CCPD recogniser: one province glyph then
+    // ASCII. Drawn byte-wise it would become three blank glyphs and push the
+    // rest of the label out of alignment.
+    REQUIRE(zm_lpr::ascii_label("云MTQ708") == "?MTQ708");
+  }
+
+  SECTION("handles a label that is entirely non-ASCII") {
+    REQUIRE(zm_lpr::ascii_label("云京沪") == "???");
+  }
+
+  SECTION("preserves length in codepoints, not bytes") {
+    // The point of the substitution: what gets drawn lines up with what was read.
+    const std::string plate = "苏N013071";
+    REQUIRE(zm_lpr::ascii_label(plate).size() == zm_lpr::utf8_codepoints(plate).size());
+  }
+
+  SECTION("empty in, empty out") {
+    REQUIRE(zm_lpr::ascii_label("").empty());
+  }
+}

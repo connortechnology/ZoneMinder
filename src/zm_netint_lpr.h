@@ -77,6 +77,16 @@ void order_landmarks(const double in[4][2], double out[4][2]);
  */
 void perspective_coeffs(const double landmark[4][2], int out_w, int out_h, double f[9]);
 
+/* Reduce a decoded plate to something ZoneMinder's font can actually draw.
+ *
+ * Image::Annotate walks the string a byte at a time and indexes a fixed bitmap
+ * font with each byte, so a multi-byte codepoint is drawn as several blank
+ * glyphs - the label silently loses characters and its spacing drifts. Replace
+ * each non-ASCII codepoint with a single '?' so what is drawn stays aligned with
+ * what was read. The full text still goes to the detection JSON and the log.
+ */
+std::string ascii_label(const std::string &utf8);
+
 }  // namespace zm_lpr
 
 #if HAVE_QUADRA
@@ -104,6 +114,12 @@ class ZMPacket;
 struct PlateBox {
   roi_box box;
   double landmark[4][2];
+};
+
+// A plate that made it through both stages, ready to be drawn.
+struct RecognisedPlate {
+  roi_box box;
+  std::string text;
 };
 
 /* Two-stage licence plate recognition on a NetInt Quadra card.
@@ -139,6 +155,11 @@ class Quadra_LPR {
   int generate_det_frame(ni_session_data_io_t *ai_frame, AVFrame *avframe);
   int get_plate_boxes(int img_width, int img_height, std::vector<PlateBox> &plates);
   void sample_perspective(const AVFrame *in, AVFrame *out, const double landmark[4][2]);
+
+  /* Draw a box round each plate and label it with the number, in place on the
+   * frame - the same approach Quadra_Yolo takes for its detections.
+   */
+  void annotate(AVFrame *frame, const std::vector<RecognisedPlate> &plates);
   bool create_det_model(ni_network_data_t *network_data);
   void destroy_det_model();
 
@@ -179,6 +200,7 @@ class Quadra_LPR {
 
   bool use_hwframe;
   bool models_created;
+  bool draw_annotations;
 
   filter_worker hwdl_filter;
 };
