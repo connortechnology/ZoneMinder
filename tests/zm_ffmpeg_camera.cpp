@@ -241,3 +241,51 @@ TEST_CASE("SeekToStart: still rewinds when timestamp seeking does work") {
   avformat_close_input(&ctx);
   std::remove(path.c_str());
 }
+
+// SyntheticPaceTimestamp() supplies the schedule for "realtime=1" on inputs that
+// have no timestamps of their own. Raw .h264/.265 deliver every packet with pts
+// and dts AV_NOPTS_VALUE, so without this the pacing code is never reached and
+// the file is read as fast as the CPU allows.
+
+TEST_CASE("SyntheticPaceTimestamp: spaces frames at the stream rate") {
+  const AVRational r24{24, 1};
+
+  // Frame 0 is the anchor, and each subsequent frame is 1/24s later.
+  REQUIRE(SyntheticPaceTimestamp(0, r24) == 0);
+  REQUIRE(SyntheticPaceTimestamp(24, r24) == 1000000);   // exactly one second
+  REQUIRE(SyntheticPaceTimestamp(48, r24) == 2000000);
+
+  // 24fps is not a whole number of microseconds per frame; check it stays
+  // accurate over a long run rather than drifting via a rounded per-frame step.
+  REQUIRE(SyntheticPaceTimestamp(24 * 3600, r24) == 3600LL * 1000000);
+}
+
+TEST_CASE("SyntheticPaceTimestamp: handles non-integer and fractional rates") {
+  REQUIRE(SyntheticPaceTimestamp(25, AVRational{25, 1}) == 1000000);
+  REQUIRE(SyntheticPaceTimestamp(30, AVRational{30, 1}) == 1000000);
+  // 30000/1001 (NTSC 29.97) - one second of frames is slightly over a second.
+  const int64_t ntsc = SyntheticPaceTimestamp(30, AVRational{30000, 1001});
+  REQUIRE(ntsc > 1000000);
+  REQUIRE(ntsc < 1002000);
+}
+
+TEST_CASE("SyntheticPaceTimestamp: rejects an unusable frame rate") {
+  // A demuxer that reports no rate must not produce a bogus schedule; the caller
+  // relies on AV_NOPTS_VALUE to mean "cannot pace this".
+  REQUIRE(SyntheticPaceTimestamp(10, AVRational{0, 1}) == AV_NOPTS_VALUE);
+  REQUIRE(SyntheticPaceTimestamp(10, AVRational{24, 0}) == AV_NOPTS_VALUE);
+  REQUIRE(SyntheticPaceTimestamp(10, AVRational{-24, 1}) == AV_NOPTS_VALUE);
+}
+
+TEST_CASE("SyntheticPaceTimestamp: feeds ComputeRealtimePace into real sleeps") {
+  // End to end: a 24fps counter should ask ComputeRealtimePace to sleep roughly
+  // one frame interval when no wall-clock time has passed.
+  const AVRational r24{24, 1};
+  const int64_t anchor = SyntheticPaceTimestamp(0, r24);
+  const int64_t next = SyntheticPaceTimestamp(1, r24);
+
+  RealtimePaceDecision d = ComputeRealtimePace(next, anchor, Microseconds(0), kCap);
+  REQUIRE_FALSE(d.reanchor);
+  REQUIRE(d.sleep > Microseconds(41000));  // 1/24s is ~41666us
+  REQUIRE(d.sleep < Microseconds(42000));
+}

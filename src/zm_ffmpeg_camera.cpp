@@ -88,6 +88,7 @@ FfmpegCamera::FfmpegCamera(
   mRealtime = false;
   mRealtimeAnchored = false;
   mRealtimeStartTS = 0;
+  mPaceFrameIndex = 0;
 
   if ( capture ) {
     FFMPEGInit();
@@ -171,6 +172,7 @@ int FfmpegCamera::PrimeCapture() {
 
   // Fresh prime: drop any real-time anchor so pacing restarts cleanly.
   mRealtimeAnchored = false;
+  mPaceFrameIndex = 0;
 
   // Fresh prime: start with no loop offset.
   mLoopVideoOffset = 0;
@@ -362,6 +364,13 @@ int FfmpegCamera::PrimeCapture() {
 
 int FfmpegCamera::PreCapture() {
   return 0;
+}
+
+int64_t SyntheticPaceTimestamp(int64_t index, AVRational frame_rate) {
+  if (frame_rate.num <= 0 || frame_rate.den <= 0) return AV_NOPTS_VALUE;
+  // index frames at frame_rate, expressed in AV_TIME_BASE (microsecond) units.
+  return av_rescale(index, static_cast<int64_t>(AV_TIME_BASE) * frame_rate.den,
+                    frame_rate.num);
 }
 
 int SeekToStart(AVFormatContext *ctx) {
@@ -630,8 +639,22 @@ int FfmpegCamera::Capture(std::shared_ptr<ZMPacket> &zm_packet) {
   // advance the schedule.
   if (mRealtime) {
     int64_t pace_ts = (packet->dts != AV_NOPTS_VALUE) ? packet->dts : packet->pts;
-    if (pace_ts != AV_NOPTS_VALUE)
+    if (pace_ts != AV_NOPTS_VALUE) {
       paceRealtime(av_rescale_q(pace_ts, stream->time_base, AV_TIME_BASE_Q));
+    } else if (packet->stream_index == mVideoStreamId) {
+      // Raw elementary streams carry no timestamps on any packet, so there is
+      // nothing to pace against. Synthesise a schedule from the frame rate the
+      // demuxer reports and a count of the video frames we have delivered. The
+      // counter deliberately keeps climbing across a loop, so the schedule stays
+      // continuous rather than re-anchoring on every rewind.
+      AVRational rate = stream->avg_frame_rate;
+      if (rate.num <= 0 || rate.den <= 0) rate = stream->r_frame_rate;
+      int64_t synth = SyntheticPaceTimestamp(mPaceFrameIndex, rate);
+      if (synth != AV_NOPTS_VALUE) {
+        mPaceFrameIndex++;
+        paceRealtime(synth);
+      }
+    }
   }
 
   zm_packet->codec_type = stream->codecpar->codec_type;

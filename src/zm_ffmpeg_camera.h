@@ -51,6 +51,14 @@ RealtimePaceDecision ComputeRealtimePace(
 // that works for raw elementary streams. Returns the ffmpeg error of the last
 // attempt, or >= 0 on success.
 int SeekToStart(AVFormatContext *ctx);
+
+// Pacing timestamp for inputs that carry no timestamps at all. Raw elementary
+// streams (.h264/.265) deliver every packet with pts and dts AV_NOPTS_VALUE, so
+// there is nothing to pace "realtime=1" against - but the demuxer still reports
+// a frame rate, which is enough to synthesise a schedule from a frame counter.
+// Returns the presentation time of frame `index` in AV_TIME_BASE units, or
+// AV_NOPTS_VALUE if the rate is unusable.
+int64_t SyntheticPaceTimestamp(int64_t index, AVRational frame_rate);
 //
 // Class representing 'ffmpeg' cameras, i.e. those which are
 // accessed using ffmpeg multimedia framework
@@ -85,6 +93,7 @@ class FfmpegCamera : public Camera {
   bool                mRealtimeAnchored;   // true once the anchor below is set
   TimePoint           mRealtimeStartWall;  // steady_clock anchor for the first packet
   int64_t             mRealtimeStartTS;    // timestamp of the first packet (AV_TIME_BASE_Q, i.e. microseconds)
+  int64_t             mPaceFrameIndex;     // delivered video frames, for pacing inputs with no timestamps
 
   std::unique_ptr<FFmpeg_Input> mSecondInput;
 
