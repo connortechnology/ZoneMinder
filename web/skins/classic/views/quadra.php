@@ -43,21 +43,8 @@ echo getNavBarHTML();
   </div>
 
   <div id="content">
-          <span class="text-muted small ml-2">
-            <?php echo htmlspecialchars($quadraSummary['timestamp'] ?: '') ?>
-            <?php if ($quadraSummary['uptime']) echo '&mdash; up '.htmlspecialchars($quadraSummary['uptime']) ?>
-          </span>
-<?php if (isset($quadraSummary['error'])): ?>
-  <div class="alert alert-danger">
-    <strong>Error running ni_rsrc_mon:</strong><br>
-    <?php echo htmlspecialchars($quadraSummary['error']) ?>
-  </div>
-<?php elseif (!$hasData): ?>
-  <div class="alert alert-warning">
-    <strong>No data:</strong> ni_rsrc_mon returned no resource data.
-    Check that a NetInt Quadra device is installed and that the web server user has permission to access it.
-  </div>
-<?php else: ?>
+  <!-- Device timestamp and uptime, populated by quadra.js on each refresh -->
+  <span id="vpuTimestamp" class="text-muted small"></span>
 
   <!-- Top charts: VPU Usage (left) + Host Usage (right) -->
   <div class="row mb-3">
