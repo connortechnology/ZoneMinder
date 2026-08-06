@@ -436,7 +436,7 @@ int Quadra_Yolo::draw_roi_box_in_place(
 
   // Use provided color, or fall back to default class-based color
   if (box_color == 0) {
-    box_color = ObjectClasses::getDetectionBoxColor(roi_extra.cls);
+    box_color = object_classes_.boxColorFor(roi_extra.cls);
   }
   Image in_image(inframe);
 
@@ -463,7 +463,7 @@ int Quadra_Yolo::draw_roi_box(
     snprintf(color_buf, sizeof(color_buf), "0x%06X", box_color);
     color = color_buf;
   } else {
-    color = ObjectClasses::getDetectionColorString(roi_extra.cls);
+    color = object_classes_.colorStringFor(roi_extra.cls);
   }
 
   for (int i=0; i<line_width; i++) {

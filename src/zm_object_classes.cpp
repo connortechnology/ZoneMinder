@@ -21,6 +21,7 @@
 #include "zm_logger.h"
 
 #include <fstream>
+#include <set>
 
 // Default COCO dataset class names (80 classes)
 const std::vector<std::string> ObjectClasses::kCocoClassNames = {
@@ -92,6 +93,41 @@ const std::string& ObjectClasses::getClassName(int class_id) const {
   }
   Warning("Class ID %d out of range (0-%zu)", class_id, class_names_.size() - 1);
   return kUnknownClass;
+}
+
+namespace {
+
+// The COCO groupings the index-based mapping below encodes, by name so they
+// survive a model that numbers its classes differently.
+const std::set<std::string> kVehicleClasses = {
+  "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat"
+};
+const std::set<std::string> kAnimalClasses = {
+  "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe"
+};
+
+}  // namespace
+
+Rgb ObjectClasses::boxColorForName(const std::string &class_name) {
+  if (class_name == "person") return kRGBBlue;
+  if (kVehicleClasses.count(class_name)) return kRGBGreen;
+  if (kAnimalClasses.count(class_name)) return kRGBOrange;
+  return kRGBRed;
+}
+
+const char *ObjectClasses::colorStringForName(const std::string &class_name) {
+  if (class_name == "person") return "blue";
+  if (kVehicleClasses.count(class_name)) return "green";
+  if (kAnimalClasses.count(class_name)) return "orange";
+  return "red";
+}
+
+Rgb ObjectClasses::boxColorFor(int class_id) const {
+  return boxColorForName(getClassName(class_id));
+}
+
+const char *ObjectClasses::colorStringFor(int class_id) const {
+  return colorStringForName(getClassName(class_id));
 }
 
 Rgb ObjectClasses::getDetectionBoxColor(int class_id) {

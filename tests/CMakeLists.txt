@@ -22,6 +22,7 @@ set(TEST_SOURCES
   zm_image.cpp
   zm_monitorstream.cpp
   zm_netint_lpr.cpp
+  zm_object_classes.cpp
   zm_onvif_renewal.cpp
   zm_onvif_wsse.cpp
   zm_pixformat.cpp
