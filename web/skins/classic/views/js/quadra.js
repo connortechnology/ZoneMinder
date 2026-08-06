@@ -3,6 +3,7 @@ let vpuChart = null;
 let hostChart = null;
 let hostInfoLabels = [];
 let ajaxPending = false;
+let refreshTimer = null;
 
 function escHtml(str) {
   if (str === null || str === undefined) return '';
@@ -398,9 +399,25 @@ function applyData(data) {
 
 // ---- AJAX refresh ----
 
+// Spin the refresh icon and disable the button while a request is in flight.
+function setRefreshing(state) {
+  ajaxPending = state;
+  const $btn = $j('#refreshBtn');
+  $btn.find('i.fa').toggleClass('fa-spin', state);
+  $btn.prop('disabled', state);
+}
+
+function updateLastUpdated() {
+  const el = document.getElementById('quadraLastUpdated');
+  if (!el) return;
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  el.textContent = `Updated: ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+}
+
 function refreshData() {
   if (ajaxPending) return;
-  ajaxPending = true;
+  setRefreshing(true);
 
   $j.ajax({
     url: `${thisUrl}?request=quadra`,
@@ -408,20 +425,33 @@ function refreshData() {
     dataType: 'json',
     timeout: 30000,
     success: (resp) => {
-      ajaxPending = false;
+      setRefreshing(false);
       if (resp.result === 'Error') {
         showAlert(`<strong>Error:</strong> ${escHtml(resp.message)}`, 'danger');
         return;
       }
       applyData(resp);
+      updateLastUpdated();
     },
     error: (jqXHR, textStatus) => {
-      ajaxPending = false;
+      setRefreshing(false);
       if (textStatus !== 'abort') {
         console.log('Quadra AJAX error:', textStatus);
       }
     }
   });
+}
+
+// Poll with a chained timeout rather than setInterval so that a slow response
+// can't queue up overlapping requests, and so the loop can be paused/resumed.
+function scheduleRefresh() {
+  clearTimeout(refreshTimer);
+  if (quadraRefreshInterval > 0) {
+    refreshTimer = setTimeout(() => {
+      refreshData();
+      scheduleRefresh();
+    }, quadraRefreshInterval);
+  }
 }
 
 // ---- Init ----
@@ -434,10 +464,22 @@ function initPage() {
   });
   $j('#backBtn').prop('disabled', !document.referrer.length);
 
-  // Refresh button triggers immediate AJAX refresh
+  // Refresh button triggers an immediate fetch and resets the polling timer
   document.getElementById('refreshBtn').addEventListener('click', (evt) => {
     evt.preventDefault();
     refreshData();
+    scheduleRefresh();
+  });
+
+  // Pause polling while the tab is hidden; resume with an immediate fetch when
+  // it becomes visible again so the page isn't showing stale data.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      clearTimeout(refreshTimer);
+    } else {
+      refreshData();
+      scheduleRefresh();
+    }
   });
 
   // Apply initial server-rendered data
@@ -445,15 +487,14 @@ function initPage() {
     showAlert(`<strong>Error running ni_rsrc_mon:</strong><br>${escHtml(quadraInitialError)}`, 'danger');
   } else if (typeof quadraInitialData !== 'undefined' && quadraInitialData) {
     applyData(quadraInitialData);
+    updateLastUpdated();
   } else {
     showAlert('<strong>No data:</strong> ni_rsrc_mon returned no resource data. ' +
       'Check that a NetInt Quadra device is installed and that the web server user has permission to access it.', 'warning');
   }
 
   // Auto-refresh via AJAX instead of full page reload
-  if (quadraRefreshInterval > 0) {
-    setInterval(refreshData, quadraRefreshInterval);
-  }
+  scheduleRefresh();
 }
 
 $j(document).ready(initPage);
