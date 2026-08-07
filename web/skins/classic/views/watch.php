@@ -454,7 +454,7 @@ echo $monitor->getStreamHTML($options);
               </button>
           </div><!--dvrControls-->
           <div class="buttons" id="extButton">
-            <button type="button" id="analyseBtn" class="btn btn-secondary" title="<?php echo translate('Show Analysis') ?>" data-on-click="toggleAnalyseFrames">
+            <button type="button" id="analyseBtn" class="avail" title="<?php echo translate('Show Analysis') ?>" data-on-click="toggleAnalyseFrames">
             <i class="material-icons md-18">assessment</i>
             </button>
             <button type="button" id="fullscreenBtn" title="<?php echo translate('Fullscreen') ?>" class="avail" data-on-click="watchFullscreen">
