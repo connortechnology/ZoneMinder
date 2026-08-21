@@ -293,11 +293,11 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
       time_t last_viewed_time;
       uint64_t extrapad5;
     };
-    union {                     /* +152  */
+    union {                     /* +160  */
       time_t last_analysis_viewed_time;
       uint64_t extrapad6;
     };
-    uint8_t control_state[256]; /* +160  */
+    uint8_t control_state[256]; /* +168 */
 
     char alarm_cause[256];    /* 408 */
     char video_fifo_path[64]; /* 664 */

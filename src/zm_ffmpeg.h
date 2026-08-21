@@ -260,10 +260,12 @@ const std::string get_codecpar_string(const AVCodecParameters *par);
 int check_sample_fmt(const AVCodec *codec, enum AVSampleFormat sample_fmt);
 enum AVPixelFormat fix_deprecated_pix_fmt(enum AVPixelFormat );
 bool pix_fmt_is_jpeg_range(enum AVPixelFormat );
-// Correct swscale's default limited-range assumption when the original decoded
-// source was a full-range JPEG (YUVJ*) format. Call after (re)creating the
-// context, passing the ORIGINAL pre-fix_deprecated_pix_fmt source format.
-void zm_sws_set_input_range(struct SwsContext *ctx, enum AVPixelFormat original_src_fmt);
+// Correct swscale's default limited-range assumption when either side of the
+// conversion was a full-range JPEG (YUVJ*) format. Call after (re)creating the
+// context, passing the ORIGINAL pre-fix_deprecated_pix_fmt formats.
+void zm_sws_set_ranges(struct SwsContext *ctx,
+                       enum AVPixelFormat original_src_fmt,
+                       enum AVPixelFormat original_dst_fmt);
 
 // Return a plausible framerate for `stream`. Prefers r_frame_rate, falls
 // back to avg_frame_rate. ffmpeg falls back to 1/time_base when it can't
