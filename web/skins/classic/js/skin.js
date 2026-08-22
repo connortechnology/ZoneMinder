@@ -2083,6 +2083,20 @@ function initThumbAnimation() {
   }
 }
 
+function addOrUpdateRandParam(src) {
+  const rand = Date.now();
+  if (/[?&]rand=\d+/i.test(src)) {
+    return src.replace(/([?&])rand=\d+/i, '$1rand=' + rand);
+  }
+  return src + (src.includes('?') ? '&' : '?') + 'rand=' + rand;
+}
+
+function refreshStreamSrc(stream, src) {
+  src = addOrUpdateRandParam(src);
+  stream.src = '';
+  stream.src = src;
+}
+
 /* View in fullscreen */
 function openFullscreen(elem) {
   if (elem.requestFullscreen) {
@@ -3446,7 +3460,7 @@ async function getTracksFromStream(videoFeedStream) {
     console.warn(`"captureStream" NOT found in STREAM for monitor ID=${mid} or not supported by the browser.`);
     streamCaptureNotSupported = true; // This will enable the volume control if the browser does not support captureStream (for example, Safari)
   }
-  if (!isCurrentPlaybackSession(videoFeedStream, playbackSessionId)) {
+  if (!streamSessionActive(videoFeedStream, playbackSessionId)) {
     console.debug(`RACE [${playbackSessionId}] getTracksFromStream() aborted`);
     stopMediaStreamTracks(stream);
     dispatchTracksReceived(videoFeedStream, {
@@ -3460,7 +3474,7 @@ async function getTracksFromStream(videoFeedStream) {
     const timeoutStreamActive = 20000;
     const startTime = Date.now();
     const streamActive = await waitUntil(() => (stream.active || videoFeedStream.started === false), timeoutStreamActive); // We are waiting for the stream to become active.
-    if (!isCurrentPlaybackSession(videoFeedStream, playbackSessionId)) {
+    if (!streamSessionActive(videoFeedStream, playbackSessionId)) {
       console.debug(`RACE [${playbackSessionId}] waitUntil() aborted`);
       stopMediaStreamTracks(stream);
       dispatchTracksReceived(videoFeedStream, {
@@ -3512,33 +3526,6 @@ async function getTracksFromStream(videoFeedStream) {
 
   }
 
-  // We'll determine whether we need a video track or just an audio track.
-  // When playing H.265, the video may not be decoded, but the audio track will play.
-  const selectorWhatDisplay = document.getElementById('whatDisplay');
-  const monitorStream = getMonitorStream(mid);
-  const defaultWhatDisplay = (typeof eventData !== 'undefined') ? eventData.whatDisplay : (monitorStream) ? monitorStream.whatDisplay : null;
-
-  let videoTrackRequired = true;
-  if (!selectorWhatDisplay || (-1 !== selectorWhatDisplay.value.toLowerCase().indexOf('default'))) { // Default monitor settings
-    if (defaultWhatDisplay && (-1 === defaultWhatDisplay.toLowerCase().indexOf('video'))) videoTrackRequired = false;
-  } else {
-    if (-1 === selectorWhatDisplay.value.toLowerCase().indexOf('video')) videoTrackRequired = false;
-  }
-  if (!videoFeedStream.videoTrack ) {
-    monitorStream.updateStreamInfo('', 'Video track missing');
-    monitorStream.writeTextInfoBlock("Video track missing", {showImg: false});
-  }
-  if (!videoFeedStream.videoTrack && videoTrackRequired && (!videoFeedStream.selectedPlayer || videoFeedStream.selectedPlayer === "go2rtc")) {
-    // Switch to a different player only when mode=Auto
-    videoFeedStream.streamErrorRegistration();
-    videoFeedStream.restart(videoFeedStream.currentChannelStream);
-    dispatchTracksReceived(videoFeedStream, {
-      status: 'aborted',
-      reason: 'playback-videoTrack-missing'
-    });
-    return;
-  }
-
   if (videoFeedStream.started === false) {
     console.debug(`RACE [${playbackSessionId}] activePlayer: "${videoFeedStream.activePlayer || "not defined"}" skip tracksReceived because stream for monitor ID=${mid} stopped`);
     return;
@@ -3556,19 +3543,24 @@ const dispatchTracksReceived = function(videoFeedStream, {
   status,
   reason = null
 } = {}) {
-  document.dispatchEvent(new CustomEvent('zm:tracksReceived', {
-    detail: {
-      monitorId: (typeof eventData !== 'undefined') ? eventData.MonitorId : videoFeedStream?.id,
-      status,
-      reason,
-      activePlayer: videoFeedStream?.activePlayer ?? null,
-      stream: {
-        mediaStream: videoFeedStream?.mediaStream ?? null,
-        audioTrack: videoFeedStream?.audioTrack ?? null,
-        videoTrack: videoFeedStream?.videoTrack ?? null
+  const objStream = (videoFeedStream?.dispatchEvent instanceof Function) ? videoFeedStream : videoFeedStream?.element;
+  if (objStream) {
+    objStream.dispatchEvent(new CustomEvent('zm:tracksReceived', {
+      detail: {
+        monitorId: (typeof eventData !== 'undefined') ? eventData.MonitorId : videoFeedStream?.id,
+        status,
+        reason,
+        activePlayer: videoFeedStream?.activePlayer ?? null,
+        stream: {
+          mediaStream: videoFeedStream?.mediaStream ?? null,
+          audioTrack: videoFeedStream?.audioTrack ?? null,
+          videoTrack: videoFeedStream?.videoTrack ?? null
+        }
       }
-    }
-  }));
+    }));
+  } else {
+    console.warn(`No stream found for ${videoFeedStream}. dispatchEvent for 'zm:tracksReceived' will not be added.`);
+  }
 };
 
 /**
@@ -4037,5 +4029,9 @@ function generateUUID() {
 function isCurrentPlaybackSession(videoFeedStream, playbackSessionId) {
   return playbackSessionId === videoFeedStream.playbackSessionId;
 }
+
+function streamSessionActive(stream, playbackSessionId) {
+  return (isCurrentPlaybackSession(stream, playbackSessionId) && (("sessionActive" in stream) ? stream.isActive : true));
+};
 
 $j( window ).on("load", initPageGeneral);

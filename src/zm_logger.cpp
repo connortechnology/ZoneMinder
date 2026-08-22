@@ -41,8 +41,16 @@ Logger *Logger::smInstance = nullptr;
 
 Logger::StringMap Logger::smCodes;
 Logger::IntMap Logger::smSyslogPriorities;
+std::atomic<bool> Logger::smDoLogRotate(false);
 
 void Logger::usrHandler(int sig) {
+  // SIGHUP means reload, which for zmc costs a camera reconnect and a gap in
+  // recording. logrotate only needs the file handle dropped, so it sends
+  // SIGWINCH instead. Just flag it, the next logPrint does the work.
+  if (sig == SIGWINCH) {
+    smDoLogRotate = true;
+    return;
+  }
   Logger *logger = fetch();
   if (sig == SIGUSR1)
     logger->level(logger->level()+1);
@@ -220,6 +228,9 @@ void Logger::initialise(const std::string &id, const Options &options) {
       Fatal("sigaction(), error = %s", strerror(errno));
     }
     if ( sigaction(SIGUSR2, &action, 0) < 0) {
+      Fatal("sigaction(), error = %s", strerror(errno));
+    }
+    if ( sigaction(SIGWINCH, &action, 0) < 0) {
       Fatal("sigaction(), error = %s", strerror(errno));
     }
   }
@@ -425,7 +436,6 @@ void Logger::logPrint(bool hex, const char *filepath, int line, int level, const
   if (level < AUDIT || level > DEBUG9)
     Panic("Invalid logger level %d", level);
 
-
   const char *base = strrchr(filepath, '/');
   const char *file = base ? base+1 : filepath;
   const char *classString = smCodes[level].c_str();
@@ -458,6 +468,13 @@ void Logger::logPrint(bool hex, const char *filepath, int line, int level, const
     tid = getpid(); // Process id
 
   log_mutex.lock();
+
+  if (smDoLogRotate.exchange(false)) {
+    // logrotate has renamed the file out from under us. Drop the handle and the
+    // write below reopens it at the original path.
+    closeFile();
+  }
+
   char *timePtr = timeString;
   tm now_tm = {};
   timePtr += strftime(timePtr, sizeof(timeString), "%x %H:%M:%S", localtime_r(&now_sec, &now_tm));
