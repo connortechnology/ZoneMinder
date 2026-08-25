@@ -58,20 +58,20 @@ int SWScale::Convert(
   AVFrame *out_frame
 ) {
 
-  AVPixelFormat orig_format = (AVPixelFormat)in_frame->format;
-  AVPixelFormat format = fix_deprecated_pix_fmt(orig_format);
+  AVPixelFormat orig_in_format = (AVPixelFormat)in_frame->format;
   AVPixelFormat orig_out_format = (AVPixelFormat)out_frame->format;
+  AVPixelFormat in_format = fix_deprecated_pix_fmt(orig_in_format);
   AVPixelFormat out_format = fix_deprecated_pix_fmt(orig_out_format);
   /* Get the context */
   swscale_ctx = sws_getCachedContext(swscale_ctx,
-                                     in_frame->width, in_frame->height, format,
+                                     in_frame->width, in_frame->height, in_format,
                                      out_frame->width, out_frame->height, out_format,
                                      SWS_FAST_BILINEAR, NULL, NULL, NULL);
   if ( swscale_ctx == NULL ) {
     Error("Failed getting swscale context");
     return -6;
   }
-  zm_sws_set_ranges(swscale_ctx, orig_format, orig_out_format);
+  zm_sws_set_ranges(swscale_ctx, orig_in_format, orig_out_format);
   /* Do the conversion */
   if (!sws_scale(swscale_ctx,
                  in_frame->data, in_frame->linesize, 0, in_frame->height,

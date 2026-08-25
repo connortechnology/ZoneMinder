@@ -244,7 +244,7 @@ class Monitor extends ZM_Object {
     'AnalysisSource' => 'Primary',
     'AnalysisImage' => 'FullColour',
     'AnalysisImageOpacity' => array('type'=>'integer','default'=>128),
-    'ObjectDetection' => 'None',
+    'ObjectDetection' => 'none',
     'ObjectDetectionModel' => '',
     'ObjectDetectionObjectThreshold' => '0.4',
     'ObjectDetectionNMSThreshold' => '0.25',

@@ -284,14 +284,19 @@ int Event::OpenJpegCodec(AVFrame *frame) {
         frame->width, frame->height, av_get_pix_fmt_name(static_cast<AVPixelFormat>(frame->format)),
         mJpegCodecContext->width, mJpegCodecContext->height, av_get_pix_fmt_name(AV_PIX_FMT_YUVJ420P)
         );
+    // Hand swscale the non-deprecated formats and state the ranges explicitly.
+    // Passing YUVJ* straight in makes it log "deprecated pixel format used,
+    // make sure you did set range correctly" for every context it builds.
+    const AVPixelFormat orig_in_fmt = static_cast<AVPixelFormat>(frame->format);
     mJpegSwsContext = sws_getContext(
-        frame->width, frame->height, static_cast<AVPixelFormat>(frame->format),
-        mJpegCodecContext->width, mJpegCodecContext->height, AV_PIX_FMT_YUVJ420P,
+        frame->width, frame->height, fix_deprecated_pix_fmt(orig_in_fmt),
+        mJpegCodecContext->width, mJpegCodecContext->height, fix_deprecated_pix_fmt(AV_PIX_FMT_YUVJ420P),
         SWS_BICUBIC, nullptr, nullptr, nullptr);
     if (!mJpegSwsContext) {
       Error("Failure to get swscontext");
       return -1;
     }
+    zm_sws_set_ranges(mJpegSwsContext, orig_in_fmt, AV_PIX_FMT_YUVJ420P);
   }
 #if 1
   output_frame = av_frame_ptr{av_frame_alloc()}; // The assignment here will destruct any previous allocation

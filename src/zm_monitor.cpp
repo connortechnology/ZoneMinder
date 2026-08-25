@@ -417,7 +417,7 @@ void Monitor::Load(MYSQL_ROW dbrow, bool load_zones = true, Purpose p = QUERY) {
   col++;
   analysis_image_opacity = dbrow[col] ? atoi(dbrow[col]) : 128;
   col++;
-  std::string od = dbrow[col]; col++;
+  std::string od = dbrow[col] ? dbrow[col] : "none"; col++;
   if (od == "none") {
     objectdetection = OBJECT_DETECTION_NONE;
   } else if (od == "mx_accl") {
@@ -3636,7 +3636,7 @@ bool Monitor::setupConvertContext(const AVFrame *input_frame, const Image *image
           image->Width(), image->Height(),
           av_get_pix_fmt_name(imagePixFormat)
          );
-    // Mark either side as full range when it was a YUVJ* format so the
+    // Mark either end as full range when it was a YUVJ* format so the
     // conversion maths doesn't crush full-range luma into limited range.
     zm_sws_set_ranges(convert_context, origPixFormat, origImagePixFormat);
   }
