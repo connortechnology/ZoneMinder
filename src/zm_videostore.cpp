@@ -1726,12 +1726,17 @@ int VideoStore::writeAudioFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
       ZM_DUMP_STREAM_PACKET(audio_in_stream, opkt, "before pts adjustment");
       Debug(1, "Adjusting pts:%" PRId64 " dts:%" PRId64 " by %" PRId64,
           opkt->pts, opkt->dts, audio_first_dts);
-      opkt->pts = (ipkt->pts != AV_NOPTS_VALUE) ? ipkt->pts - audio_first_dts : AV_NOPTS_VALUE;
-      opkt->dts = (ipkt->dts != AV_NOPTS_VALUE) ? ipkt->dts - audio_first_dts : AV_NOPTS_VALUE;
-    } else {
-      opkt->pts = ipkt->pts;
-      opkt->dts = ipkt->dts;
+      // Adjust opkt, not ipkt. With WallClockTimestamps the timestamps in opkt
+      // have already been replaced by wall clock values and audio_first_dts was
+      // taken from those, so subtracting it from the camera's raw ipkt
+      // timestamps would put the audio track an entire epoch away from the
+      // video track. Without WallClockTimestamps opkt is an av_packet_ref of
+      // ipkt, so the two are identical and this is unchanged behaviour.
+      if (opkt->pts != AV_NOPTS_VALUE) opkt->pts -= audio_first_dts;
+      if (opkt->dts != AV_NOPTS_VALUE) opkt->dts -= audio_first_dts;
     }
+    // else opkt already carries the timestamps to use: either copied from ipkt
+    // by av_packet_ref, or the wall clock values assigned above.
 
     ZM_DUMP_STREAM_PACKET(audio_in_stream, opkt, "after pts adjustment");
     av_packet_rescale_ts(opkt.get(), audio_in_stream->time_base, audio_out_stream->time_base);
