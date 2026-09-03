@@ -1793,8 +1793,9 @@ int VideoStore::write_packet(AVPacket *pkt, AVStream *stream) {
       if (pkt->dts < last_dts[stream->index]) {
         // Expected with reordering encoders (B-frames, hardware encoders with reorder buffers).
         // We must only do the minimum to satisfy monotonicity.
-        Debug(1, "non increasing dts, fixing. our dts %" PRId64 " stream %d last_dts %" PRId64 " last_duration %" PRId64 ". reorder_queue_size=%zu",
-            pkt->dts, stream->index, last_dts[stream->index], last_duration[stream->index], reorder_queue_size);
+        Debug(1, "non increasing dts, fixing. our dts %" PRId64 " stream %d last_dts %" PRId64 " last_duration %" PRId64 " (%.3f seconds back). reorder_queue_size=%zu",
+            pkt->dts, stream->index, last_dts[stream->index], last_duration[stream->index],
+            (last_dts[stream->index] - pkt->dts) * av_q2d(stream->time_base), reorder_queue_size);
         pkt->dts = last_dts[stream->index]+1;
         if (pkt->dts > pkt->pts) pkt->pts = pkt->dts; // Do it here to avoid warning below
       } else if (pkt->dts == last_dts[stream->index]) {
