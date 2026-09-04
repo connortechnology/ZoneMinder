@@ -333,7 +333,6 @@ class Monitor extends ZM_Object {
     'SectionLengthWarn'   =>  true,
     'MinSectionLength'    =>  10,
     'EventCloseMode'    => 'system',
-    'FrameSkip'           =>  0,
     'MotionFrameSkip'     =>  0,
     'AnalysisFPSLimit'  =>  [ 'default'=>null, 'initial_default'=>2, 'type'=>'float' ],
     'AnalysisUpdateDelay'  =>  0,
@@ -730,7 +729,10 @@ class Monitor extends ZM_Object {
         $this->sendControlCommand('stop');
       }
     }
-    $this->save(['Deleted'=>true]);
+    // Hand back whether it actually saved. This is a soft delete, so a failing
+    // UPDATE (an out of range Importance, for one) leaves the monitor in place,
+    // and the caller has no other way to notice. See #4215.
+    return $this->save(['Deleted'=>true]);
   }
   public function destroy() {
     if (!$this->{'Id'}) {

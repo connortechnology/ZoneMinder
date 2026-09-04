@@ -104,7 +104,7 @@ std::string load_monitor_sql =
   "`ImageBufferCount`, `MaxImageBufferCount`, `WarmupCount`, `PreEventCount`, "
   "`PostEventCount`, `StreamReplayBuffer`, `AlarmFrameCount`, "
   "`SectionLength`, `SectionLengthWarn`, `MinSectionLength`, `EventCloseMode`+0, "
-  "`FrameSkip`, `MotionFrameSkip`, "
+  "`MotionFrameSkip`, "
   "`FPSReportInterval`, `RefBlendPerc`, `AlarmRefBlendPerc`, `TrackMotion`, `Exif`, "
   "`Latitude`, `Longitude`, "
   "`RTSPServer`, `RTSPStreamName`, `SOAP_wsa_compl`, `ONVIF_Alarm_Text`,"
@@ -215,7 +215,6 @@ Monitor::Monitor() :
   min_section_length(0),
   startstop_on_section_length(false),
   adaptive_skip(false),
-  frame_skip(0),
   motion_frame_skip(0),
   analysis_fps_limit(0),
   analysis_update_delay(0),
@@ -645,8 +644,7 @@ void Monitor::Load(MYSQL_ROW dbrow, bool load_zones = true, Purpose p = QUERY) {
   packetqueue.setMaxVideoPackets(max_image_buffer_count);
   packetqueue.setKeepKeyframes((videowriter == PASSTHROUGH) && (recording != RECORDING_NONE));
 
-  /* "SectionLength, SectionLengthWarn, MinSectionLength, EventCloseMode,
-   * FrameSkip, MotionFrameSkip, " */
+  /* "SectionLength, SectionLengthWarn, MinSectionLength, EventCloseMode, MotionFrameSkip, " */
   section_length = Seconds(atoi(dbrow[col]));
   col++;
   section_length_warn = dbrow[col] ? atoi(dbrow[col]) : false;
@@ -688,8 +686,6 @@ void Monitor::Load(MYSQL_ROW dbrow, bool load_zones = true, Purpose p = QUERY) {
       event_close_mode = CLOSE_IDLE;
   }
 
-  frame_skip = atoi(dbrow[col]);
-  col++;
   motion_frame_skip = atoi(dbrow[col]);
   col++;
 
@@ -1415,6 +1411,16 @@ bool Monitor::connect() {
   last_status_time = 
   last_analysis_fps_time = std::chrono::system_clock::now();
   last_capture_image_count = 0;
+
+  // Stagger the Monitor_Status writes. Left at its default (the epoch) every
+  // monitor's first UpdateFPS() sees a huge elapsed time and writes at once,
+  // and because the period is fixed they stay in lockstep from then on. A mass
+  // restart therefore lands every monitor on the same second of the cycle
+  // forever after, dropping the whole herd onto the smallest, hottest table in
+  // the schema at the moment the system is least able to absorb it. Phase them
+  // by id, which spreads them over the interval and, unlike a random offset,
+  // survives a restart without re-clustering.
+  last_status_time = last_fps_time - Seconds(id % kStatusUpdateInterval.count());
 
   Debug(3, "Success connecting");
   return true;
@@ -2150,7 +2156,7 @@ void Monitor::UpdateFPS() {
     last_fps_time = now;
 
     FPSeconds db_elapsed = now - last_status_time;
-    if (db_elapsed > Seconds(10)) {
+    if (db_elapsed > kStatusUpdateInterval) {
       std::string sql = stringtf(
           "INSERT INTO Monitor_Status (MonitorId, "
           "Status,CaptureFPS,CaptureBandwidth, AnalysisFPS, UpdatedOn) VALUES "
