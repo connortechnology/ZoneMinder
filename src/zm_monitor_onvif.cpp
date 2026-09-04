@@ -25,9 +25,29 @@
 
 #include <cstdint>
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
 
 #ifdef WITH_GSOAP
+
+namespace {
+// The reason wording cameras use for an authentication refusal. Matched against
+// both the fault string and the fault detail because the split between them is
+// not consistent across vendors.
+bool mentions_authorization(const char *text) {
+  if (!text) return false;
+  return std::strstr(text, "authorization")
+      or std::strstr(text, "authorized")
+      or std::strstr(text, "Unauthorized")
+      or std::strstr(text, "NotAuthorized");
+}
+}  // namespace
+
+bool ONVIFIsAuthError(int result, const char *fault_string, const char *detail) {
+  if (result == 401) return true;
+  if (result != SOAP_FAULT) return false;
+  return mentions_authorization(fault_string) or mentions_authorization(detail);
+}
 #include "url.hpp"
 
 // ONVIF configuration constants
@@ -521,19 +541,7 @@ void ONVIF::WaitForMessage() {
       const char *fault_string = soap_fault_string(soap);
 
       if (soap->error != SOAP_EOF) { //Ignore the timeout error
-        // Check if this is an authorization failure:
-        // - HTTP 401 status (gSOAP returns the HTTP status code as result for HTTP errors)
-        // - SOAP fault with auth-related keywords in fault string or detail
-        bool is_auth_error = (result == 401) ||
-            (result == SOAP_FAULT && (
-              (fault_string && (std::strstr(fault_string, "authorization") ||
-                               std::strstr(fault_string, "authorized") ||
-                               std::strstr(fault_string, "Unauthorized") ||
-                               std::strstr(fault_string, "NotAuthorized"))) ||
-              (detail && (std::strstr(detail, "authorization") ||
-                         std::strstr(detail, "authorized") ||
-                         std::strstr(detail, "Unauthorized") ||
-                         std::strstr(detail, "NotAuthorized")))));
+        bool is_auth_error = ONVIFIsAuthError(result, fault_string, detail);
 
         if (is_auth_error) {
           // Try switching auth method before giving up: digest <-> plain
@@ -1145,7 +1153,7 @@ void ONVIF::log_subscription_timing(const char* context) {
     subscription_termination_time - now).count();
   auto seconds_until_renewal = std::chrono::duration_cast<std::chrono::seconds>(
     next_renewal_time - now).count();
-  
+
   Debug(1, "ONVIF [%s]: Subscription terminates at %s (in %jds), renewal at %s (in %jds)",
        context, SystemTimePointToString(subscription_termination_time).c_str(),
        static_cast<intmax_t>(seconds_until_termination),
@@ -1262,7 +1270,8 @@ bool ONVIF::IsRenewalNeeded() {
     // Time to renew
     auto seconds_overdue = std::chrono::duration_cast<std::chrono::seconds>(
       now - next_renewal_time).count();
-    Debug(1, "ONVIF: Subscription renewal needed (overdue by %jd seconds)", static_cast<intmax_t>(seconds_overdue));
+    Debug(1, "ONVIF: Subscription renewal needed (overdue by %jd seconds)",
+          static_cast<intmax_t>(seconds_overdue));
     return true;
   }
 

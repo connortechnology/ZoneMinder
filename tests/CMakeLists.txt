@@ -13,6 +13,8 @@ include(Catch)
 
 set(TEST_SOURCES
   zm_config.cpp
+  zm_db_contention.cpp
+  zm_db_contention_live.cpp
   zm_db_schema.cpp
   zm_box.cpp
   zm_comms.cpp
@@ -24,6 +26,7 @@ set(TEST_SOURCES
   zm_monitorstream.cpp
   zm_netint_lpr.cpp
   zm_object_classes.cpp
+  zm_onvif_auth_error.cpp
   zm_onvif_renewal.cpp
   zm_onvif_wsse.cpp
   zm_pixformat.cpp

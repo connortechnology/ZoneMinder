@@ -24,6 +24,7 @@
 #include <cctype>
 #include <cinttypes>
 #include <cstdlib>
+#include <random>
 #include <unistd.h>
 
 MYSQL dbconn;
@@ -159,7 +160,6 @@ bool zmDbReconnect() {
 void zmDbClose() {
   std::lock_guard<std::mutex> lck(db_mutex);
   if (zmDbConnected) {
-    dbQueue.stop();
     Debug(1, "Closing database. Connection id was %lu", db_thread_id);
     mysql_close(&dbconn);
     // mysql_init() call implicitly mysql_library_init() but
@@ -227,8 +227,43 @@ MYSQL_RES *zmDbRow::fetch(const std::string &query) {
   return result_set;
 }
 
-/* performs SQL queries.  Retries on lock contention (deadlock victim or
- * lock-wait timeout) up to kMaxContentionRetries with exponential backoff.
+useconds_t zmDbContentionBackoff(int attempt) {
+  if (attempt < 1 or attempt > kMaxDbContentionRetries) return 0;
+
+  // 50ms doubling per attempt, plus up to 50ms of spread. Attempt 1 waits about
+  // 100ms, attempt 5 about 1.6s.
+  static thread_local std::mt19937 generator{std::random_device{}()};
+  std::uniform_int_distribution<useconds_t> jitter(0, 49999);
+  return (50000u * (1u << attempt)) + jitter(generator);
+}
+
+namespace {
+
+// Whether a failed query lost a lock race and is worth re-running, sleeping for
+// the backoff first when it is. InnoDB picks a victim to roll back on deadlock
+// and expects it to retry; a lock wait timeout is the same situation reached
+// more slowly. Every other error will fail again the same way.
+//
+// `attempts` is this query's running count and is advanced here.
+bool retry_after_contention(unsigned int err, const std::string &query, int &attempts) {
+  if (err != ER_LOCK_DEADLOCK and err != ER_LOCK_WAIT_TIMEOUT) return false;
+
+  useconds_t backoff = zmDbContentionBackoff(attempts + 1);
+  if (!backoff) {
+    Error("Giving up on query after %d attempts against lock contention: %s",
+          attempts, query.c_str());
+    return false;
+  }
+  attempts++;
+  Debug(1, "Lock contention (errno %u) on %s, retry %d of %d in %u us",
+        err, query.c_str(), attempts, kMaxDbContentionRetries, backoff);
+  usleep(backoff);
+  return true;
+}
+
+}  // namespace
+
+/* performs SQL queries.  Will repeat if error is LOCK_WAIT_TIMEOUT
  * We assume that in general our SQL is properly formed, so errors will
  * be due to external factors.
  */
@@ -249,10 +284,11 @@ int zmDbDo(const std::string &query) {
   Logger::Level oldLevel = logger->databaseLevel();
   logger->databaseLevel(Logger::NOLOG);
 
-  int contention_retries = 0;
+  int contention_attempts = 0;
 
   while ((rc = mysql_query(&dbconn, query.c_str())) and !zm_terminate) {
     std::string reason = mysql_error(&dbconn);
+    // Read before anything else can clobber it.
     unsigned int err = mysql_errno(&dbconn);
     Debug(1, "Failed running sql query %s, thread_id: %lu, %d %s", query.c_str(), db_thread_id, rc, reason.c_str());
 
@@ -269,16 +305,8 @@ int zmDbDo(const std::string &query) {
       continue;
     }
 
-    // Not a connection error. Retry lock contention with backoff; otherwise give up.
-    if ((err == ER_LOCK_DEADLOCK or err == ER_LOCK_WAIT_TIMEOUT)
-        and contention_retries < kMaxContentionRetries) {
-      contention_retries++;
-      useconds_t us = contention_backoff_us(contention_retries);
-      Debug(1, "Lock contention (errno=%u) on '%s', retry %d/%d after %u us",
-            err, query.c_str(), contention_retries, kMaxContentionRetries, us);
-      usleep(us);
-      continue;
-    }
+    // Not a connection error.
+    if (retry_after_contention(err, query, contention_attempts)) continue;
 
     Error("Can't run query %s: %d %s", query.c_str(), rc, reason.c_str());
     logger->databaseLevel(oldLevel);
@@ -295,15 +323,19 @@ uint64_t zmDbDoInsert(const std::string &query) {
   if (!zmDbConnected and !zmDbConnect())
     return 0;
   int rc;
+  int contention_attempts = 0;
   while ((rc = mysql_query(&dbconn, query.c_str())) and !zm_terminate) {
     std::string reason = mysql_error(&dbconn);
+    unsigned int err = mysql_errno(&dbconn);
     if (mysql_ping(&dbconn)) {
       if (!zmDbReconnect()) sleep(1);
-    } else {
-      Error("Can't run query %s: %d %s", query.c_str(), rc, reason.c_str());
-      if ((mysql_errno(&dbconn) != ER_LOCK_WAIT_TIMEOUT))
-        return 0;
+      continue;
     }
+
+    if (retry_after_contention(err, query, contention_attempts)) continue;
+
+    Error("Can't run query %s: %d %s", query.c_str(), rc, reason.c_str());
+    return 0;
   }
   uint64_t id = mysql_insert_id(&dbconn);
   Debug(2, "Success running sql insert %s. Resulting id is %" PRIu64, query.c_str(), id);
@@ -315,14 +347,19 @@ int zmDbDoUpdate(const std::string &query) {
   if (!zmDbConnected and !zmDbConnect())
     return 0;
   int rc;
+  int contention_attempts = 0;
   while ( (rc = mysql_query(&dbconn, query.c_str())) and !zm_terminate) {
+    std::string reason = mysql_error(&dbconn);
+    unsigned int err = mysql_errno(&dbconn);
     if (mysql_ping(&dbconn)) {
       if (!zmDbReconnect()) sleep(1);
-    } else {
-      Error("Can't run query %s: %s", query.c_str(), mysql_error(&dbconn));
-      if ( (mysql_errno(&dbconn) != ER_LOCK_WAIT_TIMEOUT) )
-        return -rc;
+      continue;
     }
+
+    if (retry_after_contention(err, query, contention_attempts)) continue;
+
+    Error("Can't run query %s: %s", query.c_str(), reason.c_str());
+    return -rc;
   }
   int affected = mysql_affected_rows(&dbconn);
   Debug(2, "Success running sql update %s. Rows modified %d", query.c_str(), affected);
@@ -435,16 +472,45 @@ static std::string zmDbEscapeStringFallback(const std::string& to_escape) {
   return escaped;
 }
 
-std::string zmDbEscapeString(const std::string& to_escape) {
-  std::lock_guard<std::mutex> lck(db_mutex);
+namespace {
 
-  // Check connection and try to reconnect if needed
-  if (!zmDbConnected) {
-    if (!zmDbConnect()) {
-      // Connection failed - use fallback escaping to avoid segfault
-      Warning("Database not connected, using fallback string escaping");
-      return zmDbEscapeStringFallback(to_escape);
+// Escaping without a connection to ask about the character set. Only correct
+// because the connection is utf8mb4: no byte of a multi-byte UTF-8 sequence
+// falls in ASCII, so there is no sequence a trailing backslash can be absorbed
+// into. It would be unsafe for a character set like GBK, which is the reason
+// mysql_real_escape_string wants the handle in the first place.
+std::string escape_without_connection(const std::string &to_escape) {
+  std::string escaped;
+  escaped.reserve(to_escape.length() * 2);
+
+  for (char c : to_escape) {
+    switch (c) {
+      case '\0':   escaped += "\\0"; break;
+      case '\n':   escaped += "\\n"; break;
+      case '\r':   escaped += "\\r"; break;
+      case '\\':   escaped += "\\\\"; break;
+      case '\'':   escaped += "\\'"; break;
+      case '"':    escaped += "\\\""; break;
+      case '\x1a': escaped += "\\Z"; break;
+      default:     escaped += c; break;
     }
+  }
+  return escaped;
+}
+
+}  // namespace
+
+std::string zmDbEscapeString(const std::string& to_escape) {
+  // mysql_real_escape_string reads the character set off the connection, so a
+  // closed handle sends it into freed state.
+  //
+  // Deliberately does not take db_mutex, even though it is reading connection
+  // state: the logger calls this from Error(), and zmDbFetch reaches Error()
+  // while holding db_mutex. Locking here would self-deadlock the process on any
+  // failed query. Reading the flag unlocked matches what the logger already
+  // does before deciding to call this at all.
+  if (!zmDbConnected) {
+    return escape_without_connection(to_escape);
   }
 
   // According to docs, size of safer_whatever must be 2 * length + 1
