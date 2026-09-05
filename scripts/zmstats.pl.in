@@ -9,7 +9,7 @@ use bytes;
 #
 # ==========================================================================
 
-use constant START_DELAY => 5; # To give everything else time to start
+use constant START_DELAY => 5; # To stay out of the way while the system comes up
 
 # ==========================================================================
 #
@@ -39,8 +39,16 @@ sub TermHandler {
 $SIG{TERM} = \&TermHandler;
 $SIG{INT} = \&TermHandler;
 
-Info('Stats Daemon starting in '.START_DELAY.' seconds');
-sleep(START_DELAY);
+# Nothing here races with startup -- the first thing this does is connect to
+# the database, and it has its own reconnect loop for that -- so the delay is
+# only politeness while zmc and zma are competing for the disk and the server.
+# Skip it entirely when a person is waiting on the output.
+if (startedInteractively()) {
+  Debug('Running interactively, skipping the '.START_DELAY.' second start delay');
+} else {
+  Info('Stats Daemon starting in '.START_DELAY.' seconds');
+  sleep(START_DELAY);
+}
 
 my $dbh = zmDbConnect();
 $dbh->do('SET SESSION TRANSACTION ISOLATION LEVEL READ UNCOMMITTED');
@@ -103,7 +111,7 @@ while (!$zm_terminate) {
   # trigger updates on adjacent EventIds.
   #
   # Cascade triggers on Events_Hour/Day/Week/Month were removed by
-  # zm_update-1.39.25.sql, so the bucket DELETEs here do not touch
+  # zm_update-1.39.26.sql, so the bucket DELETEs here do not touch
   # Event_Summaries — the resync below is the single point of truth for the
   # Hour/Day/Week/Month columns.
   #
@@ -206,7 +214,7 @@ while (!$zm_terminate) {
         }
 
         # One UPDATE per touched monitor. Cascade triggers on the bucket
-        # tables were removed by zm_update-1.39.25.sql, so the earlier
+        # tables were removed by zm_update-1.39.26.sql, so the earlier
         # DELETEs only hold bucket-row X-locks (no ES X-locks acquired as a
         # cascade). The new statement X-locks the one ES row it targets and
         # reads no other table, so it doesn't add any cross-table dependency
