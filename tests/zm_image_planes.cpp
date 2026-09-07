@@ -27,6 +27,11 @@
 #include "zm_catch2.h"
 #include "zm_image.h"
 #include "zm_pixformat.h"
+#include "zm_poly.h"
+#include "zm_rgb.h"
+
+#include <cstring>
+#include <vector>
 
 extern "C" {
 #include <libavutil/imgutils.h>
@@ -88,4 +93,62 @@ TEST_CASE("Writing the last row of each plane stays inside the buffer", "[image]
             + (image.Width() + 1) / 2 <= end);
   REQUIRE(image.VBuffer() + static_cast<size_t>(image.UVLineSize()) * last_chroma_row
             + (image.Width() + 1) / 2 <= end);
+}
+
+// Outline walks each polygon edge with whichever axis it advances fastest
+// along: a mostly-vertical edge steps y and a mostly-horizontal one steps x.
+// A rectangle has both, so one call covers the two arms. Both must land the
+// converted luma value on the Y plane and the matching chroma on U and V --
+// the horizontal arm used to write the raw RGB value into the luma plane and
+// touch no chroma at all.
+TEST_CASE("Outline draws YUV420P edges on all three planes", "[image][planes]") {
+  auto check = [](int w, int h) {
+    INFO("dimensions " << w << "x" << h);
+    Image image(w, h, ZM_COLOUR_YUV420P, ZM_SUBPIX_ORDER_YUV420P);
+    memset(image.Buffer(), 0, image.Size());
+
+    const int left = 64, right = w - 64, top = 64, bottom = h - 64;
+    std::vector<Vector2> vertices = {
+        Vector2(left, top), Vector2(right, top),
+        Vector2(right, bottom), Vector2(left, bottom),
+    };
+    image.Outline(kRGBRed, Polygon(vertices));
+
+    const YUV expected = brg_to_yuv(kRGBRed);
+    const uint8_t y_expected = Y_VAL(expected);
+    const uint8_t u_expected = U_VAL(expected);
+    const uint8_t v_expected = V_VAL(expected);
+    REQUIRE(y_expected != 0);  // otherwise the assertions below prove nothing
+
+    const unsigned int ls = image.LineSize();
+    const unsigned int uvls = image.UVLineSize();
+
+    auto luma_at = [&](int x, int y) { return image.Buffer()[y * ls + x]; };
+    auto u_at = [&](int x, int y) { return image.UBuffer()[(y / 2) * uvls + (x / 2)]; };
+    auto v_at = [&](int x, int y) { return image.VBuffer()[(y / 2) * uvls + (x / 2)]; };
+
+    SECTION("mostly-vertical edge") {
+      const int x = left, y = (top + bottom) / 2;
+      INFO("left edge at " << x << "," << y);
+      REQUIRE(luma_at(x, y) == y_expected);
+      REQUIRE(u_at(x, y) == u_expected);
+      REQUIRE(v_at(x, y) == v_expected);
+    }
+
+    SECTION("mostly-horizontal edge") {
+      const int x = (left + right) / 2, y = top;
+      INFO("top edge at " << x << "," << y);
+      REQUIRE(luma_at(x, y) == y_expected);
+      REQUIRE(u_at(x, y) == u_expected);
+      REQUIRE(v_at(x, y) == v_expected);
+    }
+
+    SECTION("untouched interior stays clear") {
+      const int x = (left + right) / 2, y = (top + bottom) / 2;
+      REQUIRE(luma_at(x, y) == 0);
+    }
+  };
+
+  SECTION("width already aligned")            { check(640, 480); }
+  SECTION("width not a multiple of the align"){ check(1080, 1920); }
 }

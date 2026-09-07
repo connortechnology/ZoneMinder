@@ -3451,10 +3451,10 @@ void Image::Outline( Rgb colour, const Polygon &polygon ) {
       int y, yinc = (y1<y2)?1:-1;
       grad *= yinc;
       if (zm_is_yuv420(imagePixFormat)) {
-        int32_t yuv_colour = brg_to_yuv(colour);
-        int8_t y_colour = Y_VAL(yuv_colour);
-        int8_t u_colour = U_VAL(yuv_colour);
-        int8_t v_colour = V_VAL(yuv_colour);
+        const YUV yuv_colour = brg_to_yuv(colour);
+        const uint8_t y_colour = Y_VAL(yuv_colour);
+        const uint8_t u_colour = U_VAL(yuv_colour);
+        const uint8_t v_colour = V_VAL(yuv_colour);
         uint8_t *y_buffer = buffer;
         uint8_t *const u_plane = UBuffer();
         uint8_t *const v_plane = VBuffer();
@@ -3503,10 +3503,23 @@ void Image::Outline( Rgb colour, const Polygon &polygon ) {
       int x, xinc = (x1<x2)?1:-1;
       grad *= xinc;
       if (zm_is_yuv420(imagePixFormat)) {
-        //Debug( 9, "x1:%d, x2:%d, y1:%d, y2:%d, gr:%.2lf", x1, x2, y1, y2, grad );
+        const YUV yuv_colour = brg_to_yuv(colour);
+        const uint8_t y_colour = Y_VAL(yuv_colour);
+        const uint8_t u_colour = U_VAL(yuv_colour);
+        const uint8_t v_colour = V_VAL(yuv_colour);
+        uint8_t *const u_plane = UBuffer();
+        uint8_t *const v_plane = VBuffer();
+        const unsigned int uv_linesize = UVLineSize();
+        const unsigned int uv_size = uv_linesize * ((height + 1) / 2);
+
         for ( y = y1, x = x1; x != x2; x += xinc, y += grad ) {
-          //Debug( 9, "x:%d, y:%.2f", x, y );
-          buffer[int(round(y)) * linesize + x] = colour;
+          const int row = int(round(y));
+          buffer[row * linesize + x] = y_colour;
+          const unsigned int index = (row / 2) * uv_linesize + (x / 2);
+          if (index < uv_size) {
+            u_plane[index] = u_colour;
+            v_plane[index] = v_colour;
+          }
         }
       } else if ( zm_bytes_per_pixel(imagePixFormat) == 1 ) {
         //Debug( 9, "x1:%d, x2:%d, y1:%d, y2:%d, gr:%.2lf", x1, x2, y1, y2, grad );
