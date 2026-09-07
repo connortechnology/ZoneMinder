@@ -1781,6 +1781,10 @@ bool Image::WriteJpeg(const std::string &filename,
     Error("Couldn't get lock on %s, continuing", filename.c_str());
   }
 
+  // The mjpeg encoder takes its quantiser from the frame, not the context.
+  // Without this global_quality is ignored and every jpeg comes out at the
+  // codec default no matter what quality was configured.
+  frame->quality = p_jpegcodeccontext->global_quality;
   int ret = avcodec_send_frame(p_jpegcodeccontext, frame.get());
   while (ret == AVERROR(EAGAIN) and !zm_terminate)
     ret = avcodec_send_frame(p_jpegcodeccontext, frame.get());
