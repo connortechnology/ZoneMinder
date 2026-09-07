@@ -2587,18 +2587,21 @@ void Image::Overlay( const Image &image, const unsigned int lo_x, const unsigned
 
   unsigned int hi_x = (lo_x+image.width)-1;
   unsigned int hi_y = (lo_y+image.height-1);
+  // Both buffers may carry per-row padding (linesize > width*colours after
+  // FFALIGN). Rebase source and destination per row using each image's
+  // own linesize so the sequential psrc++ advance can't drift across rows.
   if ( zm_bytes_per_pixel(imagePixFormat) == 1 ) {
-    const uint8_t *psrc = image.buffer;
     for ( unsigned int y = lo_y; y <= hi_y; y++ ) {
-      uint8_t *pdest = &buffer[(y*width)+lo_x];
+      const uint8_t *psrc = image.buffer + (y - lo_y) * image.linesize;
+      uint8_t *pdest = buffer + y * linesize + lo_x;
       for ( unsigned int x = lo_x; x <= hi_x; x++ ) {
         *pdest++ = *psrc++;
       }
     }
   } else if ( zm_is_rgb24(imagePixFormat) ) {
-    const uint8_t *psrc = image.buffer;
     for ( unsigned int y = lo_y; y <= hi_y; y++ ) {
-      uint8_t *pdest = &buffer[colours*((y*width)+lo_x)];
+      const uint8_t *psrc = image.buffer + (y - lo_y) * image.linesize;
+      uint8_t *pdest = buffer + y * linesize + lo_x * colours;
       for ( unsigned int x = lo_x; x <= hi_x; x++ ) {
         *pdest++ = *psrc++;
         *pdest++ = *psrc++;
@@ -2606,9 +2609,9 @@ void Image::Overlay( const Image &image, const unsigned int lo_x, const unsigned
       }
     }
   } else if ( zm_is_rgb32(imagePixFormat) ) {
-    const Rgb *psrc = (Rgb*)(image.buffer);
     for ( unsigned int y = lo_y; y <= hi_y; y++ ) {
-      Rgb *pdest = (Rgb*)&buffer[((y*width)+lo_x)<<2];
+      const Rgb *psrc = (const Rgb*)(image.buffer + (y - lo_y) * image.linesize);
+      Rgb *pdest = (Rgb*)(buffer + y * linesize + (lo_x << 2));
       for ( unsigned int x = lo_x; x <= hi_x; x++ ) {
         *pdest++ = *psrc++;
       }
@@ -2630,10 +2633,8 @@ void Image::Blend( const Image &image, int transparency ) {
     return;
   }
 
-  if ( transparency <= 0 ) {
-    Debug(1, "No blending");
+  if ( transparency <= 0 )
     return;
-  }
 
   // Reuse persistent blend buffer to avoid per-frame alloc/free
   if (blend_buffer_size_ < size) {
@@ -3208,16 +3209,18 @@ void Image::Fill( Rgb colour, const Box *limits ) {
   unsigned int lo_y = limits ? limits->Lo().y_ : 0;
   unsigned int hi_x = limits ? limits->Hi().x_ : width - 1;
   unsigned int hi_y = limits ? limits->Hi().y_ : height - 1;
+  // Use linesize as the row stride so non-32-aligned widths don't write
+  // into padding bytes or shift subsequent rows.
   if ( zm_bytes_per_pixel(imagePixFormat) == 1 ) {
     for ( unsigned int y = lo_y; y <= hi_y; y++ ) {
-      unsigned char *p = &buffer[(y*width)+lo_x];
+      unsigned char *p = &buffer[y * linesize + lo_x];
       for ( unsigned int x = lo_x; x <= hi_x; x++, p++) {
         *p = colour;
       }
     }
   } else if ( zm_is_rgb24(imagePixFormat) ) {
     for ( unsigned int y = lo_y; y <= hi_y; y++ ) {
-      unsigned char *p = &buffer[colours*((y*width)+lo_x)];
+      unsigned char *p = &buffer[y * linesize + lo_x * colours];
       for ( unsigned int x = lo_x; x <= hi_x; x++, p += 3) {
         RED_PTR_RGBA(p) = RED_VAL_RGBA(colour);
         GREEN_PTR_RGBA(p) = GREEN_VAL_RGBA(colour);
@@ -3226,7 +3229,7 @@ void Image::Fill( Rgb colour, const Box *limits ) {
     }
   } else if ( zm_is_rgb32(imagePixFormat) ) { /* RGB32 */
     for ( unsigned int y = lo_y; y <= (unsigned int)hi_y; y++ ) {
-      Rgb *p = (Rgb*)&buffer[((y*width)+lo_x)<<2];
+      Rgb *p = (Rgb*)&buffer[y * linesize + (lo_x << 2)];
 
       for ( unsigned int x = lo_x; x <= (unsigned int)hi_x; x++, p++) {
         /* Fast, copies the entire pixel in a single pass */
@@ -3253,9 +3256,11 @@ void Image::Fill( Rgb colour, int density, const Box *limits ) {
   unsigned int lo_y = limits ? limits->Lo().y_ : 0;
   unsigned int hi_x = limits ? limits->Hi().x_ : width - 1;
   unsigned int hi_y = limits ? limits->Hi().y_ : height - 1;
+  // Use linesize as the row stride so non-32-aligned widths don't write
+  // into padding bytes or shift subsequent rows.
   if ( zm_bytes_per_pixel(imagePixFormat) == 1 ) {
     for ( unsigned int y = lo_y; y <= hi_y; y++ ) {
-      unsigned char *p = &buffer[(y*width)+lo_x];
+      unsigned char *p = &buffer[y * linesize + lo_x];
       for ( unsigned int x = lo_x; x <= hi_x; x++, p++) {
         if ( ( x == lo_x || x == hi_x || y == lo_y || y == hi_y ) || (!(x%density) && !(y%density) ) )
           *p = colour;
@@ -3263,7 +3268,7 @@ void Image::Fill( Rgb colour, int density, const Box *limits ) {
     }
   } else if ( zm_is_rgb24(imagePixFormat) ) {
     for ( unsigned int y = lo_y; y <= hi_y; y++ ) {
-      unsigned char *p = &buffer[colours*((y*width)+lo_x)];
+      unsigned char *p = &buffer[y * linesize + lo_x * colours];
       for ( unsigned int x = lo_x; x <= hi_x; x++, p += 3) {
         if ( ( x == lo_x || x == hi_x || y == lo_y || y == hi_y ) || (!(x%density) && !(y%density) ) ) {
           RED_PTR_RGBA(p) = RED_VAL_RGBA(colour);
@@ -3274,7 +3279,7 @@ void Image::Fill( Rgb colour, int density, const Box *limits ) {
     }
   } else if ( zm_is_rgb32(imagePixFormat) ) { /* RGB32 */
     for ( unsigned int y = lo_y; y <= hi_y; y++ ) {
-      Rgb* p = (Rgb*)&buffer[((y*width)+lo_x)<<2];
+      Rgb* p = (Rgb*)&buffer[y * linesize + (lo_x << 2)];
 
       for ( unsigned int x = lo_x; x <= hi_x; x++, p++) {
         if ( ( x == lo_x || x == hi_x || y == lo_y || y == hi_y ) || (!(x%density) && !(y%density) ) )
@@ -3445,18 +3450,18 @@ void Image::Outline( Rgb colour, const Polygon &polygon ) {
         }
       } else if ( zm_bytes_per_pixel(imagePixFormat) == 1 ) {
         for ( x = x1, y = y1; y != y2; y += yinc, x += grad ) {
-          buffer[(y*width)+int(round(x))] = colour;
+          buffer[y * linesize + int(round(x))] = colour;
         }
       } else if ( zm_is_rgb24(imagePixFormat) ) {
         for ( x = x1, y = y1; y != y2; y += yinc, x += grad ) {
-          unsigned char *p = &buffer[colours*((y*width)+int(round(x)))];
+          unsigned char *p = &buffer[y * linesize + int(round(x)) * colours];
           RED_PTR_RGBA(p) = RED_VAL_RGBA(colour);
           GREEN_PTR_RGBA(p) = GREEN_VAL_RGBA(colour);
           BLUE_PTR_RGBA(p) = BLUE_VAL_RGBA(colour);
         }
       } else if ( zm_is_rgb32(imagePixFormat) ) {
         for ( x = x1, y = y1; y != y2; y += yinc, x += grad ) {
-          *(Rgb*)(buffer+(((y*width)+int(round(x)))<<2)) = colour;
+          *(Rgb*)(buffer + y * linesize + (int(round(x)) << 2)) = colour;
         }
       }
     } else {
@@ -3480,18 +3485,18 @@ void Image::Outline( Rgb colour, const Polygon &polygon ) {
         //Debug( 9, "x1:%d, x2:%d, y1:%d, y2:%d, gr:%.2lf", x1, x2, y1, y2, grad );
         for ( y = y1, x = x1; x != x2; x += xinc, y += grad ) {
           //Debug( 9, "x:%d, y:%.2f", x, y );
-          buffer[(int(round(y))*width)+x] = colour;
+          buffer[int(round(y)) * linesize + x] = colour;
         }
       } else if ( zm_is_rgb24(imagePixFormat) ) {
         for ( y = y1, x = x1; x != x2; x += xinc, y += grad ) {
-          unsigned char *p = &buffer[colours*((int(round(y))*width)+x)];
+          unsigned char *p = &buffer[int(round(y)) * linesize + x * colours];
           RED_PTR_RGBA(p) = RED_VAL_RGBA(colour);
           GREEN_PTR_RGBA(p) = GREEN_VAL_RGBA(colour);
           BLUE_PTR_RGBA(p) = BLUE_VAL_RGBA(colour);
         }
       } else if ( zm_is_rgb32(imagePixFormat) ) {
         for ( y = y1, x = x1; x != x2; x += xinc, y += grad ) {
-          *(Rgb*)(buffer+(((int(round(y))*width)+x)<<2)) = colour;
+          *(Rgb*)(buffer + int(round(y)) * linesize + (x << 2)) = colour;
         }
       }
     }
@@ -3573,7 +3578,7 @@ void Image::Fill(Rgb colour, int density, const Polygon &polygon) {
         int32 lo_x = static_cast<int32>(it->min_x);
         int32 hi_x = static_cast<int32>((it + 1)->min_x);
         if (zm_bytes_per_pixel(imagePixFormat) == 1) {
-          uint8 *p = &buffer[(scan_line * width) + lo_x];
+          uint8 *p = &buffer[scan_line * linesize + lo_x];
 
           for (int32 x = lo_x; x <= hi_x; x++, p++) {
             if (!(x % density)) {
@@ -3582,7 +3587,7 @@ void Image::Fill(Rgb colour, int density, const Polygon &polygon) {
           }
         } else if (zm_is_rgb24(imagePixFormat)) {
           constexpr uint8 bytesPerPixel = 3;
-          uint8 *ptr = &buffer[((scan_line * width) + lo_x) * bytesPerPixel];
+          uint8 *ptr = &buffer[scan_line * linesize + lo_x * bytesPerPixel];
 
           for (int32 x = lo_x; x <= hi_x; x++, ptr += bytesPerPixel) {
             if (!(x % density)) {
@@ -3593,7 +3598,7 @@ void Image::Fill(Rgb colour, int density, const Polygon &polygon) {
           }
         } else if (zm_is_rgb32(imagePixFormat)) {
           constexpr uint8 bytesPerPixel = 4;
-          Rgb *ptr = reinterpret_cast<Rgb *>(&buffer[((scan_line * width) + lo_x) * bytesPerPixel]);
+          Rgb *ptr = reinterpret_cast<Rgb *>(&buffer[scan_line * linesize + lo_x * bytesPerPixel]);
 
           for (int32 x = lo_x; x <= hi_x; x++, ptr++) {
             if (!(x % density)) {
@@ -3913,12 +3918,19 @@ void Image::Deinterlace_Discard() {
   /* Simple deinterlacing. Copy the even lines into the odd lines */
   // ICON: These can be drastically improved.  But who cares?
 
+  // Use linesize as the per-row byte stride so non-32-aligned widths copy
+  // from/to the correct row offsets. Still copies `width` pixels per row
+  // (the padding bytes are untouched). Stop one short of the last row
+  // when height is odd — y == height-1 would write to row height which
+  // is past the buffer.
+  if (height < 2) return;
+  const unsigned int last_src = static_cast<unsigned int>(height) - 1;
   if ( zm_bytes_per_pixel(imagePixFormat) == 1 ) {
     const uint8_t *psrc;
     uint8_t *pdest;
-    for (unsigned int y = 0; y < (unsigned int)height; y += 2) {
-      psrc = buffer + (y * width);
-      pdest = buffer + ((y+1) * width);
+    for (unsigned int y = 0; y < last_src; y += 2) {
+      psrc = buffer + y * linesize;
+      pdest = buffer + (y + 1) * linesize;
       for (unsigned int x = 0; x < (unsigned int)width; x++) {
         *pdest++ = *psrc++;
       }
@@ -3926,9 +3938,9 @@ void Image::Deinterlace_Discard() {
   } else if ( zm_is_rgb24(imagePixFormat) ) {
     const uint8_t *psrc;
     uint8_t *pdest;
-    for (unsigned int y = 0; y < (unsigned int)height; y += 2) {
-      psrc = buffer + ((y * width) * 3);
-      pdest = buffer + (((y+1) * width) * 3);
+    for (unsigned int y = 0; y < last_src; y += 2) {
+      psrc = buffer + y * linesize;
+      pdest = buffer + (y + 1) * linesize;
       for (unsigned int x = 0; x < (unsigned int)width; x++) {
         *pdest++ = *psrc++;
         *pdest++ = *psrc++;
@@ -3938,9 +3950,9 @@ void Image::Deinterlace_Discard() {
   } else if ( zm_is_rgb32(imagePixFormat) ) {
     const Rgb *psrc;
     Rgb *pdest;
-    for (unsigned int y = 0; y < (unsigned int)height; y += 2) {
-      psrc = (Rgb*)(buffer + ((y * width) << 2));
-      pdest = (Rgb*)(buffer + (((y+1) * width) << 2));
+    for (unsigned int y = 0; y < last_src; y += 2) {
+      psrc = (Rgb*)(buffer + y * linesize);
+      pdest = (Rgb*)(buffer + (y + 1) * linesize);
       for (unsigned int x = 0; x < (unsigned int)width; x++) {
         *pdest++ = *psrc++;
       }
@@ -3956,26 +3968,29 @@ void Image::Deinterlace_Linear() {
   const uint8_t *pbelow, *pabove;
   uint8_t *pcurrent;
 
+  // Use linesize as the per-row byte stride so non-32-aligned widths read
+  // and write the correct rows. The inner loops still process `width`
+  // pixels per row; per-row padding bytes are not touched.
   if ( zm_bytes_per_pixel(imagePixFormat) == 1 ) {
     for (unsigned int y = 1; y < (unsigned int)(height-1); y += 2) {
-      pabove = buffer + ((y-1) * width);
-      pbelow = buffer + ((y+1) * width);
-      pcurrent = buffer + (y * width);
+      pabove = buffer + (y - 1) * linesize;
+      pbelow = buffer + (y + 1) * linesize;
+      pcurrent = buffer + y * linesize;
       for (unsigned int x = 0; x < (unsigned int)width; x++) {
         *pcurrent++ = (*pabove++ + *pbelow++) >> 1;
       }
     }
     /* Special case for the last line */
-    pcurrent = buffer + ((height-1) * width);
-    pabove = buffer + ((height-2) * width);
+    pcurrent = buffer + (height - 1) * linesize;
+    pabove = buffer + (height - 2) * linesize;
     for (unsigned int x = 0; x < (unsigned int)width; x++) {
       *pcurrent++ = *pabove++;
     }
   } else if ( zm_is_rgb24(imagePixFormat) ) {
     for (unsigned int y = 1; y < (unsigned int)(height-1); y += 2) {
-      pabove = buffer + (((y-1) * width) * 3);
-      pbelow = buffer + (((y+1) * width) * 3);
-      pcurrent = buffer + ((y * width) * 3);
+      pabove = buffer + (y - 1) * linesize;
+      pbelow = buffer + (y + 1) * linesize;
+      pcurrent = buffer + y * linesize;
       for (unsigned int x = 0; x < (unsigned int)width; x++) {
         *pcurrent++ = (*pabove++ + *pbelow++) >> 1;
         *pcurrent++ = (*pabove++ + *pbelow++) >> 1;
@@ -3983,8 +3998,8 @@ void Image::Deinterlace_Linear() {
       }
     }
     /* Special case for the last line */
-    pcurrent = buffer + (((height-1) * width) * 3);
-    pabove = buffer + (((height-2) * width) * 3);
+    pcurrent = buffer + (height - 1) * linesize;
+    pabove = buffer + (height - 2) * linesize;
     for (unsigned int x = 0; x < (unsigned int)width; x++) {
       *pcurrent++ = *pabove++;
       *pcurrent++ = *pabove++;
@@ -3992,9 +4007,9 @@ void Image::Deinterlace_Linear() {
     }
   } else if ( zm_is_rgb32(imagePixFormat) ) {
     for (unsigned int y = 1; y < (unsigned int)(height-1); y += 2) {
-      pabove = buffer + (((y-1) * width) << 2);
-      pbelow = buffer + (((y+1) * width) << 2);
-      pcurrent = buffer + ((y * width) << 2);
+      pabove = buffer + (y - 1) * linesize;
+      pbelow = buffer + (y + 1) * linesize;
+      pcurrent = buffer + y * linesize;
       for (unsigned int x = 0; x < (unsigned int)width; x++) {
         *pcurrent++ = (*pabove++ + *pbelow++) >> 1;
         *pcurrent++ = (*pabove++ + *pbelow++) >> 1;
@@ -4003,8 +4018,8 @@ void Image::Deinterlace_Linear() {
       }
     }
     /* Special case for the last line */
-    pcurrent = buffer + (((height-1) * width) << 2);
-    pabove = buffer + (((height-2) * width) << 2);
+    pcurrent = buffer + (height - 1) * linesize;
+    pabove = buffer + (height - 2) * linesize;
     for (unsigned int x = 0; x < (unsigned int)width; x++) {
       *pcurrent++ = *pabove++;
       *pcurrent++ = *pabove++;
@@ -4022,10 +4037,13 @@ void Image::Deinterlace_Blend() {
 
   uint8_t *pabove, *pcurrent;
 
+  // Use linesize as the per-row byte stride so non-32-aligned widths read
+  // and write the correct rows. The inner loops still process `width`
+  // pixels per row; per-row padding bytes are not touched.
   if ( zm_bytes_per_pixel(imagePixFormat) == 1 ) {
     for (unsigned int y = 1; y < (unsigned int)height; y += 2) {
-      pabove = buffer + ((y-1) * width);
-      pcurrent = buffer + (y * width);
+      pabove = buffer + (y - 1) * linesize;
+      pcurrent = buffer + y * linesize;
       for (unsigned int x = 0; x < (unsigned int)width; x++) {
         *pabove = (*pabove + *pcurrent) >> 1;
         *pcurrent++ = *pabove++;
@@ -4033,8 +4051,8 @@ void Image::Deinterlace_Blend() {
     }
   } else if ( zm_is_rgb24(imagePixFormat) ) {
     for (unsigned int y = 1; y < (unsigned int)height; y += 2) {
-      pabove = buffer + (((y-1) * width) * 3);
-      pcurrent = buffer + ((y * width) * 3);
+      pabove = buffer + (y - 1) * linesize;
+      pcurrent = buffer + y * linesize;
       for (unsigned int x = 0; x < (unsigned int)width; x++) {
         *pabove = (*pabove + *pcurrent) >> 1;
         *pcurrent++ = *pabove++;
@@ -4046,8 +4064,8 @@ void Image::Deinterlace_Blend() {
     }
   } else if ( zm_is_rgb32(imagePixFormat) ) {
     for (unsigned int y = 1; y < (unsigned int)height; y += 2) {
-      pabove = buffer + (((y-1) * width) << 2);
-      pcurrent = buffer + ((y * width) << 2);
+      pabove = buffer + (y - 1) * linesize;
+      pcurrent = buffer + y * linesize;
       for (unsigned int x = 0; x < (unsigned int)width; x++) {
         *pabove = (*pabove + *pcurrent) >> 1;
         *pcurrent++ = *pabove++;
@@ -4079,10 +4097,12 @@ void Image::Deinterlace_Blend_CustomRatio(int divider) {
     Error("Deinterlace called with invalid blend ratio");
   }
 
+  // Use linesize as the per-row byte stride so non-32-aligned widths read
+  // and write the correct rows. Inner loops process `width` pixels.
   if ( zm_bytes_per_pixel(imagePixFormat) == 1 ) {
     for (unsigned int y = 1; y < (unsigned int)height; y += 2) {
-      pabove = buffer + ((y-1) * width);
-      pcurrent = buffer + (y * width);
+      pabove = buffer + (y - 1) * linesize;
+      pcurrent = buffer + y * linesize;
       for (unsigned int x = 0; x < (unsigned int)width; x++) {
         subpix1 = ((*pabove - *pcurrent)>>divider) + *pcurrent;
         subpix2 = ((*pcurrent - *pabove)>>divider) + *pabove;
@@ -4092,8 +4112,8 @@ void Image::Deinterlace_Blend_CustomRatio(int divider) {
     }
   } else if ( zm_is_rgb24(imagePixFormat) ) {
     for (unsigned int y = 1; y < (unsigned int)height; y += 2) {
-      pabove = buffer + (((y-1) * width) * 3);
-      pcurrent = buffer + ((y * width) * 3);
+      pabove = buffer + (y - 1) * linesize;
+      pcurrent = buffer + y * linesize;
       for (unsigned int x = 0; x < (unsigned int)width; x++) {
         subpix1 = ((*pabove - *pcurrent)>>divider) + *pcurrent;
         subpix2 = ((*pcurrent - *pabove)>>divider) + *pabove;
@@ -4111,8 +4131,8 @@ void Image::Deinterlace_Blend_CustomRatio(int divider) {
     }
   } else if ( zm_is_rgb32(imagePixFormat) ) {
     for (unsigned int y = 1; y < (unsigned int)height; y += 2) {
-      pabove = buffer + (((y-1) * width) << 2);
-      pcurrent = buffer + ((y * width) << 2);
+      pabove = buffer + (y - 1) * linesize;
+      pcurrent = buffer + y * linesize;
       for (unsigned int x = 0; x < (unsigned int)width; x++) {
         subpix1 = ((*pabove - *pcurrent)>>divider) + *pcurrent;
         subpix2 = ((*pcurrent - *pabove)>>divider) + *pabove;
