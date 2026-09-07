@@ -129,8 +129,14 @@ class Event {
   AVCodecContext      *mJpegCodecContext;
   SwsContext          *mJpegSwsContext;
   AVBufferRef *hw_device_ctx;
-  int OpenJpegCodec(const Image *);
-  int OpenJpegCodec(AVFrame *frame);
+  // The quality mJpegCodecContext was opened for, so a frame wanting a
+  // different one reopens rather than being written at the wrong quality.
+  // ZM_JPEG_ALARM_FILE_QUALITY defaults to 0, which never exceeds
+  // ZM_JPEG_FILE_QUALITY, so in the default configuration every frame in an
+  // event wants the same quality and this never reopens.
+  int mJpegCodecQuality;
+  int OpenJpegCodec(const Image *, int quality);
+  int OpenJpegCodec(AVFrame *frame, int quality);
 
   std::string container;
   std::string codec;
@@ -227,6 +233,10 @@ class Event {
     EmptyPreAlarmFrames();
   }
   int MonitorId() const;
-  bool WriteJpeg(AVFrame *temp_frame, const std::string &filename);
+  // Writes a decoded frame straight out, used for the annotated AI frame.
+  // Takes alarm_frame for the same reason WriteFrameImage does: to pick the
+  // configured quality. There is no Exif here -- that only applies to the
+  // Image path, which carries the timestamp.
+  bool WriteJpeg(AVFrame *temp_frame, const std::string &filename, bool alarm_frame = false);
 };
 #endif // ZM_EVENT_H

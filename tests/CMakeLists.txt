@@ -23,6 +23,7 @@ set(TEST_SOURCES
   zm_event_hardlink.cpp
   zm_font.cpp
   zm_image.cpp
+  zm_image_jpeg_codec.cpp
   zm_image_planes.cpp
   zm_monitorstream.cpp
   zm_netint_lpr.cpp

@@ -68,6 +68,7 @@ Event::Event(
   videoStore(nullptr),
   mJpegCodecContext(nullptr),
   mJpegSwsContext(nullptr),
+  mJpegCodecQuality(-1),
   hw_device_ctx(nullptr),
   //video_file(""),
   //video_path(""),
@@ -190,13 +191,13 @@ Event::Event(
   set_cpu_affinity(thread_);
 }
 
-int Event::OpenJpegCodec(const Image *image) {
+int Event::OpenJpegCodec(const Image *image, int quality) {
   av_frame_ptr frame(av_frame_alloc());
   image->PopulateFrame(frame.get());
-  return OpenJpegCodec(frame.get());
+  return OpenJpegCodec(frame.get(), quality);
 }
 
-int Event::OpenJpegCodec(AVFrame *frame) {
+int Event::OpenJpegCodec(AVFrame *frame, int quality) {
   if (!frame) return -1;
   if (mJpegCodecContext) {
     avcodec_free_context(&mJpegCodecContext);
@@ -228,29 +229,27 @@ int Event::OpenJpegCodec(AVFrame *frame) {
     mJpegCodecContext->width = monitor->Width();
     mJpegCodecContext->height = monitor->Height();
     mJpegCodecContext->time_base= (AVRational) {1, 25};
-    //mJpegCodecContext->time_base= (AVRational) {1, static_cast<int>(monitor->GetFPS())};
     mJpegCodecContext->pix_fmt = chosen_codec_data->sw_pix_fmt;
     mJpegCodecContext->sw_pix_fmt = chosen_codec_data->sw_pix_fmt;
 
-    // Should be able to just set quality with the q setting.  Need to convert the old quality to 2-31
-    int quality = libjpeg_to_ffmpeg_qv(config.jpeg_file_quality);
-
-      //(alarm_frame && (config.jpeg_alarm_file_quality > config.jpeg_file_quality)) ?
-      //config.jpeg_alarm_file_quality : 0;   // quality to use, zero is default
-    //mJpegCodecContext->qcompress = quality/100.0; // 0-1
-    //mJpegCodecContext->qmax = 1;
-    //mJpegCodecContext->qmin = 1; //quality/100.0; // 0-1
-    mJpegCodecContext->global_quality = quality;//100.0; // 0-1
+    // The caller passes the libjpeg-scale quality it wants for this frame,
+    // which is the alarm quality on an alarm frame when that is configured
+    // higher, and ZM_JPEG_FILE_QUALITY otherwise. Convert to ffmpeg's 2-31.
+    // global_quality is in lambda units, not the 2-31 qscale directly, so it
+    // has to be scaled by FF_QP2LAMBDA. Without that the encoder silently
+    // ignores it and every frame comes out at the codec default.
+    mJpegCodecContext->global_quality = libjpeg_to_ffmpeg_qv(quality) * FF_QP2LAMBDA;
+    mJpegCodecContext->flags |= AV_CODEC_FLAG_QSCALE;
 
     Debug(1, "Setting pix fmt to %d %s, sw_pix_fmt %d %s", 
         chosen_codec_data->sw_pix_fmt, av_get_pix_fmt_name(chosen_codec_data->sw_pix_fmt),
         chosen_codec_data->sw_pix_fmt, av_get_pix_fmt_name(chosen_codec_data->sw_pix_fmt));
 
-    if (0 && setup_hwaccel(mJpegCodecContext,
-          chosen_codec_data, hw_device_ctx, monitor->EncoderHWAccelDevice(), monitor->Width(), monitor->Height())) {
-        avcodec_free_context(&mJpegCodecContext);
-      continue;
-    }
+    // Deliberately software. Hardware jpeg encoding was tried and dropped: the
+    // NetInt Quadra encoder puts far more load on the card than the jpegs are
+    // worth, and few devices offer jpeg hwaccel at all, so there was little to
+    // gain. The win here is using libavcodec rather than libjpeg, not the
+    // hardware. setup_hwaccel is where to start if that is ever revisited.
 
     if (avcodec_open2(mJpegCodecContext, mJpegCodec, NULL) < 0) {
       Error("Could not open mjpeg codec");
@@ -298,16 +297,15 @@ int Event::OpenJpegCodec(AVFrame *frame) {
     }
     zm_sws_set_ranges(mJpegSwsContext, orig_in_fmt, AV_PIX_FMT_YUVJ420P);
   }
-#if 1
-  output_frame = av_frame_ptr{av_frame_alloc()}; // The assignment here will destruct any previous allocation
+  // Reused for every frame of the event. Assigning destructs any previous one.
+  output_frame = av_frame_ptr{av_frame_alloc()};
   output_frame->width  = mJpegCodecContext->width;
   output_frame->height = mJpegCodecContext->height;
   output_frame->format = AV_PIX_FMT_YUVJ420P;
-  //av_image_fill_linesizes(frame->linesize, AV_PIX_FMT_YUVJ420P, p_jpegcodeccontext->width);
   av_frame_get_buffer(output_frame.get(), 0);
   zm_dump_video_frame(output_frame, "OpenCodec(output_frame)");
-#endif
 
+  mJpegCodecQuality = quality;
   return 0;
 }
 
@@ -513,16 +511,16 @@ void Event::addNote(const char *cause, const std::string &note) {
 }
 
 /* written jpeg will be thewidthxheight in the codec context, not ours. */
-bool Event::WriteJpeg(AVFrame *in_frame, const std::string &filename) {
+bool Event::WriteJpeg(AVFrame *in_frame, const std::string &filename, bool alarm_frame) {
+  const int thisquality =
+    (alarm_frame && (config.jpeg_alarm_file_quality > config.jpeg_file_quality)) ?
+    config.jpeg_alarm_file_quality : config.jpeg_file_quality;
 
-  if (!mJpegCodecContext || !mJpegSwsContext
-     // ||
-      //(mJpegSwsContext->src_format != in_frame->format)
-      // Apparently swsScale ignores src wxh anyways
-      ) {
-    Debug(1, "Need to open codec.  ctx %p", mJpegCodecContext);
-    //OpenJpegCodec(image);
-    OpenJpegCodec(in_frame);
+  // swscale ignores the source dimensions given at context creation, so the
+  // context only has to be rebuilt when the quality changes.
+  if (!mJpegCodecContext or !mJpegSwsContext or (mJpegCodecQuality != thisquality)) {
+    Debug(1, "Opening jpeg codec at quality %d, ctx %p", thisquality, mJpegCodecContext);
+    OpenJpegCodec(in_frame, thisquality);
   }
 
   if (!mJpegCodecContext) return false;
@@ -548,17 +546,6 @@ bool Event::WriteJpeg(AVFrame *in_frame, const std::string &filename) {
       mJpegCodecContext->width, mJpegCodecContext->width, av_get_pix_fmt_name(AV_PIX_FMT_YUVJ420P)
       );
 
-#if 0
-  av_frame_ptr out_frame = av_frame_ptr{av_frame_alloc()};
-  out_frame->width  = mJpegCodecContext->width;
-  out_frame->height = mJpegCodecContext->height;
-  out_frame->format = AV_PIX_FMT_YUVJ420P;
-  //av_image_fill_linesizes(frame->linesize, AV_PIX_FMT_YUVJ420P, p_jpegcodeccontext->width);
-  av_frame_get_buffer(out_frame.get(), 0);
-  zm_dump_video_frame(out_frame, "OpenCodec(output_frame)");
-  zm_dump_video_frame(in_frame, "OpenCodec(in_frame)");
-#endif
-
   int ret = sws_scale(mJpegSwsContext, in_frame->data, in_frame->linesize, 0, in_frame->height, output_frame->data, output_frame->linesize);
   if (ret < 0) {
     Error("cannot do sw scale: inframe data 0x%lx, linesize %d/%d/%d/%d, height %d to %d linesize",
@@ -569,6 +556,10 @@ bool Event::WriteJpeg(AVFrame *in_frame, const std::string &filename) {
 
   zm_dump_video_frame(in_frame, "Image.WriteJpeg(frame)");
 
+  // The mjpeg encoder takes its quantiser from the frame, not the context.
+  // Without this global_quality is ignored and every jpeg comes out at the
+  // codec default no matter what quality was configured.
+  output_frame->quality = mJpegCodecContext->global_quality;
   ret = avcodec_send_frame(mJpegCodecContext, output_frame.get());
   while (ret == AVERROR(EAGAIN) and !zm_terminate)
     ret = avcodec_send_frame(mJpegCodecContext, output_frame.get());
@@ -613,27 +604,43 @@ bool Event::WriteJpeg(AVFrame *in_frame, const std::string &filename) {
 } // end bool Event::WriteJpeg(const std::string &filename, AVCodecContext *p_jpegcodeccontext, SwsContext *p_jpegswscontext)
 
 bool Event::WriteFrameImage(Image *image, SystemTimePoint timestamp, const char *event_file, bool alarm_frame) {
-  /*
   int thisquality =
     (alarm_frame && (config.jpeg_alarm_file_quality > config.jpeg_file_quality)) ?
     config.jpeg_alarm_file_quality : 0;   // quality to use, zero is default
 
   SystemTimePoint jpeg_timestamp = monitor->Exif() ? timestamp : SystemTimePoint();
-  */
-  if (!mJpegCodecContext || (mJpegSwsContext && (mJpegCodecContext->sw_pix_fmt != image->AVPixFormat()))) {
-    Debug(1, "Need to open codec.  ctx %p", mJpegCodecContext);
-    OpenJpegCodec(image);
+
+  // The libavcodec mjpeg encoder writes no Exif, so a monitor that wants the
+  // timestamp embedded keeps the libjpeg path, which does. Exif is off by
+  // default, so this is the exception rather than the rule.
+  const bool use_codec = (jpeg_timestamp == SystemTimePoint());
+
+  if (use_codec) {
+    const int wanted_quality = thisquality ? thisquality : config.jpeg_file_quality;
+    if (!mJpegCodecContext
+        or (mJpegCodecQuality != wanted_quality)
+        or (mJpegSwsContext and (mJpegCodecContext->sw_pix_fmt != image->AVPixFormat()))) {
+      Debug(1, "Opening jpeg codec at quality %d, ctx %p", wanted_quality, mJpegCodecContext);
+      OpenJpegCodec(image, wanted_quality);
+    }
+    if (!mJpegCodecContext) {
+      Warning("No jpeg encoder available, falling back to libjpeg for this event");
+    }
   }
-  if (!mJpegCodecContext) return false;
 
   if (!config.timestamp_on_capture) {
-    // stash the image we plan to use in another pointer regardless if timestamped.
-    // exif is only timestamp at present this switches on or off for write
+    // Stash the image we plan to use in another pointer regardless of whether
+    // it is timestamped. Exif is only the timestamp at present, so this
+    // switches on or off for the write.
     Image ts_image(*image);
     monitor->TimestampImage(&ts_image, timestamp);
-    return ts_image.WriteJpeg(event_file, mJpegCodecContext, mJpegSwsContext);
+    if (use_codec and mJpegCodecContext)
+      return ts_image.WriteJpeg(event_file, mJpegCodecContext, mJpegSwsContext);
+    return ts_image.WriteJpeg(event_file, thisquality, jpeg_timestamp);
   }
-  return image->WriteJpeg(event_file, mJpegCodecContext, mJpegSwsContext);
+  if (use_codec and mJpegCodecContext)
+    return image->WriteJpeg(event_file, mJpegCodecContext, mJpegSwsContext);
+  return image->WriteJpeg(event_file, thisquality, jpeg_timestamp);
 }
 
 bool Event::WritePacket(const std::shared_ptr<ZMPacket>packet) {
@@ -886,18 +893,19 @@ void Event::AddFrame(const std::shared_ptr<ZMPacket>&packet) {
       write_to_db = true; // OD processing will need it, so the db needs to know about it
       alarm_frame_written = true;
       Debug(1, "Writing alarm image to %s", alarm_file.c_str());
+      // Report a failure here. The superseded version of this did and the
+      // rewrite dropped it, so a failed alarm image went by silently.
+      bool written = false;
       if (packet->ai_frame) {
-        WriteJpeg(packet->ai_frame.get(), alarm_file.c_str());
+        written = WriteJpeg(packet->ai_frame.get(), alarm_file.c_str());
       } else if (packet->in_frame) {
-        WriteJpeg(packet->in_frame.get(), alarm_file.c_str());
+        written = WriteJpeg(packet->in_frame.get(), alarm_file.c_str());
       } else if (packet->image) {
-        WriteFrameImage(packet->image, packet->timestamp, alarm_file.c_str());
+        written = WriteFrameImage(packet->image, packet->timestamp, alarm_file.c_str());
       }
-#if 0
-      if (!WriteFrameImage(packet->image, packet->timestamp, alarm_file.c_str())) {
+      if (!written) {
         Error("Failed to write alarm frame image to %s", alarm_file.c_str());
       }
-#endif
     } else {
       Debug(3, "Not Writing alarm image because alarm frame already written");
     }
