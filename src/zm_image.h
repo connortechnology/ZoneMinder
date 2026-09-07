@@ -135,6 +135,7 @@ SwsContext *sws_convert_context;
   unsigned long allocation;
   _AVPIXELFORMAT      imagePixFormat;
   uint8_t *buffer;
+  void SetChromaPlanes();
   uint8_t *u_buffer;
   uint8_t *v_buffer;
   int buffertype; /* 0=not ours, no need to call free(), 1=malloc() buffer, 2=new buffer */
@@ -169,6 +170,17 @@ SwsContext *sws_convert_context;
   }
   inline unsigned int Width() const { return width; }
   inline unsigned int LineSize() const { return linesize; }
+
+  // Row stride of the chroma planes for planar YUV, 0 for anything else. Each
+  // plane is padded to the same alignment independently, so this is not simply
+  // LineSize()/2.
+  unsigned int UVLineSize() const;
+
+  // The chroma planes. Null for non-planar formats. When the image came from an
+  // AVFrame these are the frame's own pointers; otherwise they are derived from
+  // the plane layout the buffer was allocated with, on first use.
+  uint8_t *UBuffer();
+  uint8_t *VBuffer();
   inline unsigned int Height() const { return height; }
   inline unsigned int Pixels() const { return pixels; }
   inline unsigned int Colours() const { return colours; }

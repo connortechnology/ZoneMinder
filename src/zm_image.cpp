@@ -773,6 +773,40 @@ void Image::Initialise() {
 }
 
 /* Requests a writeable buffer to the image. This is safer than buffer() because this way we can guarantee that a buffer of required size exists */
+unsigned int Image::UVLineSize() const {
+  if (!zm_is_yuv420(imagePixFormat)) return 0;
+  return FFALIGN(av_image_get_linesize(imagePixFormat, width, 1), 32);
+}
+
+// Point u_buffer and v_buffer at the chroma planes inside buffer.
+//
+// The buffer is allocated by av_image_get_buffer_size(..., 32) and the planes
+// sit in it the way av_image_fill_arrays puts them: each plane's rows are
+// padded to the alignment on their own, so the luma plane occupies
+// linesize * height and each chroma plane UVLineSize() * ceil(height/2).
+//
+// Deriving them from width * height instead is only right when width is
+// already a multiple of the alignment, which is why this never showed up on
+// 1920 or 640 wide images and does on 1080.
+void Image::SetChromaPlanes() {
+  if (!buffer or !zm_is_yuv420(imagePixFormat)) {
+    u_buffer = v_buffer = nullptr;
+    return;
+  }
+  u_buffer = buffer + static_cast<size_t>(linesize) * height;
+  v_buffer = u_buffer + static_cast<size_t>(UVLineSize()) * ((height + 1) / 2);
+}
+
+uint8_t *Image::UBuffer() {
+  if (!u_buffer) SetChromaPlanes();
+  return u_buffer;
+}
+
+uint8_t *Image::VBuffer() {
+  if (!v_buffer) SetChromaPlanes();
+  return v_buffer;
+}
+
 uint8_t* Image::WriteBuffer(
   const unsigned int p_width,
   const unsigned int p_height,
@@ -837,8 +871,7 @@ uint8_t* Image::WriteBuffer(
   }  // end if need to re-alloc buffer
 
   if ( imagePixFormat == AV_PIX_FMT_YUV420P or imagePixFormat == AV_PIX_FMT_YUVJ420P) {
-    u_buffer = buffer + width * height;
-    v_buffer = u_buffer + (width * height / 2);
+    SetChromaPlanes();
   } else {
     u_buffer = nullptr;
     v_buffer = nullptr;
@@ -1386,10 +1419,9 @@ bool Image::ReadJpeg(const std::string &filename, unsigned int p_colours, unsign
     JSAMPARRAY row_buffer = (readjpg_dcinfo->mem->alloc_sarray)((j_common_ptr) readjpg_dcinfo, JPOOL_IMAGE, new_width * 3, 1);
     if (!(u_buffer  or v_buffer)) {
       Debug(1, "Need to setup u_buffer and v_buffer");
-      if (!u_buffer || !v_buffer) {
-        u_buffer = buffer + new_width*new_height;
-        v_buffer = u_buffer + new_width*new_height/4;
-      }
+      // WriteBuffer above has already set width/height/linesize to the new
+      // values, so the planes derive from the members.
+      SetChromaPlanes();
     }
 
     for (unsigned int row = 0; row < readjpg_dcinfo->output_height; ++row) {
@@ -3310,7 +3342,7 @@ void Image::DrawBox(unsigned int left, unsigned int top, unsigned int right, uns
     uint8_t y_colour = Y_VAL(yuv_colour);
     uint8_t u_colour = U_VAL(yuv_colour);
     uint8_t v_colour = V_VAL(yuv_colour);
-    int uv_width = width >> 1;
+    const unsigned int uv_linesize = UVLineSize();
     Debug(4, "R %u G %u B %u YUV %u U %u V %u (%u,%u => %u,%u)",
         RED_VAL_RGBA(colour), GREEN_VAL_RGBA(colour), BLUE_VAL_RGBA(colour),
         y_colour, u_colour, v_colour, left, top, right, bottom);
@@ -3318,53 +3350,50 @@ void Image::DrawBox(unsigned int left, unsigned int top, unsigned int right, uns
     int hsub = 1;
 
     uint8_t *y_buffer = buffer;
-    if (!u_buffer || !v_buffer) {
-      Debug(4, "Setting u+v");
-      u_buffer = buffer + width*height;
-      v_buffer = u_buffer + width*height/4;
-    }
+    uint8_t *const u_plane = UBuffer();
+    uint8_t *const v_plane = VBuffer();
     Debug(4, "y_buffer_ptr %p u_buffer %p, v_buffer %p, size %u total %p ",buffer, u_buffer, v_buffer, size, buffer+size);
  
     unsigned int row = top;
     unsigned int uv_row = row >> 1;
-    unsigned int uv_size = size >> 1;
+    const unsigned int uv_size = uv_linesize * ((height + 1) / 2);
     //top
     for (unsigned int col = left; col < right; ++col) {
-      unsigned int index = row * width + col;
+      unsigned int index = row * linesize + col;
       y_buffer[index] = y_colour;
-      index = (uv_row * uv_width + (col>>1));
+      index = (uv_row * uv_linesize + (col>>1));
       //Debug(1, "%dx%d, %dx%d, y-index: %d, uv-index: %d u_ptr %p v_ptr %p", col, row, col>>1, uv_row, row * width + col, index,
           //u_buffer+index, v_buffer+index
           //);
       if (index < uv_size) {
-        u_buffer[index] = u_colour;
-        v_buffer[index] = v_colour;
+        u_plane[index] = u_colour;
+        v_plane[index] = v_colour;
       } else {
-        Error("Address index %d = %d*%d * %d + %d/2> size %d", index, row, uv_row, uv_width, left, size);
+        Error("Address index %d = %d*%d * %d + %d/2> size %d", index, row, uv_row, uv_linesize, left, size);
       }
     }
     // Sides
     for (row = top; row < bottom; ++row) {
       // Draw the box on the Y plane
-      y_buffer[row * width + left] = y_colour;
-      y_buffer[row * width + right] = y_colour;
+      y_buffer[row * linesize + left] = y_colour;
+      y_buffer[row * linesize + right] = y_colour;
 
       uv_row = row >> vsub;
-      unsigned int index = uv_row * uv_width + (left>>hsub);
+      unsigned int index = uv_row * uv_linesize + (left>>hsub);
       //Debug(1, "%dx%d , %dx%d, %dx%d, y-index: %d, uv-index: %d", left, row, left>>hsub, uv_row, right, row, row * width + left, index);
       if (index < uv_size) {
-        u_buffer[index] = u_colour;
-        v_buffer[index] = v_colour;
+        u_plane[index] = u_colour;
+        v_plane[index] = v_colour;
       } else {
-        Error("Address index %u = %d*%d * %d + %d/2> size %u", index, row, uv_row, uv_width, left, size);
+        Error("Address index %u = %d*%d * %d + %d/2> size %u", index, row, uv_row, uv_linesize, left, size);
       }
       index += ((right-left)>>hsub);
       //Debug(1, "%dx%d , %dx%d, %dx%d, y-index: %d, uv-index: %d", left, row, left>>hsub, uv_row, right, row, row * width + left, index);
       if (index < uv_size) {
-        u_buffer[index] = u_colour;
-        v_buffer[index] = v_colour;
+        u_plane[index] = u_colour;
+        v_plane[index] = v_colour;
       } else {
-        Error("Address index %u = %d*%d * %d + %d/2> size %u", index, row, uv_row, uv_width, right, size);
+        Error("Address index %u = %d*%d * %d + %d/2> size %u", index, row, uv_row, uv_linesize, right, size);
       }
     }
 
@@ -3373,13 +3402,13 @@ void Image::DrawBox(unsigned int left, unsigned int top, unsigned int right, uns
     uv_row = row >> vsub;
     for (unsigned int col = left; col < right; ++col) {
       // Draw the box on the Y plane
-      y_buffer[row * width + col] = y_colour;
-      unsigned int index = uv_row * uv_width + (col>>hsub);
+      y_buffer[row * linesize + col] = y_colour;
+      unsigned int index = uv_row * uv_linesize + (col>>hsub);
       if (index < uv_size) {
-        u_buffer[index] = u_colour;
-        v_buffer[index] = v_colour;
+        u_plane[index] = u_colour;
+        v_plane[index] = v_colour;
       } else {
-        Error("Address index %d = row:%d*%d * %d + %d/2> size %d", index, row, uv_row, uv_width, col, size);
+        Error("Address index %d = row:%d*%d * %d + %d/2> size %d", index, row, uv_row, uv_linesize, col, size);
       }
     }
   } else {
@@ -3427,23 +3456,21 @@ void Image::Outline( Rgb colour, const Polygon &polygon ) {
         int8_t u_colour = U_VAL(yuv_colour);
         int8_t v_colour = V_VAL(yuv_colour);
         uint8_t *y_buffer = buffer;
-        if (!u_buffer || !v_buffer) {
-          u_buffer = buffer + width*height;
-          v_buffer = u_buffer + width*height/4;
-        }
+        uint8_t *const u_plane = UBuffer();
+        uint8_t *const v_plane = VBuffer();
 
         Debug(1, "buffer_ptr %p, size %u total %p ",buffer, size, buffer+size);
-        int uv_width = width >> 1;
-        unsigned int uv_size = size >> 1;
+        const unsigned int uv_linesize = UVLineSize();
+        const unsigned int uv_size = uv_linesize * ((height + 1) / 2);
 
         for ( x = x1, y = y1; y != y2; y += yinc, x += grad ) {
           //Debug(1, "Y %d = %d", (y*width)+int(round(x)), y_colour);
-          y_buffer[(y*width)+int(round(x))] = y_colour;
-          unsigned int index = ((y/2)*uv_width)+int(round(x/2));
+          y_buffer[y * linesize + int(round(x))] = y_colour;
+          unsigned int index = ((y/2)*uv_linesize)+int(round(x/2));
           //Debug(1, "U %d = %d", index, u_colour);
           if (index < uv_size) {
-            u_buffer[index] = u_colour;
-            v_buffer[index] = v_colour;
+            u_plane[index] = u_colour;
+            v_plane[index] = v_colour;
           } else {
             Error("Address index %d > size %d", index, uv_size);
           }
@@ -3479,7 +3506,7 @@ void Image::Outline( Rgb colour, const Polygon &polygon ) {
         //Debug( 9, "x1:%d, x2:%d, y1:%d, y2:%d, gr:%.2lf", x1, x2, y1, y2, grad );
         for ( y = y1, x = x1; x != x2; x += xinc, y += grad ) {
           //Debug( 9, "x:%d, y:%.2f", x, y );
-          buffer[(int(round(y))*width)+x] = colour;
+          buffer[int(round(y)) * linesize + x] = colour;
         }
       } else if ( zm_bytes_per_pixel(imagePixFormat) == 1 ) {
         //Debug( 9, "x1:%d, x2:%d, y1:%d, y2:%d, gr:%.2lf", x1, x2, y1, y2, grad );
