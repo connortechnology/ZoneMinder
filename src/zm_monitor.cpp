@@ -2148,6 +2148,23 @@ void Monitor::UpdateFPS() {
 #endif
 
     }  // end if fps_report_interval
+    // What the frames cost to move. A download per decoded frame is what a
+    // hardware decode costs us today; an upload on top of it is the round trip
+    // an all-GPU path would remove. Queue depth is here because it is what
+    // bounds how long a device frame would have to be held to avoid the round
+    // trip -- the encode happens on the event thread, behind this one.
+    const uint64_t downloads = hw_frame_downloads_.load();
+    const uint64_t uploads = hw_frame_uploads_.load();
+    if (downloads != last_hw_frame_downloads_ or uploads != last_hw_frame_uploads_) {
+      Debug(2, "HW frames: %.1f downloads/s, %.1f uploads/s (%ju, %ju total), packetqueue depth %u",
+            (downloads - last_hw_frame_downloads_) / elapsed.count(),
+            (uploads - last_hw_frame_uploads_) / elapsed.count(),
+            static_cast<uintmax_t>(downloads), static_cast<uintmax_t>(uploads),
+            packetqueue.size());
+    }
+    last_hw_frame_downloads_ = downloads;
+    last_hw_frame_uploads_ = uploads;
+
     shared_data->capture_fps = new_capture_fps;
     last_capture_image_count = shared_data->capture_image_count;
     shared_data->analysis_fps = new_analysis_fps;

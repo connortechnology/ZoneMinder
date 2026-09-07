@@ -295,7 +295,15 @@ bool DecoderThread::Decode() {
   // PHASE 3: Convert decoded frame to Image
   // ===========================================================================
 
-  packet->transfer_hwframe(monitor_->mVideoCodecContext);
+  {
+    // A download only happened if the frame was on the device beforehand and
+    // transfer_hwframe moved it aside. The return value cannot tell us: it is
+    // 1 both for a transfer performed and for one already done. Once
+    // transferred, in_frame has no hw_frames_ctx, so this cannot double count.
+    const bool was_on_device = packet->in_frame and packet->in_frame->hw_frames_ctx;
+    packet->transfer_hwframe(monitor_->mVideoCodecContext);
+    if (was_on_device and packet->hw_frame) monitor_->hw_frame_downloads_++;
+  }
   if (packet->in_frame && !packet->image) {
     // Use a pipeline-friendly pixel format. Prefer the decoded frame's native
     // format when Image can represent it with full color (YUV420P, RGB24, RGBA,
@@ -415,13 +423,29 @@ bool DecoderThread::Decode() {
       monitor_->image_buffer[index]->Assign(*(packet->ai_image));
     } else {
       if (packet->needs_hw_transfer(monitor_->mVideoCodecContext))
-        packet->transfer_hwframe(monitor_->mVideoCodecContext);
+        {
+    // A download only happened if the frame was on the device beforehand and
+    // transfer_hwframe moved it aside. The return value cannot tell us: it is
+    // 1 both for a transfer performed and for one already done. Once
+    // transferred, in_frame has no hw_frames_ctx, so this cannot double count.
+    const bool was_on_device = packet->in_frame and packet->in_frame->hw_frames_ctx;
+    packet->transfer_hwframe(monitor_->mVideoCodecContext);
+    if (was_on_device and packet->hw_frame) monitor_->hw_frame_downloads_++;
+  }
       monitor_->image_buffer[index]->AVPixFormat(monitor_->image_pixelformats[index] = static_cast<AVPixelFormat>(packet->in_frame->format));
       monitor_->image_buffer[index]->Assign(packet->in_frame.get());
     }
 #endif // AI_IN_DECODE
     if (packet->needs_hw_transfer(monitor_->mVideoCodecContext))
-      packet->transfer_hwframe(monitor_->mVideoCodecContext);
+      {
+    // A download only happened if the frame was on the device beforehand and
+    // transfer_hwframe moved it aside. The return value cannot tell us: it is
+    // 1 both for a transfer performed and for one already done. Once
+    // transferred, in_frame has no hw_frames_ctx, so this cannot double count.
+    const bool was_on_device = packet->in_frame and packet->in_frame->hw_frames_ctx;
+    packet->transfer_hwframe(monitor_->mVideoCodecContext);
+    if (was_on_device and packet->hw_frame) monitor_->hw_frame_downloads_++;
+  }
   }
 
   // Update shared memory timestamps - do this for BOTH packet->image and packet->in_frame cases
