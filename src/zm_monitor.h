@@ -644,6 +644,12 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   unsigned int deinterlacing_value;
   std::string decoder_name;
   std::string decoder_hwaccel_name;
+  // Hardware decode state, set up in OpenDecoder. hw_pix_fmt has to outlive the
+  // call because the codec context keeps a pointer to it in opaque and the
+  // get_format callback reads it on every decode.
+  AVBufferRef *decoder_hw_device_ctx = nullptr;
+  AVPixelFormat decoder_hw_pix_fmt = AV_PIX_FMT_NONE;
+  bool decoder_use_hwaccel = true;
   std::string decoder_hwaccel_device;
   bool videoRecording;
   bool rtsp_describe;
