@@ -644,6 +644,12 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   unsigned int deinterlacing_value;
   std::string decoder_name;
   std::string decoder_hwaccel_name;
+  // Hardware decode state, set up in OpenDecoder. hw_pix_fmt has to outlive the
+  // call because the codec context keeps a pointer to it in opaque and the
+  // get_format callback reads it on every decode.
+  AVBufferRef *decoder_hw_device_ctx = nullptr;
+  AVPixelFormat decoder_hw_pix_fmt = AV_PIX_FMT_NONE;
+  bool decoder_use_hwaccel = true;
   std::string decoder_hwaccel_device;
   bool videoRecording;
   bool rtsp_describe;
@@ -734,6 +740,17 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
 
   int        event_count;
   int        last_capture_image_count; // last value of image_count when calculating capture fps
+
+  // Where decoded frames actually go, for working out what a hardware pipeline
+  // would save. Counted rather than sampled because the interesting quantity is
+  // per-frame: one download per decoded frame is the current cost, and one
+  // upload on top of it is the round trip an all-GPU path would remove.
+  // Reported once a second by UpdateFPS. Atomic because the decoder thread
+  // counts downloads and the event thread counts uploads.
+  std::atomic<uint64_t> hw_frame_downloads_{0};
+  std::atomic<uint64_t> hw_frame_uploads_{0};
+  uint64_t last_hw_frame_downloads_ = 0;
+  uint64_t last_hw_frame_uploads_ = 0;
   int        motion_frame_count;      // How many frames have had motion detection performed on them.
   int        last_motion_frame_count; // last value of motion_frame_count when calculating fps
   int        ready_count;

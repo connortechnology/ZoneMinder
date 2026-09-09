@@ -2148,6 +2148,23 @@ void Monitor::UpdateFPS() {
 #endif
 
     }  // end if fps_report_interval
+    // What the frames cost to move. A download per decoded frame is what a
+    // hardware decode costs us today; an upload on top of it is the round trip
+    // an all-GPU path would remove. Queue depth is here because it is what
+    // bounds how long a device frame would have to be held to avoid the round
+    // trip -- the encode happens on the event thread, behind this one.
+    const uint64_t downloads = hw_frame_downloads_.load();
+    const uint64_t uploads = hw_frame_uploads_.load();
+    if (downloads != last_hw_frame_downloads_ or uploads != last_hw_frame_uploads_) {
+      Debug(2, "HW frames: %.1f downloads/s, %.1f uploads/s (%ju, %ju total), packetqueue depth %u",
+            (downloads - last_hw_frame_downloads_) / elapsed.count(),
+            (uploads - last_hw_frame_uploads_) / elapsed.count(),
+            static_cast<uintmax_t>(downloads), static_cast<uintmax_t>(uploads),
+            packetqueue.size());
+    }
+    last_hw_frame_downloads_ = downloads;
+    last_hw_frame_uploads_ = uploads;
+
     shared_data->capture_fps = new_capture_fps;
     last_capture_image_count = shared_data->capture_image_count;
     shared_data->analysis_fps = new_analysis_fps;
@@ -2827,7 +2844,14 @@ std::pair<int, std::string> Monitor::Analyse_MxAccl(std::shared_ptr<ZMPacket> pa
   std::string cause;
 
   if (packet->needs_hw_transfer(mVideoCodecContext))
-    packet->transfer_hwframe(mVideoCodecContext);
+    {
+      // Same accounting as the decoder thread: a download only happened if the
+      // frame was on the device beforehand. transfer_hwframe returns 1 either
+      // way, so its return value cannot tell us.
+      const bool was_on_device = packet->in_frame and packet->in_frame->hw_frames_ctx;
+      packet->transfer_hwframe(mVideoCodecContext);
+      if (was_on_device and packet->hw_frame) hw_frame_downloads_++;
+    }
   AVFrame *frame = packet->in_frame.get();
 
   if (!mx_accl and mVideoCodecContext) {
@@ -2896,7 +2920,14 @@ std::pair<int, std::string> Monitor::Analyse_OpenVINO(std::shared_ptr<ZMPacket> 
   std::string cause;
 
   if (packet->needs_hw_transfer(mVideoCodecContext))
-    packet->transfer_hwframe(mVideoCodecContext);
+    {
+      // Same accounting as the decoder thread: a download only happened if the
+      // frame was on the device beforehand. transfer_hwframe returns 1 either
+      // way, so its return value cannot tell us.
+      const bool was_on_device = packet->in_frame and packet->in_frame->hw_frames_ctx;
+      packet->transfer_hwframe(mVideoCodecContext);
+      if (was_on_device and packet->hw_frame) hw_frame_downloads_++;
+    }
   AVFrame *frame = packet->in_frame.get();
 
   if (!openvino and mVideoCodecContext) {
@@ -3746,6 +3777,103 @@ int Monitor::OpenDecoder() {
         av_dict_free(&opts_defaults);
       }
       av_opt_set(mVideoCodecContext->priv_data, "dec", (decoder_hwaccel_device != "" ? decoder_hwaccel_device.c_str() : "-1"), 0);
+
+      // Hardware decoding. Ported from the camera-side setup on master, which
+      // this branch lost when decoding moved into Monitor: DecoderHWAccelName
+      // was still read from the database and then never used, so vaapi and
+      // friends could not engage at all.
+      //
+      // The named-decoder rows in dec_codecs cover backends with their own
+      // decoder (qsv, cuvid, the Quadra ones). Everything else, vaapi included,
+      // attaches to the ordinary decoder through hw_device_ctx and a get_format
+      // callback, which is what this does. The xcoder "dec" option above is a
+      // different mechanism and still applies to the Quadra decoders.
+#if HAVE_LIBAVUTIL_HWCONTEXT_H
+#if LIBAVCODEC_VERSION_CHECK(57, 107, 0, 107, 0)
+      if (decoder_use_hwaccel and !decoder_hwaccel_name.empty()) {
+        // "auto" tries every hwaccel libav offers and takes the first the
+        // decoder supports and whose device opens. Anything else is a
+        // comma-separated priority list; a single name is the one-element case.
+        std::vector<enum AVHWDeviceType> candidate_types;
+        const bool auto_detect = (decoder_hwaccel_name == "auto");
+        enum AVHWDeviceType hwtype = AV_HWDEVICE_TYPE_NONE;
+        while ((hwtype = av_hwdevice_iterate_types(hwtype)) != AV_HWDEVICE_TYPE_NONE) {
+          Debug(1, "Available hwdevice type %s", av_hwdevice_get_type_name(hwtype));
+          if (auto_detect) candidate_types.push_back(hwtype);
+        }
+        if (!auto_detect) {
+          for (const std::string &token : Split(decoder_hwaccel_name, ',')) {
+            const std::string name = TrimSpaces(token);
+            if (name.empty()) continue;
+            enum AVHWDeviceType named = av_hwdevice_find_type_by_name(name.c_str());
+            if (named == AV_HWDEVICE_TYPE_NONE)
+              Warning("Unknown hwaccel device type '%s', skipping.", name.c_str());
+            else
+              candidate_types.push_back(named);
+          }
+        }
+
+        for (enum AVHWDeviceType type : candidate_types) {
+          Debug(1, "Trying hwdevice %s", av_hwdevice_get_type_name(type));
+          decoder_hw_pix_fmt = AV_PIX_FMT_NONE;
+          for (int i = 0;; i++) {
+            const AVCodecHWConfig *config = avcodec_get_hw_config(mVideoCodec, i);
+            if (!config) break;
+            if ((config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX)
+                and (config->device_type == type)) {
+              decoder_hw_pix_fmt = config->pix_fmt;
+              Debug(1, "Decoder %s supports type %s (pix_fmt %s).",
+                  mVideoCodec->name, av_hwdevice_get_type_name(type),
+                  zm_get_pix_fmt_name(decoder_hw_pix_fmt));
+            }
+          }
+          if (decoder_hw_pix_fmt == AV_PIX_FMT_NONE) {
+            Debug(1, "Decoder %s has no hw_pix_fmt for %s, skipping.",
+                mVideoCodec->name, av_hwdevice_get_type_name(type));
+            continue;
+          }
+
+          int hw_ret = av_hwdevice_ctx_create(&decoder_hw_device_ctx, type,
+              (decoder_hwaccel_device != "" ? decoder_hwaccel_device.c_str() : nullptr), nullptr, 0);
+          if (hw_ret < 0 and decoder_hwaccel_device != "")
+            hw_ret = av_hwdevice_ctx_create(&decoder_hw_device_ctx, type, nullptr, nullptr, 0);
+          if (hw_ret < 0) {
+            Warning("Failed to create %s hwaccel device: %s",
+                av_hwdevice_get_type_name(type), av_make_error_string(hw_ret).c_str());
+            decoder_hw_pix_fmt = AV_PIX_FMT_NONE;
+            decoder_hw_device_ctx = nullptr;
+            continue;
+          }
+
+          Info("Using %s hardware decoding for %s",
+              av_hwdevice_get_type_name(type), mVideoCodec->name);
+          mVideoCodecContext->hwaccel_flags |= AV_HWACCEL_FLAG_IGNORE_LEVEL;
+          mVideoCodecContext->hwaccel_flags |= AV_HWACCEL_FLAG_ALLOW_PROFILE_MISMATCH;
+          mVideoCodecContext->opaque = &decoder_hw_pix_fmt;
+          mVideoCodecContext->get_format = get_hw_format;
+          mVideoCodecContext->hw_device_ctx = av_buffer_ref(decoder_hw_device_ctx);
+          break;
+        }
+
+        if (decoder_hw_pix_fmt == AV_PIX_FMT_NONE) {
+          // Probing and finding nothing is unremarkable. Being asked for a
+          // specific accel and silently not getting it is not: the monitor then
+          // decodes on the CPU and nothing else says so.
+          if (auto_detect) {
+            Debug(1, "No usable hardware decoder found; falling back to software decoding.");
+          } else {
+            Warning("None of the requested hwaccels (%s) are usable for %s; "
+                "falling back to software decoding.",
+                decoder_hwaccel_name.c_str(), mVideoCodec->name);
+          }
+          decoder_use_hwaccel = false;
+        }
+      }
+#else
+      Debug(1, "AVCodec not new enough for hwaccel");
+#endif
+#endif
+
 
       int ret = avcodec_open2(mVideoCodecContext, mVideoCodec, &opts);
 

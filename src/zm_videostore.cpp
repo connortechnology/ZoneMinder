@@ -1433,6 +1433,11 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
         video_encoder_failed = true;
         return ret;
       }
+      // The other half of the round trip: this frame was decoded on the device,
+      // brought down so the pipeline could look at it, and is now going back up
+      // to be encoded. Both crossings disappear if the encoder can take the
+      // decoder's frame directly.
+      if (monitor) monitor->hw_frame_uploads_++;
       ret = av_frame_copy_props(hw_frame.get(), frame.get());
       if (ret < 0) {
         Error("Unable to copy props: %s, continuing", av_make_error_string(ret).c_str());
