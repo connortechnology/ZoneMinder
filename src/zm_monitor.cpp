@@ -342,33 +342,6 @@ Monitor::Monitor() :
 }  // Monitor::Monitor
 
 std::string TriggerState_Strings[] = {"Cancel", "On", "Off"};
-/*
-   std::string load_monitor_sql =
-   "SELECT `Id`, `Name`, `Deleted`, `ServerId`, `StorageId`, `Type`, `Capturing`+0,"
-   " `Analysing`+0, `AnalysisSource`+0, `AnalysisImage`+0, `AnalysisImageOpacity`,"
-   "`ObjectDetection`, `ObjectDetectionModel`, `ObjectDetectionObjectThreshold`, `ObjectDetectionNMSThreshold`, "
-   "`Recording`+0, `RecordingSource`+0, `Decoding`+0, "
-   " RTSP2WebEnabled, RTSP2WebType, `StreamChannel`+0,"
-   " GO2RTCEnabled, "
-   "JanusEnabled, JanusAudioEnabled, Janus_Profile_Override, Restream, RTSP_User, Janus_RTSP_Session_Timeout,"
-   "LinkedMonitors, `EventStartCommand`, `EventEndCommand`, "
-   "AnalysisFPSLimit, AnalysisUpdateDelay, MaxFPS, AlarmMaxFPS,"
-   "Device, Channel, Format, V4LMultiBuffer, V4LCapturesPerFrame, " // V4L Settings
-   "Protocol, Method, Options, User, Pass, Host, Port, Path, SecondPath, Width, Height, Colours, Palette, Orientation+0, Deinterlacing, RTSPDescribe, "
-   "SaveJPEGs, VideoWriter, EncoderParameters,"
-   "OutputCodecName, Encoder, OutputContainer, RecordAudio, WallClockTimestamps,"
-   "Brightness, Contrast, Hue, Colour, "
-   "EventPrefix, LabelFormat, LabelX, LabelY, LabelSize,"
-   "ImageBufferCount, `MaxImageBufferCount`, WarmupCount, PreEventCount, PostEventCount, StreamReplayBuffer, AlarmFrameCount, "
-   "`SectionLength`, `SectionLengthWarn`, `MinSectionLength`, `EventCloseMode`, "
-   "`FrameSkip`, `MotionFrameSkip`, "
-   "FPSReportInterval, RefBlendPerc, AlarmRefBlendPerc, TrackMotion, Exif,"
-   "`RTSPServer`, `RTSPStreamName`, `SOAP_wsa_compl`,"
-   "`ONVIF_URL`, `ONVIF_Username`, `ONVIF_Password`, `ONVIF_Options`,
-   `ONVIF_Event_Listener`, `use_Amcrest_API`, " "SignalCheckPoints,
-   SignalCheckColour, Importance-1, ZoneCount, `MQTT_Enabled`,
-   `MQTT_Subscriptions`, StartupDelay FROM Monitors";
-*/
 
 void Monitor::Load(MYSQL_ROW dbrow, bool load_zones = true, Purpose p = QUERY) {
   purpose = p;
@@ -4247,23 +4220,34 @@ Event * Monitor::openEvent(
   return event;
 }
 
+bool Monitor::WaitForEventClose() {
+  std::lock_guard<std::mutex> close_lck(close_event_thread_mutex);
+  if (close_event_thread.joinable()) {
+    Debug(1, "WaitForEventClose: joining in-progress event close");
+    close_event_thread.join();
+    return true;
+  }
+  return false;
+}
+
 /* Caller must hold the event lock */
 void Monitor::closeEvent() {
   if (!event) return;
 
-  // close_event_thread can also be joined from an Event's encoder-open path
-  // (WaitForEventClose), so guard the join + reassignment of the thread object.
-  std::lock_guard<std::mutex> close_lck(close_event_thread_mutex);
-  if (close_event_thread.joinable()) {
-    Debug(1, "close event thread is joinable");
-    close_event_thread.join();
-  } else {
-    Debug(1, "close event thread is not joinable");
+  {
+    std::lock_guard<std::mutex> close_lck(close_event_thread_mutex);
+    if (close_event_thread.joinable()) {
+      Debug(1, "close event thread is joinable");
+      close_event_thread.join();
+    } else {
+      Debug(1, "close event thread is not joinable");
+    }
   }
 #if MOSQUITTOPP_FOUND
   if (mqtt) mqtt->send(stringtf("event end: %" PRId64, event->Id()));
 #endif
   Debug(1, "Starting thread to close event");
+  std::lock_guard<std::mutex> close_lck(close_event_thread_mutex);
   close_event_thread = std::thread([](Event *e, const std::string &command) {
     int64_t event_id = e->Id();
     int monitor_id = e->MonitorId();
@@ -4302,16 +4286,6 @@ void Monitor::closeEvent() {
   event = nullptr;
   if (shared_data) video_store_data->recording = {};
 }  // end bool Monitor::closeEvent()
-
-bool Monitor::WaitForEventClose() {
-  std::lock_guard<std::mutex> close_lck(close_event_thread_mutex);
-  if (close_event_thread.joinable()) {
-    Debug(1, "WaitForEventClose: joining in-progress event close");
-    close_event_thread.join();
-    return true;
-  }
-  return false;
-}  // end bool Monitor::WaitForEventClose()
 
 unsigned int Monitor::DetectMotion(const Image &comp_image,
                                    Event::StringSet &zoneSet) {
