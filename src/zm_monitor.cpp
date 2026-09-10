@@ -2128,11 +2128,18 @@ void Monitor::UpdateFPS() {
     // trip -- the encode happens on the event thread, behind this one.
     const uint64_t downloads = hw_frame_downloads_.load();
     const uint64_t uploads = hw_frame_uploads_.load();
-    if (downloads != last_hw_frame_downloads_ or uploads != last_hw_frame_uploads_) {
-      Debug(2, "HW frames: %.1f downloads/s, %.1f uploads/s (%ju, %ju total), packetqueue depth %u",
+    const unsigned int on_card = zm_device_frames_in_flight();
+    // Report while frames are held even if neither counter moved. A decode that
+    // has stalled waiting for a free pool slot shows up as exactly that: traffic
+    // stops while occupancy stays pinned, and gating purely on the counters
+    // would go quiet at the one moment the number is worth seeing.
+    if (downloads != last_hw_frame_downloads_ or uploads != last_hw_frame_uploads_ or on_card) {
+      Debug(2, "HW frames: %.1f downloads/s, %.1f uploads/s (%ju, %ju total), "
+            "%u on card (peak %u), packetqueue depth %u",
             (downloads - last_hw_frame_downloads_) / elapsed.count(),
             (uploads - last_hw_frame_uploads_) / elapsed.count(),
             static_cast<uintmax_t>(downloads), static_cast<uintmax_t>(uploads),
+            on_card, zm_device_frames_high_water(),
             packetqueue.size());
     }
     last_hw_frame_downloads_ = downloads;

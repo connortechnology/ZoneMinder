@@ -219,8 +219,9 @@ int ZMPacket::transfer_hwframe(AVCodecContext *ctx) {
         av_get_pix_fmt_name(static_cast<AVPixelFormat>(in_frame->format))
         );
 
-    // Frame gets moved no matter what
-    hw_frame = std::move(in_frame);
+    // Frame gets moved no matter what. adopt_device_frame counts it as in
+    // flight; every path that clears hw_frame below decrements via the deleter.
+    hw_frame = adopt_device_frame(std::move(in_frame));
     zm_dump_video_frame(hw_frame.get(), "Before hwtransfer");
 
     // Verify hw_frames_ctx is valid before attempting transfer

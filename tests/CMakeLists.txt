@@ -37,6 +37,7 @@ set(TEST_SOURCES
   zm_swscale_range.cpp
   zm_poly.cpp
   zm_time.cpp
+  zm_device_frames.cpp
   zm_utils.cpp
   zm_vector2.cpp
   zm_yolov8_onnx_postprocess.cpp

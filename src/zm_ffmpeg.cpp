@@ -24,6 +24,8 @@
 #include "zm_rgb.h"
 #include "zm_utils.h"
 
+#include <atomic>
+
 extern "C" {
 #include <libavutil/pixdesc.h>
 #ifdef HAVE_QUADRA
@@ -279,6 +281,35 @@ static enum AVPixelFormat find_fmt_by_hw_type(const enum AVHWDeviceType type) {
 #endif
 #endif
 #endif
+
+namespace {
+// Current count of decoded hardware frames we are holding, and the highest that
+// count has reached. Relaxed ordering is enough: these are a diagnostic gauge,
+// not a synchronisation point, and no other state is published through them.
+std::atomic<unsigned int> device_frames_in_flight{0};
+std::atomic<unsigned int> device_frames_high_water{0};
+}  // namespace
+
+void zm_device_frame_acquired() {
+  const unsigned int now = device_frames_in_flight.fetch_add(1, std::memory_order_relaxed) + 1;
+  // Raise the high-water mark, tolerating a concurrent raiser.
+  unsigned int seen = device_frames_high_water.load(std::memory_order_relaxed);
+  while (now > seen and
+         !device_frames_high_water.compare_exchange_weak(seen, now, std::memory_order_relaxed)) {
+  }
+}
+
+void zm_device_frame_released() {
+  device_frames_in_flight.fetch_sub(1, std::memory_order_relaxed);
+}
+
+unsigned int zm_device_frames_in_flight() {
+  return device_frames_in_flight.load(std::memory_order_relaxed);
+}
+
+unsigned int zm_device_frames_high_water() {
+  return device_frames_high_water.load(std::memory_order_relaxed);
+}
 
 int setup_hwaccel(
     AVCodecContext *codec_ctx,

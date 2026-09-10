@@ -50,7 +50,7 @@ class ZMPacket {
   av_frame_ptr in_frame;        // Input image, decoded Theoretically only filled if needed.
   av_frame_ptr out_frame;       // output image, Only filled if needed.
   av_frame_ptr ai_frame;
-  av_frame_ptr hw_frame;
+  device_frame_ptr hw_frame;  // decoded hardware frame; counted against the device-frame gauge
   SystemTimePoint timestamp;
   Image     *image;
   Image     *y_image;

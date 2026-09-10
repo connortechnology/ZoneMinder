@@ -351,6 +351,57 @@ struct zm_free_av_frame {
 
 using av_frame_ptr = std::unique_ptr<AVFrame, zm_free_av_frame>;
 
+// Device-frame accounting.
+//
+// A decoded hardware frame keeps a slot in the decoder's frame pool for as long
+// as we hold it. Hold too many at once and the decoder stalls waiting for a free
+// slot, or -- on cards that recycle aggressively -- the frame we still point at
+// is reused underneath us and the download fails with AVERROR_EXTERNAL. The
+// number of frames we are pinning is therefore the quantity worth watching, and
+// it is not something ffmpeg will tell us: the decode-side pool is sized
+// internally from the codec DPB, so there is no pool constant of ours to read.
+//
+// Frames are acquired at exactly one place (ZMPacket::transfer_hwframe) but
+// released at several, plus whenever a packet is destroyed. Counting at the
+// release call sites means one missed site silently biases the gauge, so the
+// decrement rides on the deleter instead and cannot be forgotten. The increment
+// stays explicit, in adopt_device_frame(), because there is only the one site.
+//
+// The gauge is process-wide rather than per-monitor: ZMPacket has no monitor
+// back-pointer, and card memory is a card-wide resource anyway. One zmc usually
+// serves one monitor; where it serves several (local devices sharing a /dev
+// node) the figure aggregates them, which is what a card-level budget wants.
+//
+// It counts owning pointers, NOT AVBuffer references, so read it as a lower
+// bound on card occupancy. VideoStore::writePacket takes an extra av_frame_ref
+// on the same device buffer to hand it to the encoder, and that reference keeps
+// the pool slot alive after the packet has dropped its own pointer. Shortening
+// that overlap is separate work; until then a frame can still be resident with
+// the gauge already back at zero.
+void zm_device_frame_acquired();
+void zm_device_frame_released();
+unsigned int zm_device_frames_in_flight();
+unsigned int zm_device_frames_high_water();
+
+struct zm_free_device_av_frame {
+  void operator()(AVFrame *frame) const {
+    if (!frame) return;
+    zm_device_frame_released();
+    zm_free_av_frame{}(frame);
+  }
+};
+
+// A hardware frame whose lifetime is counted against the device-frame gauge.
+using device_frame_ptr = std::unique_ptr<AVFrame, zm_free_device_av_frame>;
+
+// Take ownership of a decoded hardware frame, counting it as in flight. Moving
+// out of an av_frame_ptr rather than accepting a raw pointer keeps the transfer
+// of ownership explicit at the call site.
+inline device_frame_ptr adopt_device_frame(av_frame_ptr frame) {
+  if (frame) zm_device_frame_acquired();
+  return device_frame_ptr{frame.release()};
+}
+
 struct CodecData {
   const AVCodecID codec_id;
   const char *codec_codec;
