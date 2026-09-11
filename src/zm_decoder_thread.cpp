@@ -296,13 +296,17 @@ bool DecoderThread::Decode() {
   // ===========================================================================
 
   {
-    // A download only happened if the frame was on the device beforehand and
-    // transfer_hwframe moved it aside. The return value cannot tell us: it is
-    // 1 both for a transfer performed and for one already done. Once
-    // transferred, in_frame has no hw_frames_ctx, so this cannot double count.
+    // A download only happened if the frame was on the device beforehand, which
+    // the return value alone cannot say: it is 1 both for a transfer performed
+    // and for one already done. Once transferred, in_frame has no
+    // hw_frames_ctx, so this cannot double count.
     const bool was_on_device = packet->in_frame and packet->in_frame->hw_frames_ctx;
-    packet->transfer_hwframe(monitor_->mVideoCodecContext);
-    if (was_on_device and packet->hw_frame) monitor_->hw_frame_downloads_++;
+    const int transferred = packet->transfer_hwframe(monitor_->mVideoCodecContext);
+    // Count the download, not whether we kept the frame afterwards. At the
+    // budget transfer_hwframe hands the device frame straight back, so testing
+    // hw_frame here would report zero downloads at exactly the moment we are
+    // downloading every single frame.
+    if (was_on_device and transferred > 0) monitor_->hw_frame_downloads_++;
   }
   if (packet->in_frame && !packet->image) {
     // Use a pipeline-friendly pixel format. Prefer the decoded frame's native
@@ -424,13 +428,17 @@ bool DecoderThread::Decode() {
     } else {
       if (packet->needs_hw_transfer(monitor_->mVideoCodecContext))
         {
-    // A download only happened if the frame was on the device beforehand and
-    // transfer_hwframe moved it aside. The return value cannot tell us: it is
-    // 1 both for a transfer performed and for one already done. Once
-    // transferred, in_frame has no hw_frames_ctx, so this cannot double count.
+    // A download only happened if the frame was on the device beforehand, which
+    // the return value alone cannot say: it is 1 both for a transfer performed
+    // and for one already done. Once transferred, in_frame has no
+    // hw_frames_ctx, so this cannot double count.
     const bool was_on_device = packet->in_frame and packet->in_frame->hw_frames_ctx;
-    packet->transfer_hwframe(monitor_->mVideoCodecContext);
-    if (was_on_device and packet->hw_frame) monitor_->hw_frame_downloads_++;
+    const int transferred = packet->transfer_hwframe(monitor_->mVideoCodecContext);
+    // Count the download, not whether we kept the frame afterwards. At the
+    // budget transfer_hwframe hands the device frame straight back, so testing
+    // hw_frame here would report zero downloads at exactly the moment we are
+    // downloading every single frame.
+    if (was_on_device and transferred > 0) monitor_->hw_frame_downloads_++;
   }
       monitor_->image_buffer[index]->AVPixFormat(monitor_->image_pixelformats[index] = static_cast<AVPixelFormat>(packet->in_frame->format));
       monitor_->image_buffer[index]->Assign(packet->in_frame.get());
@@ -438,13 +446,17 @@ bool DecoderThread::Decode() {
 #endif // AI_IN_DECODE
     if (packet->needs_hw_transfer(monitor_->mVideoCodecContext))
       {
-    // A download only happened if the frame was on the device beforehand and
-    // transfer_hwframe moved it aside. The return value cannot tell us: it is
-    // 1 both for a transfer performed and for one already done. Once
-    // transferred, in_frame has no hw_frames_ctx, so this cannot double count.
+    // A download only happened if the frame was on the device beforehand, which
+    // the return value alone cannot say: it is 1 both for a transfer performed
+    // and for one already done. Once transferred, in_frame has no
+    // hw_frames_ctx, so this cannot double count.
     const bool was_on_device = packet->in_frame and packet->in_frame->hw_frames_ctx;
-    packet->transfer_hwframe(monitor_->mVideoCodecContext);
-    if (was_on_device and packet->hw_frame) monitor_->hw_frame_downloads_++;
+    const int transferred = packet->transfer_hwframe(monitor_->mVideoCodecContext);
+    // Count the download, not whether we kept the frame afterwards. At the
+    // budget transfer_hwframe hands the device frame straight back, so testing
+    // hw_frame here would report zero downloads at exactly the moment we are
+    // downloading every single frame.
+    if (was_on_device and transferred > 0) monitor_->hw_frame_downloads_++;
   }
   }
 

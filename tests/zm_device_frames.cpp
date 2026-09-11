@@ -13,6 +13,7 @@
 #include "zm_ffmpeg.h"
 
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -97,4 +98,97 @@ TEST_CASE("high water mark records the peak, not the current count", "[device_fr
   // Releasing must not walk the peak back down.
   REQUIRE(zm_device_frames_high_water() == peak);
   REQUIRE(peak >= 3);
+}
+
+/*
+ * Budgeting and shedding.
+ *
+ * These drive the decision function directly rather than through a decode, so
+ * the state machine can be pushed across its boundaries deliberately. Each case
+ * restores the default budget on the way out; the gauge itself is process-wide,
+ * so leaving a budget set would leak into whatever runs next.
+ */
+
+namespace {
+
+// Holds frames so occupancy can be placed at a chosen value, and puts the
+// budget back however the test leaves.
+class BudgetFixture {
+ public:
+  explicit BudgetFixture(unsigned int budget) : previous_(zm_device_frame_budget()) {
+    zm_set_device_frame_budget(budget);
+  }
+  ~BudgetFixture() {
+    held_.clear();
+    zm_set_device_frame_budget(previous_);
+    // Drain the shedding latch so the next case starts from "not shedding".
+    zm_set_device_frame_budget(0);
+    zm_device_frame_should_shed();
+    zm_set_device_frame_budget(previous_);
+  }
+
+  void hold(unsigned int n) {
+    for (unsigned int i = 0; i < n; i++) held_.push_back(adopt_device_frame(make_frame()));
+  }
+  void release(unsigned int n) {
+    for (unsigned int i = 0; i < n and !held_.empty(); i++) held_.pop_back();
+  }
+
+ private:
+  unsigned int previous_;
+  std::vector<device_frame_ptr> held_;
+};
+
+}  // namespace
+
+TEST_CASE("under budget nothing is shed", "[device_frames]") {
+  BudgetFixture f(8);
+  f.hold(3);
+  REQUIRE_FALSE(zm_device_frame_should_shed());
+  REQUIRE_FALSE(zm_device_frames_shedding());
+}
+
+TEST_CASE("reaching the budget starts shedding", "[device_frames]") {
+  const unsigned int base = zm_device_frames_in_flight();
+  BudgetFixture f(base + 4);
+  f.hold(4);
+  REQUIRE(zm_device_frame_should_shed());
+  REQUIRE(zm_device_frames_shedding());
+}
+
+TEST_CASE("shedding continues until the low water mark", "[device_frames]") {
+  // The point of the hysteresis: dropping one frame puts us back under the
+  // budget, so without a low-water mark we would stop shedding immediately and
+  // flap across the boundary on every frame.
+  BudgetFixture f(0);          // neutralise any inherited occupancy first
+  zm_set_device_frame_budget(0);
+  zm_device_frame_should_shed();
+
+  const unsigned int base = zm_device_frames_in_flight();
+  zm_set_device_frame_budget(base + 8);
+  f.hold(8);
+
+  REQUIRE(zm_device_frame_should_shed());   // at budget, start
+  f.release(1);
+  REQUIRE(zm_device_frame_should_shed());   // one under budget, still shedding
+  f.release(2);
+  REQUIRE(zm_device_frame_should_shed());   // still above low water
+}
+
+TEST_CASE("a budget of zero disables shedding entirely", "[device_frames]") {
+  BudgetFixture f(0);
+  f.hold(50);
+  REQUIRE_FALSE(zm_device_frame_should_shed());
+  REQUIRE(zm_device_frame_budget() == 0);
+}
+
+TEST_CASE("shed frames are counted", "[device_frames]") {
+  const uint64_t before = zm_device_frames_shed();
+  const unsigned int base = zm_device_frames_in_flight();
+  BudgetFixture f(base + 2);
+  f.hold(2);
+
+  REQUIRE(zm_device_frame_should_shed());
+  REQUIRE(zm_device_frame_should_shed());
+  REQUIRE(zm_device_frames_shed() == before + 2);
 }

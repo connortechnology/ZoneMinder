@@ -383,6 +383,32 @@ void zm_device_frame_released();
 unsigned int zm_device_frames_in_flight();
 unsigned int zm_device_frames_high_water();
 
+// Budgeting.
+//
+// Holding a decoded frame on the card is what makes an all-GPU path possible,
+// but the pool is finite and we do not get to see its size. So cap how many we
+// will pin at once and, above the cap, give one back: drop our pointer to the
+// device frame and carry on from the software copy that transfer_hwframe has
+// already produced. Nothing is lost -- the encoder re-uploads and AI inference
+// runs on the software frame -- we only forfeit the saving for those frames.
+// That is the graceful part: degrade the optimisation, never the recording.
+//
+// Shedding uses hysteresis. Releasing a frame drops us straight back under the
+// cap, so a bare "at or above" test would shed one frame, stop, shed the next,
+// and oscillate across the boundary forever. Instead, once shedding starts it
+// continues until occupancy falls to the low-water mark, so the pipeline gets
+// real headroom back before it starts pinning frames again.
+unsigned int zm_device_frame_budget();
+void zm_set_device_frame_budget(unsigned int budget);
+
+// Whether this frame should be handed back rather than held. Call once per
+// decision: it advances the hysteresis state and counts the shed.
+bool zm_device_frame_should_shed();
+
+// How many frames we have given back, and whether we are shedding right now.
+uint64_t zm_device_frames_shed();
+bool zm_device_frames_shedding();
+
 struct zm_free_device_av_frame {
   void operator()(AVFrame *frame) const {
     if (!frame) return;

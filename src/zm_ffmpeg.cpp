@@ -311,6 +311,63 @@ unsigned int zm_device_frames_high_water() {
   return device_frames_high_water.load(std::memory_order_relaxed);
 }
 
+namespace {
+// Default ceiling on frames we will pin at once. The decode pool is sized
+// internally by ffmpeg from the codec DPB, so there is no figure of ours to
+// derive this from; 8 is chosen to sit above the occupancy a healthy pipeline
+// actually reaches (measured peak 4 on a 20fps hevc stream) while still leaving
+// a typical pool room to hand out frames for decoding.
+constexpr unsigned int kDefaultDeviceFrameBudget = 8;
+
+std::atomic<unsigned int> device_frame_budget{kDefaultDeviceFrameBudget};
+std::atomic<bool> device_frames_shedding_now{false};
+std::atomic<uint64_t> device_frames_shed_total{0};
+}  // namespace
+
+unsigned int zm_device_frame_budget() {
+  return device_frame_budget.load(std::memory_order_relaxed);
+}
+
+void zm_set_device_frame_budget(unsigned int budget) {
+  device_frame_budget.store(budget, std::memory_order_relaxed);
+}
+
+uint64_t zm_device_frames_shed() {
+  return device_frames_shed_total.load(std::memory_order_relaxed);
+}
+
+bool zm_device_frames_shedding() {
+  return device_frames_shedding_now.load(std::memory_order_relaxed);
+}
+
+bool zm_device_frame_should_shed() {
+  const unsigned int budget = device_frame_budget.load(std::memory_order_relaxed);
+  // A budget of zero disables the cap rather than shedding everything, so the
+  // behaviour of an unset or cleared budget is "hold frames", not "hold none".
+  if (budget == 0) return false;
+
+  const unsigned int in_flight = device_frames_in_flight.load(std::memory_order_relaxed);
+  const bool shedding = device_frames_shedding_now.load(std::memory_order_relaxed);
+
+  if (!shedding) {
+    if (in_flight < budget) return false;
+    device_frames_shedding_now.store(true, std::memory_order_relaxed);
+    Warning("Holding %u hardware frames, at the budget of %u; "
+            "releasing frames back to the card until occupancy falls to %u. "
+            "Recording is unaffected -- frames are re-uploaded for encoding -- "
+            "but the saving from keeping them on the card is lost meanwhile.",
+            in_flight, budget, budget / 2);
+  } else if (in_flight <= budget / 2) {
+    // Low-water reached: stop shedding and let occupancy build again.
+    device_frames_shedding_now.store(false, std::memory_order_relaxed);
+    Info("Hardware frame occupancy back down to %u; holding frames again", in_flight);
+    return false;
+  }
+
+  device_frames_shed_total.fetch_add(1, std::memory_order_relaxed);
+  return true;
+}
+
 int setup_hwaccel(
     AVCodecContext *codec_ctx,
     const CodecData *codec_data,

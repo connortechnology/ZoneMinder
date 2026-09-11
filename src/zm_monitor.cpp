@@ -2135,11 +2135,13 @@ void Monitor::UpdateFPS() {
     // would go quiet at the one moment the number is worth seeing.
     if (downloads != last_hw_frame_downloads_ or uploads != last_hw_frame_uploads_ or on_card) {
       Debug(2, "HW frames: %.1f downloads/s, %.1f uploads/s (%ju, %ju total), "
-            "%u on card (peak %u), packetqueue depth %u",
+            "%u on card (peak %u, budget %u)%s, %ju shed, packetqueue depth %u",
             (downloads - last_hw_frame_downloads_) / elapsed.count(),
             (uploads - last_hw_frame_uploads_) / elapsed.count(),
             static_cast<uintmax_t>(downloads), static_cast<uintmax_t>(uploads),
-            on_card, zm_device_frames_high_water(),
+            on_card, zm_device_frames_high_water(), zm_device_frame_budget(),
+            zm_device_frames_shedding() ? " SHEDDING" : "",
+            static_cast<uintmax_t>(zm_device_frames_shed()),
             packetqueue.size());
     }
     last_hw_frame_downloads_ = downloads;
@@ -2826,11 +2828,15 @@ std::pair<int, std::string> Monitor::Analyse_MxAccl(std::shared_ptr<ZMPacket> pa
   if (packet->needs_hw_transfer(mVideoCodecContext))
     {
       // Same accounting as the decoder thread: a download only happened if the
-      // frame was on the device beforehand. transfer_hwframe returns 1 either
-      // way, so its return value cannot tell us.
+      // frame was on the device beforehand, which the return value alone cannot
+      // say -- it is 1 for a transfer performed and for one already done alike.
       const bool was_on_device = packet->in_frame and packet->in_frame->hw_frames_ctx;
-      packet->transfer_hwframe(mVideoCodecContext);
-      if (was_on_device and packet->hw_frame) hw_frame_downloads_++;
+      const int transferred = packet->transfer_hwframe(mVideoCodecContext);
+      // Count the download, not whether we kept the frame afterwards. At the
+      // budget transfer_hwframe hands the device frame straight back, so testing
+      // hw_frame here would report zero downloads at exactly the moment we are
+      // downloading every single frame.
+      if (was_on_device and transferred > 0) hw_frame_downloads_++;
     }
   AVFrame *frame = packet->in_frame.get();
 
@@ -2902,11 +2908,15 @@ std::pair<int, std::string> Monitor::Analyse_OpenVINO(std::shared_ptr<ZMPacket> 
   if (packet->needs_hw_transfer(mVideoCodecContext))
     {
       // Same accounting as the decoder thread: a download only happened if the
-      // frame was on the device beforehand. transfer_hwframe returns 1 either
-      // way, so its return value cannot tell us.
+      // frame was on the device beforehand, which the return value alone cannot
+      // say -- it is 1 for a transfer performed and for one already done alike.
       const bool was_on_device = packet->in_frame and packet->in_frame->hw_frames_ctx;
-      packet->transfer_hwframe(mVideoCodecContext);
-      if (was_on_device and packet->hw_frame) hw_frame_downloads_++;
+      const int transferred = packet->transfer_hwframe(mVideoCodecContext);
+      // Count the download, not whether we kept the frame afterwards. At the
+      // budget transfer_hwframe hands the device frame straight back, so testing
+      // hw_frame here would report zero downloads at exactly the moment we are
+      // downloading every single frame.
+      if (was_on_device and transferred > 0) hw_frame_downloads_++;
     }
   AVFrame *frame = packet->in_frame.get();
 

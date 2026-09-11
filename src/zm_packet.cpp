@@ -268,6 +268,17 @@ int ZMPacket::transfer_hwframe(AVCodecContext *ctx) {
 
     in_frame = std::move(new_frame);
     zm_dump_video_frame(in_frame.get(), "After hwtransfer");
+
+    // The download succeeded, so in_frame now holds everything downstream
+    // strictly needs. Keeping hw_frame as well is an optimisation: the encoder
+    // can take the device frame directly, and on-card AI can run against it.
+    // Once we are at the budget that optimisation is what gets sacrificed --
+    // release the frame so its pool slot goes back to the decoder. Callers all
+    // fall back to in_frame when hw_frame is absent.
+    if (zm_device_frame_should_shed()) {
+      Debug(3, "At the device frame budget; releasing this frame and encoding from the software copy");
+      hw_frame = nullptr;
+    }
   } else if (ctx) {
     Debug(3, "Same pix format %s so not hwtransferring. sw_pix_fmt is %s",
         av_get_pix_fmt_name(ctx->pix_fmt),
