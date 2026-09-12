@@ -584,6 +584,12 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   AnalysisSourceOption  analysis_source;    // Primary, Secondary
   AnalysisImageOption   analysis_image;     // FullColour, YChannel
   uint8_t               analysis_image_opacity; // 0-255 opacity for zone overlays
+  // Cap on decoded hardware frames this monitor will pin on the card, or -1 to
+  // take the global ZM_DEVICE_FRAME_BUDGET. Per monitor because the figure that
+  // suits one camera does not suit another: measured on this box, a 30fps
+  // monitor sheds hundreds of frames a minute at the budget that a 20fps one
+  // barely reaches.
+  int     device_frame_budget;
   ObjectDetectionOption objectdetection;    // none, quadra, speedai, uvicorn
   std::string objectdetection_model;
   float   objectdetection_object_threshold;
@@ -1259,6 +1265,7 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   bool WaitForEventClose();
   void closeEvent();
 
+  int DeviceFrameBudget() const { return device_frame_budget; };
   ObjectDetectionOption ObjectDetection() const { return objectdetection; };
   const std::string &ObjectDetection_Model() const { return objectdetection_model; };
   float ObjectDetection_Object_Threshold() const { return objectdetection_object_threshold; };

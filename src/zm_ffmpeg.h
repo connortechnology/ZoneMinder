@@ -24,6 +24,7 @@
 #include "zm_define.h"
 #include "zm_logger.h"
 
+#include <vector>
 #include <list>
 #include <memory>
 
@@ -486,6 +487,17 @@ bool software_frames_expected(bool object_detection_enabled, unsigned int device
 // rather than tied to the latch; last_report_us of 0 means nothing has been
 // reported yet in this process.
 bool shed_report_due(int64_t now_us, int64_t last_report_us, int64_t interval_us);
+
+// The process-wide device frame budget for a daemon serving these monitors.
+//
+// The gauge counts the process, and zmc is normally one process per monitor, so
+// this is usually just that monitor's figure. Where one daemon serves several
+// -- local devices sharing a /dev node -- their budgets add up, because the one
+// gauge covers all of them. A monitor asking for no cap (0) disables it for the
+// process, there being only the one gauge to disable. An entry of -1 means the
+// monitor has no override and takes the global budget.
+unsigned int effective_device_frame_budget(const std::vector<int> &monitor_budgets,
+                                           unsigned int global_budget);
 #ifdef HAVE_QUADRA
 int ni_get_cardno(const AVCodecContext *ctx);
 #endif

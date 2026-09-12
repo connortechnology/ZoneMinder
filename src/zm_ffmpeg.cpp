@@ -400,6 +400,22 @@ bool zm_device_frame_should_shed() {
   return true;
 }
 
+unsigned int effective_device_frame_budget(const std::vector<int> &monitor_budgets,
+                                           unsigned int global_budget) {
+  if (monitor_budgets.empty()) return global_budget;
+
+  unsigned int total = 0;
+  for (int budget : monitor_budgets) {
+    const unsigned int effective =
+        (budget < 0) ? global_budget : static_cast<unsigned int>(budget);
+    // Uncapped for one monitor is uncapped for the process: there is a single
+    // gauge, so there is no way to hold this monitor's frames and shed another's.
+    if (effective == 0) return 0;
+    total += effective;
+  }
+  return total;
+}
+
 bool software_frames_expected(bool object_detection_enabled, unsigned int device_frame_budget) {
   return object_detection_enabled or device_frame_budget != 0;
 }

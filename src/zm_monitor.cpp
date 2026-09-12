@@ -96,7 +96,7 @@ std::string load_monitor_sql =
   "`Protocol`, `Method`, `Options`, `User`, `Pass`, `Host`, `Port`, `Path`, "
   "`SecondPath`, `Width`, `Height`, `Colours`, `Palette`, `Orientation`+0, "
   "`Deinterlacing`, "
-  "`Decoder`, `DecoderHWAccelName`, `DecoderHWAccelDevice`, `RTSPDescribe`, "
+  "`Decoder`, `DecoderHWAccelName`, `DecoderHWAccelDevice`, `DeviceFrameBudget`, `RTSPDescribe`, "
   "`SaveJPEGs`, `VideoWriter`, `EncoderParameters`, "
   "`OutputCodecName`, `Encoder`, `EncoderHWAccelName`, `EncoderHWAccelDevice`, `OutputContainer`, "
   "`RecordAudio`, WallClockTimestamps,"
@@ -163,6 +163,7 @@ Monitor::Monitor() :
   restream(false),
   rtsp_user(0),
   janus_rtsp_session_timeout(0),
+  device_frame_budget(-1),
   curl(nullptr),
   //protocol
   //method
@@ -545,6 +546,9 @@ void Monitor::Load(MYSQL_ROW dbrow, bool load_zones = true, Purpose p = QUERY) {
   decoder_hwaccel_name = dbrow[col] ? dbrow[col] : "";
   col++;
   decoder_hwaccel_device = dbrow[col] ? dbrow[col] : "";
+  col++;
+  // NULL means no override: fall back to the global ZM_DEVICE_FRAME_BUDGET.
+  device_frame_budget = dbrow[col] ? atoi(dbrow[col]) : -1;
   col++;
   rtsp_describe = (dbrow[col] && *dbrow[col] != '0');
   col++;

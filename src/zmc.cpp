@@ -182,13 +182,6 @@ int main(int argc, char *argv[], char **envp) {
   zmLoadDBConfig();
   logInit(log_id_string);
 
-  // The cap on decoded hardware frames we will pin on the card. Process-wide
-  // because that is what a card sees, and zmc is one process per monitor.
-  // Clamped rather than cast: the config member is signed, and a negative value
-  // would wrap to an enormous unsigned budget, silently disabling the cap.
-  zm_set_device_frame_budget(
-      config.device_frame_budget > 0 ? static_cast<unsigned int>(config.device_frame_budget) : 0);
-
 
   for (char **env = envp; *env != 0; env++) {
     char *thisEnv = *env;
@@ -225,6 +218,24 @@ int main(int argc, char *argv[], char **envp) {
     exit(-1);
   } else {
     Debug(2, "%zu monitors loaded", monitors.size());
+  }
+
+  // The cap on decoded hardware frames this daemon will pin on the card. The
+  // gauge is process-wide, which is what a card sees, so it is set once from
+  // the monitors this process serves rather than per monitor.
+  {
+    std::vector<int> monitor_budgets;
+    monitor_budgets.reserve(monitors.size());
+    for (const std::shared_ptr<Monitor> &monitor : monitors) {
+      monitor_budgets.push_back(monitor->DeviceFrameBudget());
+    }
+    // Clamped rather than cast: the config member is signed, and a negative
+    // value would wrap to an enormous unsigned budget, disabling the cap.
+    const unsigned int global_budget =
+        config.device_frame_budget > 0 ? static_cast<unsigned int>(config.device_frame_budget) : 0;
+    const unsigned int budget = effective_device_frame_budget(monitor_budgets, global_budget);
+    Debug(1, "Device frame budget %u (global %u)", budget, global_budget);
+    zm_set_device_frame_budget(budget);
   }
 
   Info("Starting Capture version %s", ZM_VERSION);

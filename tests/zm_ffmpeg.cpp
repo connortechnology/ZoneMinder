@@ -87,3 +87,37 @@ TEST_CASE("shed_report_due", "[ffmpeg]") {
     REQUIRE_FALSE(shed_report_due(2 * kMinute - 1, kMinute, kMinute));
   }
 }
+
+TEST_CASE("effective_device_frame_budget", "[ffmpeg]") {
+  constexpr unsigned int kGlobal = 8;
+
+  SECTION("one monitor with no override takes the global budget") {
+    REQUIRE(effective_device_frame_budget({-1}, kGlobal) == kGlobal);
+  }
+
+  SECTION("one monitor with an override takes its own") {
+    REQUIRE(effective_device_frame_budget({16}, kGlobal) == 16);
+  }
+
+  // The distinction the web form has to preserve: a blank field means "no
+  // override" and stores NULL, which arrives here as -1. Zero is a real
+  // setting meaning no cap at all, and must not be confused with it.
+  SECTION("zero is no cap, not the default") {
+    REQUIRE(effective_device_frame_budget({0}, kGlobal) == 0);
+    REQUIRE(effective_device_frame_budget({-1}, kGlobal) != 0);
+  }
+
+  SECTION("a daemon serving several monitors gets their budgets added") {
+    // One gauge covers the process, so it has to cover all of them.
+    REQUIRE(effective_device_frame_budget({16, 4}, kGlobal) == 20);
+    REQUIRE(effective_device_frame_budget({-1, -1}, kGlobal) == 2 * kGlobal);
+  }
+
+  SECTION("one monitor asking for no cap uncaps the process") {
+    REQUIRE(effective_device_frame_budget({16, 0}, kGlobal) == 0);
+  }
+
+  SECTION("no monitors falls back to the global budget") {
+    REQUIRE(effective_device_frame_budget({}, kGlobal) == kGlobal);
+  }
+}

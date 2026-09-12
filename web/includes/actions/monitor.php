@@ -58,6 +58,13 @@ if ($action == 'save') {
   # For convenience
   $newMonitor = $_REQUEST['newMonitor'];
 
+  # An empty budget means "no override, use ZM_DEVICE_FRAME_BUDGET", which is
+  # NULL in the column. Left as '' it would store as 0, and 0 is a real setting
+  # meaning no cap at all -- the opposite of taking the default.
+  if (isset($newMonitor['DeviceFrameBudget']) and $newMonitor['DeviceFrameBudget'] === '') {
+    $newMonitor['DeviceFrameBudget'] = null;
+  }
+
   # Validate Device path to prevent command injection (CVE-worthy).
   # Only Local monitors pass Device to a shell; for other Types the field
   # is unused and may legitimately hold legacy values (e.g. an RTSP URL).

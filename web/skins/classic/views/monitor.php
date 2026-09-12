@@ -908,6 +908,12 @@ echo htmlSelect('newMonitor[Decoder]', $decoders, $monitor->Decoder());
             </label>
             <input type="text" name="newMonitor[DecoderHWAccelDevice]" value="<?php echo validHtmlStr($monitor->DecoderHWAccelDevice()) ?>"/>
           <li>
+          <li class="DeviceFrameBudget">
+            <label><?php echo translate('DeviceFrameBudget') ?>
+                <?php echo makeHelpLink('OPTIONS_DEVICE_FRAME_BUDGET') ?>
+            </label>
+            <input type="number" min="0" name="newMonitor[DeviceFrameBudget]" placeholder="<?php echo validHtmlStr(ZM_DEVICE_FRAME_BUDGET) ?>" value="<?php echo validHtmlStr($monitor->DeviceFrameBudget()) ?>"/>
+          <li>
 <?php
       }
       if ( $monitor->Type() != 'NVSocket' && $monitor->Type() != 'WebSite' ) {

@@ -285,6 +285,7 @@ class Monitor extends ZM_Object {
     'Decoder'  =>  '',
     'DecoderHWAccelName'  =>  null,
     'DecoderHWAccelDevice'  =>  null,
+    'DeviceFrameBudget'     =>  null,
     'SaveJPEGs' =>  0,
     'VideoWriter' =>  '2',
     'OutputCodecName' =>  'auto',

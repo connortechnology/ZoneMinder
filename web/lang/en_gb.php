@@ -66,6 +66,7 @@ $SLANG = array(
     'MinGap'                => 'Min Gap',
     'MissingFiles'          => 'Missing Files',
     'DecoderHWAccelDevice'  => 'Decoder HW Accel Device',
+    'DeviceFrameBudget'     => 'Device Frame Budget (blank for default)',
     'DecoderHWAccelName'    => 'Decoder HW Accel Name',
     'EncoderHWAccelDevice'  => 'Encoder HW Accel Device',
     'EncoderHWAccelName'    => 'Encoder HW Accel Name',
