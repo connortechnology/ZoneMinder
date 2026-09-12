@@ -20,6 +20,7 @@
 #include "zm_ffmpeg.h"
 
 #include <chrono>
+#include <mutex>
 
 #include "zm_logger.h"
 #include "zm_pixformat.h"
@@ -338,6 +339,7 @@ std::atomic<uint64_t> device_frames_shed_total{0};
 // minute into the Logs table from one monitor, all saying the same thing.
 // Report the episode on a timer instead, carrying the count so the rate shows.
 constexpr int64_t kShedReportIntervalUs = 60 * 1000 * 1000;
+constexpr int64_t kAvLogRepeatIntervalUs = 60 * 1000 * 1000;
 std::atomic<int64_t> device_frames_shed_reported_at{0};
 std::atomic<uint64_t> device_frames_shed_at_last_report{0};
 
@@ -442,6 +444,22 @@ std::string describe_hw_pool_line(const HwPoolInfo &info) {
       info.width, info.height,
       info.frame_bytes / 1048576.0,
       info.pool_bytes / 1048576.0);
+}
+
+bool av_log_should_print(AvLogRepeat &state, const std::string &message,
+                         int64_t now_us, int64_t interval_us,
+                         uint64_t *suppressed_out) {
+  if (state.seen and message == state.last
+      and now_us - state.last_logged_us < interval_us) {
+    state.suppressed++;
+    return false;
+  }
+  if (suppressed_out) *suppressed_out = state.suppressed;
+  state.suppressed = 0;
+  state.seen = true;
+  state.last = message;
+  state.last_logged_us = now_us;
+  return true;
 }
 
 unsigned int effective_device_frame_budget(const std::vector<int> &monitor_budgets,
@@ -603,6 +621,27 @@ void log_libav_callback(void *ptr, int level, const char *fmt, va_list vargs) {
       if (static_cast<size_t>(length) > sizeof(logString)-1) length = sizeof(logString)-1;
       // ffmpeg logs have a carriage return, so replace it with terminator
       logString[length-1] = 0;
+
+      // Only the levels that reach the database are rate limited. Debug output
+      // goes to the file alone, and suppressing repeats there would hide the
+      // sequences debug is being read for.
+      if (log_level <= Logger::WARNING) {
+        static std::mutex repeat_mutex;
+        static AvLogRepeat repeat;
+        uint64_t suppressed = 0;
+        bool print;
+        {
+          std::lock_guard<std::mutex> lock(repeat_mutex);
+          print = av_log_should_print(repeat, logString, steady_now_us(),
+                                      kAvLogRepeatIntervalUs, &suppressed);
+        }
+        if (!print) return;
+        if (suppressed > 0) {
+          log->logPrint(false, __FILE__, __LINE__, log_level, "%s (%ju repeats suppressed)",
+                        logString, static_cast<uintmax_t>(suppressed));
+          return;
+        }
+      }
       log->logPrint(false, __FILE__, __LINE__, log_level, "%s", logString);
     } else {
       log->logPrint(false, __FILE__, __LINE__, AV_LOG_ERROR, "Can't encode log from av. fmt was %s", fmt);

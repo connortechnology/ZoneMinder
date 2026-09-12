@@ -525,6 +525,29 @@ HwPoolInfo describe_hw_pool(const AVBufferRef *frames_ctx);
 
 // One line for logging. Sizes that were not reported print as "?".
 std::string describe_hw_pool_line(const HwPoolInfo &info);
+
+// Rate limiting for libav's log callback.
+//
+// libavcodec reports some stream properties once per frame at AV_LOG_ERROR,
+// which ZM maps to Warning -- and a Warning writes a row to the Logs table. A
+// camera whose SEI messages the parser dislikes therefore produces a database
+// insert per frame, indefinitely, for something that changes nothing. Count the
+// repeats and print one line an interval instead.
+struct AvLogRepeat {
+  std::string last;
+  // Explicit rather than treating a zero timestamp as "never": the timestamp
+  // gets overwritten with the time of the print, and a clock reading zero would
+  // leave the state looking unused for the rest of the process.
+  bool seen = false;
+  int64_t last_logged_us = 0;
+  uint64_t suppressed = 0;
+};
+
+// Whether to print this message now. suppressed_out receives how many messages
+// were dropped since the last print, so the caller can say so.
+bool av_log_should_print(AvLogRepeat &state, const std::string &message,
+                         int64_t now_us, int64_t interval_us,
+                         uint64_t *suppressed_out);
 #ifdef HAVE_QUADRA
 int ni_get_cardno(const AVCodecContext *ctx);
 #endif

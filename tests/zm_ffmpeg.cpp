@@ -187,3 +187,40 @@ TEST_CASE("describe_hw_pool_line", "[ffmpeg]") {
     REQUIRE(line.find("0 frames") == std::string::npos);
   }
 }
+
+TEST_CASE("av_log_should_print", "[ffmpeg]") {
+  constexpr int64_t kMinute = 60 * 1000 * 1000;
+  AvLogRepeat state;
+  uint64_t suppressed = 0;
+
+  SECTION("the first message of its kind prints") {
+    REQUIRE(av_log_should_print(state, "SEI type 764 truncated", 1000, kMinute, &suppressed));
+    REQUIRE(suppressed == 0);
+  }
+
+  // The case that filled 40MB of one monitor's log: libavcodec reports this
+  // per frame at AV_LOG_ERROR, which ZM maps to Warning, which is a database
+  // row each time.
+  SECTION("repeats inside the interval are counted, not printed") {
+    REQUIRE(av_log_should_print(state, "SEI truncated", 0, kMinute, &suppressed));
+    for (int i = 1; i <= 500; i++) {
+      REQUIRE_FALSE(av_log_should_print(state, "SEI truncated", i * 1000, kMinute, &suppressed));
+    }
+    REQUIRE(av_log_should_print(state, "SEI truncated", kMinute, kMinute, &suppressed));
+    REQUIRE(suppressed == 500);
+  }
+
+  SECTION("a different message prints immediately rather than waiting") {
+    REQUIRE(av_log_should_print(state, "first", 0, kMinute, &suppressed));
+    REQUIRE(av_log_should_print(state, "second", 1000, kMinute, &suppressed));
+  }
+
+  SECTION("the count resets once reported, so it is per interval not cumulative") {
+    REQUIRE(av_log_should_print(state, "x", 0, kMinute, &suppressed));
+    REQUIRE_FALSE(av_log_should_print(state, "x", 1, kMinute, &suppressed));
+    REQUIRE(av_log_should_print(state, "x", kMinute, kMinute, &suppressed));
+    REQUIRE(suppressed == 1);
+    REQUIRE(av_log_should_print(state, "x", 2 * kMinute, kMinute, &suppressed));
+    REQUIRE(suppressed == 0);
+  }
+}
