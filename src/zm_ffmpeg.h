@@ -480,6 +480,12 @@ AVBufferRef *encoder_share_pool(AVBufferRef *decoder_pool, bool software_frames_
 // the encoder is opened, so a configured budget counts as "expected" even while
 // nothing is being shed; a budget of zero disables shedding entirely.
 bool software_frames_expected(bool object_detection_enabled, unsigned int device_frame_budget);
+
+// Whether a shedding episode is due to be reported. A monitor at its cap
+// re-enters shedding several times a second, so the message is put on a timer
+// rather than tied to the latch; last_report_us of 0 means nothing has been
+// reported yet in this process.
+bool shed_report_due(int64_t now_us, int64_t last_report_us, int64_t interval_us);
 #ifdef HAVE_QUADRA
 int ni_get_cardno(const AVCodecContext *ctx);
 #endif

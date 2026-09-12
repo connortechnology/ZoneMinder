@@ -2497,6 +2497,32 @@ our @options = (
     category    => 'system',
   },
   {
+    name        => 'ZM_DEVICE_FRAME_BUDGET',
+    default     => '8',
+    description => 'How many decoded hardware frames a capture daemon may pin on the card',
+    help        => q`
+      A frame decoded on an accelerator card stays in the card's frame
+      pool for as long as ZoneMinder holds a pointer to it, which lets
+      the encoder take it without a download and re-upload. Holding too
+      many starves the decoder of pool slots, so this caps how many one
+      zmc will pin at once; above the cap it hands frames back and
+      carries on from the software copy it has already downloaded.
+      Recording is unaffected either way, only the saving is lost.
+
+      One zmc serves one monitor, so the real load on a card is this
+      figure times the number of monitors decoding on it. Raise it for a
+      monitor that reports being at the budget continuously, which means
+      it is pinning frames faster than it releases them and is paying the
+      round trip for most of its frames.
+
+      Set to 0 to disable the cap. Doing so also lets the encoder share
+      the decoder's frame pool, which removes the round trip entirely,
+      but nothing then bounds how much of the pool one monitor can hold.
+      `,
+    type        => $types{integer},
+    category    => 'system',
+  },
+  {
     name        => 'ZM_RUN_AUDIT',
     default     => '0',
     description => 'Run zmaudit to check data consistency',

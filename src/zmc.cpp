@@ -182,6 +182,13 @@ int main(int argc, char *argv[], char **envp) {
   zmLoadDBConfig();
   logInit(log_id_string);
 
+  // The cap on decoded hardware frames we will pin on the card. Process-wide
+  // because that is what a card sees, and zmc is one process per monitor.
+  // Clamped rather than cast: the config member is signed, and a negative value
+  // would wrap to an enormous unsigned budget, silently disabling the cap.
+  zm_set_device_frame_budget(
+      config.device_frame_budget > 0 ? static_cast<unsigned int>(config.device_frame_budget) : 0);
+
 
   for (char **env = envp; *env != 0; env++) {
     char *thisEnv = *env;

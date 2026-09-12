@@ -19,6 +19,8 @@
 
 #include "zm_ffmpeg.h"
 
+#include <chrono>
+
 #include "zm_logger.h"
 #include "zm_pixformat.h"
 #include "zm_rgb.h"
@@ -322,7 +324,27 @@ constexpr unsigned int kDefaultDeviceFrameBudget = 8;
 std::atomic<unsigned int> device_frame_budget{kDefaultDeviceFrameBudget};
 std::atomic<bool> device_frames_shedding_now{false};
 std::atomic<uint64_t> device_frames_shed_total{0};
+
+// A monitor parked at its cap flips the latch several times a second: shed down
+// to the low-water, refill in a handful of frames, shed again. That is the
+// control loop working, and logging each flip at Warning meant ~150 rows a
+// minute into the Logs table from one monitor, all saying the same thing.
+// Report the episode on a timer instead, carrying the count so the rate shows.
+constexpr int64_t kShedReportIntervalUs = 60 * 1000 * 1000;
+std::atomic<int64_t> device_frames_shed_reported_at{0};
+std::atomic<uint64_t> device_frames_shed_at_last_report{0};
+
+int64_t steady_now_us() {
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 }  // namespace
+
+bool shed_report_due(int64_t now_us, int64_t last_report_us, int64_t interval_us) {
+  // Nothing reported yet: the first shed of a run is always worth saying.
+  if (last_report_us == 0) return true;
+  return now_us - last_report_us >= interval_us;
+}
 
 unsigned int zm_device_frame_budget() {
   return device_frame_budget.load(std::memory_order_relaxed);
@@ -352,15 +374,25 @@ bool zm_device_frame_should_shed() {
   if (!shedding) {
     if (in_flight < budget) return false;
     device_frames_shedding_now.store(true, std::memory_order_relaxed);
-    Warning("Holding %u hardware frames, at the budget of %u; "
-            "releasing frames back to the card until occupancy falls to %u. "
-            "Recording is unaffected -- frames are re-uploaded for encoding -- "
-            "but the saving from keeping them on the card is lost meanwhile.",
-            in_flight, budget, budget / 2);
+    const int64_t now_us = steady_now_us();
+    if (shed_report_due(now_us, device_frames_shed_reported_at.load(std::memory_order_relaxed),
+                        kShedReportIntervalUs)) {
+      device_frames_shed_reported_at.store(now_us, std::memory_order_relaxed);
+      const uint64_t total = device_frames_shed_total.load(std::memory_order_relaxed);
+      const uint64_t since = total - device_frames_shed_at_last_report.exchange(
+          total, std::memory_order_relaxed);
+      Warning("Holding %u hardware frames, at the budget of %u; "
+              "releasing frames back to the card until occupancy falls to %u "
+              "(%ju given back since the last report). "
+              "Recording is unaffected -- frames are re-uploaded for encoding -- "
+              "but the saving from keeping them on the card is lost meanwhile.",
+              in_flight, budget, budget / 2, static_cast<uintmax_t>(since));
+    }
   } else if (in_flight <= budget / 2) {
-    // Low-water reached: stop shedding and let occupancy build again.
+    // Low-water reached: stop shedding and let occupancy build again. At Debug
+    // because it is the other half of the same flip, and just as frequent.
     device_frames_shedding_now.store(false, std::memory_order_relaxed);
-    Info("Hardware frame occupancy back down to %u; holding frames again", in_flight);
+    Debug(2, "Hardware frame occupancy back down to %u; holding frames again", in_flight);
     return false;
   }
 

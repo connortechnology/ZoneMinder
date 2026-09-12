@@ -66,3 +66,24 @@ TEST_CASE("software_frames_expected", "[ffmpeg]") {
     REQUIRE(software_frames_expected(true, 8));
   }
 }
+
+TEST_CASE("shed_report_due", "[ffmpeg]") {
+  constexpr int64_t kMinute = 60 * 1000 * 1000;
+
+  SECTION("the first shed of a run is always reported") {
+    REQUIRE(shed_report_due(12345, 0, kMinute));
+  }
+
+  // The defect this exists for: a monitor parked at its cap re-enters shedding
+  // several times a second, and every re-entry used to log a Warning, which
+  // also writes a row to the Logs table.
+  SECTION("re-entering shedding within the interval stays quiet") {
+    REQUIRE_FALSE(shed_report_due(kMinute + 400000, kMinute, kMinute));
+  }
+
+  SECTION("a continuing episode is reported again once the interval passes") {
+    // A whole interval elapsed is due; a microsecond short of it is not.
+    REQUIRE(shed_report_due(2 * kMinute, kMinute, kMinute));
+    REQUIRE_FALSE(shed_report_due(2 * kMinute - 1, kMinute, kMinute));
+  }
+}
