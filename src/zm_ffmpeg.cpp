@@ -315,11 +315,18 @@ unsigned int zm_device_frames_high_water() {
 
 namespace {
 // Default ceiling on frames we will pin at once. The decode pool is sized
-// internally by ffmpeg from the codec DPB, so there is no figure of ours to
-// derive this from; 8 is chosen to sit above the occupancy a healthy pipeline
-// actually reaches (measured peak 4 on a 20fps hevc stream) while still leaving
-// a typical pool room to hand out frames for decoding.
-constexpr unsigned int kDefaultDeviceFrameBudget = 8;
+// internally by ffmpeg from the codec DPB, so there is still no figure of ours
+// to derive this from, and that pool size remains the real ceiling: pin more
+// than it holds and decoding stalls waiting for slots.
+//
+// 8 was set from one 20fps hevc stream that peaked at 4, and it was too low for
+// the fleet. Measured across eleven monitors on one Quadra: peaks of 3, 4, 4, 5
+// and 12, with three more pinned at exactly 8 -- censored by the budget itself,
+// so their real working set is unknown and higher. One of those shed 23937
+// frames while the card sat at 6% firmware load, which is round trips paid for
+// nothing. 16 clears every uncensored peak with headroom and is the value a
+// 30fps monitor was run at to find the 12.
+constexpr unsigned int kDefaultDeviceFrameBudget = 16;
 
 std::atomic<unsigned int> device_frame_budget{kDefaultDeviceFrameBudget};
 std::atomic<bool> device_frames_shedding_now{false};

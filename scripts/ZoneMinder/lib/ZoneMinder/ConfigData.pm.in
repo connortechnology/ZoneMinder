@@ -2498,7 +2498,7 @@ our @options = (
   },
   {
     name        => 'ZM_DEVICE_FRAME_BUDGET',
-    default     => '8',
+    default     => '16',
     description => 'How many decoded hardware frames a capture daemon may pin on the card',
     help        => q`
       A frame decoded on an accelerator card stays in the card's frame
