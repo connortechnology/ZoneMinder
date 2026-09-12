@@ -467,6 +467,19 @@ int setup_hwaccel(AVCodecContext *codec_ctx, const CodecData *codec_data,AVBuffe
 // handing an encoder a surface from any other pool encodes black without
 // reporting an error. So when frames get rewritten, the encoder must allocate.
 AVBufferRef *encoder_share_pool(AVBufferRef *decoder_pool, bool software_frames_expected);
+
+// Whether anything in the pipeline may hand the encoder a frame it has to
+// upload, rather than one already sitting on the device.
+//
+// Two things do. Object detection draws its boxes onto a downloaded copy and
+// that copy is what gets encoded, so such a monitor never encodes a device
+// frame at all. And at the device frame budget transfer_hwframe releases
+// hw_frame and the pipeline carries on from the software copy, which can start
+// happening at any moment on a monitor that was feeding the encoder device
+// frames a second earlier. The budget is the only part of that knowable when
+// the encoder is opened, so a configured budget counts as "expected" even while
+// nothing is being shed; a budget of zero disables shedding entirely.
+bool software_frames_expected(bool object_detection_enabled, unsigned int device_frame_budget);
 #ifdef HAVE_QUADRA
 int ni_get_cardno(const AVCodecContext *ctx);
 #endif

@@ -368,6 +368,10 @@ bool zm_device_frame_should_shed() {
   return true;
 }
 
+bool software_frames_expected(bool object_detection_enabled, unsigned int device_frame_budget) {
+  return object_detection_enabled or device_frame_budget != 0;
+}
+
 AVBufferRef *encoder_share_pool(AVBufferRef *decoder_pool, bool software_frames_expected) {
   if (!decoder_pool) return nullptr;
   if (software_frames_expected) return nullptr;

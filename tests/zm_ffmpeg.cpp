@@ -44,3 +44,25 @@ TEST_CASE("encoder_share_pool", "[ffmpeg]") {
     REQUIRE(encoder_share_pool(nullptr, true) == nullptr);
   }
 }
+
+TEST_CASE("software_frames_expected", "[ffmpeg]") {
+  SECTION("object detection encodes a downloaded copy, never a device frame") {
+    REQUIRE(software_frames_expected(true, 0));
+  }
+
+  // The second cause, and the one that caught monitor 36: no object detection,
+  // but at the budget transfer_hwframe hands the device frame back and the
+  // pipeline continues from the software copy. Shedding cannot be predicted at
+  // encoder-open time, so a configured budget is enough to withhold the pool.
+  SECTION("a configured device frame budget means shedding can start at any time") {
+    REQUIRE(software_frames_expected(false, 8));
+  }
+
+  SECTION("no detection and no budget means frames reach the encoder untouched") {
+    REQUIRE_FALSE(software_frames_expected(false, 0));
+  }
+
+  SECTION("either cause alone is enough") {
+    REQUIRE(software_frames_expected(true, 8));
+  }
+}

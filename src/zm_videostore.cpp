@@ -404,17 +404,17 @@ bool VideoStore::open() {
            * the motion of the chroma plane does not match the luma plane. */
           video_out_ctx->mb_decision = 2;
         }
-        // Object detection draws its boxes onto a downloaded copy of the frame
-        // and that copy is what gets encoded, so on such a monitor the encoder
-        // never sees a device frame and every frame needs uploading. Uploading
-        // into the decoder's pool fails, so do not offer it.
+        // Only offer the decoder's pool when every frame will reach the encoder
+        // still on the device. Uploading into a pool the decoder owns fails, so
+        // a pipeline that rewrites frames has to have a pool of its own.
         const AVCodecContext *decoder_ctx = monitor->GetVideoCodecContext();
-        const bool software_frames_expected =
-            monitor->ObjectDetection() != Monitor::OBJECT_DETECTION_NONE;
+        const bool rewrites_frames = software_frames_expected(
+            monitor->ObjectDetection() != Monitor::OBJECT_DETECTION_NONE,
+            zm_device_frame_budget());
         if (setup_hwaccel(video_out_ctx,
               chosen_codec_data, hw_device_ctx, monitor->EncoderHWAccelDevice(), monitor->Width(), monitor->Height(),
               encoder_share_pool(decoder_ctx ? decoder_ctx->hw_frames_ctx : nullptr,
-                                 software_frames_expected))) {
+                                 rewrites_frames))) {
           avcodec_free_context(&video_out_ctx);
           av_dict_free(&opts);
           if (hw_device_ctx) {
