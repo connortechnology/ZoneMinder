@@ -1,0 +1,46 @@
+/*
+ * This file is part of the ZoneMinder Project. See AUTHORS file for Copyright information
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#include "zm_catch2.h"
+
+#include "zm_ffmpeg.h"
+
+namespace {
+
+// encoder_share_pool only ever passes the pointer through or drops it, so a
+// stand-in is enough; nothing dereferences it.
+AVBufferRef *const kDecoderPool = reinterpret_cast<AVBufferRef *>(0x1000);
+
+}  // namespace
+
+TEST_CASE("encoder_share_pool", "[ffmpeg]") {
+  SECTION("shares the decoder pool when frames go straight to the encoder") {
+    REQUIRE(encoder_share_pool(kDecoderPool, false) == kDecoderPool);
+  }
+
+  // The regression: object detection encodes a software copy with boxes drawn
+  // on it, so every frame needs av_hwframe_get_buffer(), which fails with
+  // EINVAL against a pool the decoder owns and ends recording for the event.
+  SECTION("withholds the pool when frames are rewritten in software") {
+    REQUIRE(encoder_share_pool(kDecoderPool, true) == nullptr);
+  }
+
+  SECTION("has nothing to share when the decoder has no pool") {
+    REQUIRE(encoder_share_pool(nullptr, false) == nullptr);
+    REQUIRE(encoder_share_pool(nullptr, true) == nullptr);
+  }
+}

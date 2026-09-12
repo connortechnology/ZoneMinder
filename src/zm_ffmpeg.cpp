@@ -368,6 +368,12 @@ bool zm_device_frame_should_shed() {
   return true;
 }
 
+AVBufferRef *encoder_share_pool(AVBufferRef *decoder_pool, bool software_frames_expected) {
+  if (!decoder_pool) return nullptr;
+  if (software_frames_expected) return nullptr;
+  return decoder_pool;
+}
+
 int setup_hwaccel(
     AVCodecContext *codec_ctx,
     const CodecData *codec_data,

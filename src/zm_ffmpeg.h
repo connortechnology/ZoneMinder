@@ -454,6 +454,19 @@ AVCodecContext *open_fallback_decoder(const AVCodecParameters *codecpar, const A
 // it encodes black without reporting an error -- so sharing the pool is the
 // only way to avoid the download/upload round trip.
 int setup_hwaccel(AVCodecContext *codec_ctx, const CodecData *codec_data,AVBufferRef * &hw_device_ctx, const std::string &device, int width, int height, AVBufferRef *share_frames_ctx = nullptr);
+
+// The decoder pool to offer setup_hwaccel, or nullptr when the encoder has to
+// own its own.
+//
+// Sharing only pays when the frames we hand the encoder ARE the decoded device
+// frames. Where the pipeline rewrites a frame in software first, every frame
+// takes the upload path in writeVideoFramePacket instead -- and
+// av_hwframe_get_buffer() against a pool the decoder owns fails with EINVAL,
+// which latches video_encoder_failed and ends recording for that event. There
+// is no second pool to fall back on: a codec context has one hw_frames_ctx, and
+// handing an encoder a surface from any other pool encodes black without
+// reporting an error. So when frames get rewritten, the encoder must allocate.
+AVBufferRef *encoder_share_pool(AVBufferRef *decoder_pool, bool software_frames_expected);
 #ifdef HAVE_QUADRA
 int ni_get_cardno(const AVCodecContext *ctx);
 #endif

@@ -19,6 +19,7 @@ set(TEST_SOURCES
   zm_box.cpp
   zm_comms.cpp
   zm_crypt.cpp
+  zm_ffmpeg.cpp
   zm_ffmpeg_camera.cpp
   zm_event_hardlink.cpp
   zm_font.cpp
