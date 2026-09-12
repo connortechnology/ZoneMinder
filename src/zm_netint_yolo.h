@@ -24,6 +24,24 @@ extern "C" {
 #define NI_SAME_BORDER_THRESH 8
 
 class Monitor;
+class ZMPacket;
+
+/* Which frame inference should run against. A free function so the choice can
+ * be unit tested on its own: it touches nothing from libxcoder.
+ */
+namespace zm_yolo {
+// Returns the frame to feed the AI session, or nullptr when this packet cannot
+// be inferred on and should be skipped.
+//
+// A hardware session was allocated for device input -- use_hwframe is fixed at
+// construction and baked into ni_alloc_network_context -- so only a frame
+// carrying a device surface in data[3] will serve it. There is deliberately no
+// falling back to the software frame: that reaches ni_hwframe_scale with a null
+// surface and dereferences it. A null return is expected under load rather than
+// a fault, because the decoder hands hw_frame back to the card once we are at
+// the device frame budget.
+AVFrame *ai_input_frame(bool use_hwframe, AVFrame *hw_frame, AVFrame *in_frame);
+}  // namespace zm_yolo
 
 class Quadra_Yolo {
   private:

@@ -20,6 +20,16 @@ constexpr size_t NB_MODEL_NAME_MAX_LEN = 64;
 
 #define SOFTWARE_DRAWBOX 1
 
+namespace zm_yolo {
+
+AVFrame *ai_input_frame(bool use_hwframe, AVFrame *hw_frame, AVFrame *in_frame) {
+  if (!use_hwframe) return in_frame;
+  if (hw_frame and hw_frame->data[3]) return hw_frame;
+  return nullptr;
+}
+
+}  // namespace zm_yolo
+
 Quadra_Yolo::Quadra_Yolo(Monitor *p_monitor, bool p_use_hwframe) :
   monitor(p_monitor),
   model_width(640),
@@ -230,10 +240,17 @@ bool Quadra_Yolo::setup(
 
 /* Ideally we could handle intermixed hwframes and swframes. */
 int Quadra_Yolo::send_packet(std::shared_ptr<ZMPacket> in_packet) {
-  AVFrame *avframe = (use_hwframe and in_packet->hw_frame) ? in_packet->hw_frame.get() : in_packet->in_frame.get();
+  AVFrame *avframe = zm_yolo::ai_input_frame(use_hwframe, in_packet->hw_frame.get(), in_packet->in_frame.get());
   if (!avframe) {
-    Error("No hw_frame in packet!");
-    return -1;
+    if (use_hwframe) {
+      // Expected under load: at the device frame budget the decoder gives the
+      // frame back to the card and carries on from the software copy, which a
+      // hardware AI session cannot read. Skip inference for this packet.
+      Debug(1, "No device frame for packet %d; skipping inference", in_packet->image_index);
+    } else {
+      Error("No frame in packet %d to run inference on", in_packet->image_index);
+    }
+    return 0;
   }
 
   if (!use_hwframe && !sw_scale_ctx) {
