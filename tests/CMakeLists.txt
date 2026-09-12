@@ -37,6 +37,7 @@ set(TEST_SOURCES
   zm_stream_races.cpp
   zm_swscale_range.cpp
   zm_poly.cpp
+  zm_quadra.cpp
   zm_time.cpp
   zm_device_frames.cpp
   zm_utils.cpp

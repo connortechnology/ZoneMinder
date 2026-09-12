@@ -9,6 +9,86 @@
 #include "zm_utils.h"
 #include "zm_vector2.h"
 
+#include <atomic>
+
+namespace zm_quadra {
+
+namespace {
+
+const char *block_name(ni_device_type_t type) {
+  switch (type) {
+    case NI_DEVICE_TYPE_DECODER: return "decoder";
+    case NI_DEVICE_TYPE_ENCODER: return "encoder";
+    case NI_DEVICE_TYPE_SCALER:  return "scaler";
+    case NI_DEVICE_TYPE_AI:      return "ai";
+    default: return "unknown";
+  }
+}
+
+// A percentage the card did not report, so that an unreadable field cannot be
+// mistaken for an idle card.
+std::string percent(int value) {
+  return (value < 0) ? std::string("?") : std::to_string(value) + "%";
+}
+
+}  // namespace
+
+std::string describe(const BlockUsage &usage) {
+  return stringtf("%s card %d: %u/%s instances, load %s (modelled %s), %.1f Mpixel active",
+      block_name(usage.type),
+      usage.card_idx,
+      usage.active_instances,
+      usage.max_instances < 0 ? "?" : std::to_string(usage.max_instances).c_str(),
+      percent(usage.load).c_str(),
+      percent(usage.model_load).c_str(),
+      usage.active_pixels / 1000000.0);
+}
+
+std::vector<BlockUsage> block_usage(ni_device_type_t type) {
+  std::vector<BlockUsage> result;
+
+  // ni_rsrc_list_devices fills up to NI_MAX_DEVICE_CNT entries and has no way
+  // to be told a smaller capacity, so the buffer has to be the full size. It is
+  // ~675KB, which is why this is sampled on a timer rather than per frame.
+  std::vector<ni_device_info_t> devices(NI_MAX_DEVICE_CNT);
+  int count = 0;
+  if (ni_rsrc_list_devices(type, devices.data(), &count) != NI_RETCODE_SUCCESS) {
+    // The pool lives in /dev/shm and is owned by whoever initialised the card.
+    // A process that cannot read it is not broken, it just gets no numbers, and
+    // saying so once a second would bury the numbers we can read.
+    static std::atomic<bool> warned{false};
+    if (!warned.exchange(true)) {
+      Warning("Cannot read the Quadra resource pool; card-wide occupancy will not be reported");
+    }
+    return result;
+  }
+
+  for (int i = 0; i < count and i < NI_MAX_DEVICE_CNT; i++) {
+    const ni_device_info_t &device = devices[i];
+    BlockUsage usage;
+    usage.type = type;
+    usage.card_idx = device.module_id;
+    usage.load = device.load;
+    usage.model_load = device.model_load;
+    usage.active_instances = device.active_num_inst;
+    usage.max_instances = device.max_instance_cnt;
+
+    // active_num_inst is a count; the pixels behind it are what cost memory, so
+    // walk the instances for their resolutions rather than trusting the count
+    // to mean the same thing on a 720p card as on a 4K one.
+    for (int n = 0; n < NI_MAX_CONTEXTS_PER_HW_INSTANCE; n++) {
+      const ni_sw_instance_info_t &instance = device.sw_instance[n];
+      if (instance.status != EN_ACTIVE) continue;
+      if (instance.width <= 0 or instance.height <= 0) continue;
+      usage.active_pixels += static_cast<uint64_t>(instance.width) * instance.height;
+    }
+    result.push_back(usage);
+  }
+  return result;
+}
+
+}  // namespace zm_quadra
+
 Quadra::Quadra() :
   sw_scale_ctx(nullptr),
   drawbox_filter(nullptr),

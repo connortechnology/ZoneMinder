@@ -751,6 +751,14 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   std::atomic<uint64_t> hw_frame_uploads_{0};
   uint64_t last_hw_frame_downloads_ = 0;
   uint64_t last_hw_frame_uploads_ = 0;
+
+  // Card-wide occupancy comes from libxcoder's shared pool, behind a lock every
+  // other process on the card contends for -- including the ones opening
+  // sessions. UpdateFPS runs once a second per monitor, so sampling it there
+  // unthrottled would put one lock per monitor per second on the pool for a
+  // figure that moves with session opens, not with frames.
+  static constexpr Seconds kCardUsageSampleInterval{30};
+  SystemTimePoint last_card_usage_sample_;
   int        motion_frame_count;      // How many frames have had motion detection performed on them.
   int        last_motion_frame_count; // last value of motion_frame_count when calculating fps
   int        ready_count;

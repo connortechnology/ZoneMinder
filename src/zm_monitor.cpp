@@ -49,6 +49,7 @@
 
 #if HAVE_QUADRA
 #include "libavutil/hwcontext_ni_quad.h"
+#include "zm_quadra.h"
 #endif
 
 #include <algorithm>
@@ -2146,6 +2147,22 @@ void Monitor::UpdateFPS() {
     }
     last_hw_frame_downloads_ = downloads;
     last_hw_frame_uploads_ = uploads;
+
+#if HAVE_QUADRA
+    // What the card as a whole is carrying, which the gauge above cannot see:
+    // it counts this process, and zmc is one process per monitor. These numbers
+    // come from libxcoder's shared pool, so they are the same on every monitor
+    // and raising one monitor to level 2 is enough to see the whole card.
+    if (now - last_card_usage_sample_ >= kCardUsageSampleInterval) {
+      last_card_usage_sample_ = now;
+      for (ni_device_type_t block : {NI_DEVICE_TYPE_DECODER, NI_DEVICE_TYPE_ENCODER,
+                                     NI_DEVICE_TYPE_SCALER, NI_DEVICE_TYPE_AI}) {
+        for (const zm_quadra::BlockUsage &usage : zm_quadra::block_usage(block)) {
+          Debug(2, "Quadra %s", zm_quadra::describe(usage).c_str());
+        }
+      }
+    }
+#endif
 
     shared_data->capture_fps = new_capture_fps;
     last_capture_image_count = shared_data->capture_image_count;
