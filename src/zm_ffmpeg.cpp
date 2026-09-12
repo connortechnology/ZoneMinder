@@ -374,7 +374,8 @@ int setup_hwaccel(
     AVBufferRef * &hw_device_ctx,
     const std::string &device,
     int width,
-    int height) {
+    int height,
+    AVBufferRef *share_frames_ctx) {
 #if HAVE_LIBAVUTIL_HWCONTEXT_H && LIBAVCODEC_VERSION_CHECK(57, 107, 0, 107, 0)
   if (codec_data->hwdevice_type == AV_HWDEVICE_TYPE_NONE) {
     return 0;
@@ -389,6 +390,35 @@ int setup_hwaccel(
   }
   codec_ctx->get_format = get_hw_format;
   codec_ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+
+  // Prefer the decoder's pool when it is compatible: a frame decoded into it can
+  // then be sent to the encoder untouched. A surface from a foreign pool is
+  // accepted and encoded as black without any error, so matching format and
+  // geometry here is what makes the difference between zero copy and silent
+  // corruption.
+  if (share_frames_ctx) {
+    const AVHWFramesContext *shared = reinterpret_cast<AVHWFramesContext *>(share_frames_ctx->data);
+    if (shared->format == codec_data->hw_pix_fmt
+        and shared->width == width
+        and shared->height == height) {
+      codec_ctx->hw_frames_ctx = av_buffer_ref(share_frames_ctx);
+      if (codec_ctx->hw_frames_ctx) {
+        codec_ctx->sw_pix_fmt = shared->sw_format;
+        Debug(1, "Encoder sharing the decoder's %s frame pool (%dx%d, sw %s); frames go straight from decode to encode",
+              av_get_pix_fmt_name(shared->format), width, height,
+              av_get_pix_fmt_name(shared->sw_format));
+        // Drop our creation reference exactly as the pool-allocating path below
+        // does, so the caller sees the same state either way: codec_ctx owns the
+        // device reference and the caller's pointer is cleared.
+        av_buffer_unref(&hw_device_ctx);
+        return 0;
+      }
+    } else {
+      Debug(1, "Decoder pool %s %dx%d does not match encoder %s %dx%d; using our own pool",
+            av_get_pix_fmt_name(shared->format), shared->width, shared->height,
+            av_get_pix_fmt_name(codec_data->hw_pix_fmt), width, height);
+    }
+  }
 
   AVBufferRef *hw_frames_ref;
   AVHWFramesContext *frames_ctx = nullptr;

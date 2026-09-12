@@ -447,7 +447,13 @@ std::list<const CodecData*> get_decoder_data(int wanted_codec, const std::string
 // Returns an opened AVCodecContext (caller frees with avcodec_free_context) or
 // nullptr. When non-null, *codec_out receives the chosen AVCodec.
 AVCodecContext *open_fallback_decoder(const AVCodecParameters *codecpar, const AVCodec **codec_out = nullptr);
-int setup_hwaccel(AVCodecContext *codec_ctx, const CodecData *codec_data,AVBufferRef * &hw_device_ctx, const std::string &device, int width, int height);
+// share_frames_ctx: the decoder's frame pool, when there is one. If it matches
+// what the encoder wants, the encoder is pointed at that pool instead of
+// getting one of its own, so a decoded frame can go straight to the encoder.
+// Handing an encoder a surface from a pool it does not own does NOT work --
+// it encodes black without reporting an error -- so sharing the pool is the
+// only way to avoid the download/upload round trip.
+int setup_hwaccel(AVCodecContext *codec_ctx, const CodecData *codec_data,AVBufferRef * &hw_device_ctx, const std::string &device, int width, int height, AVBufferRef *share_frames_ctx = nullptr);
 #ifdef HAVE_QUADRA
 int ni_get_cardno(const AVCodecContext *ctx);
 #endif

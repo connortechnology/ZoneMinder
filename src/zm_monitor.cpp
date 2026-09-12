@@ -2459,7 +2459,16 @@ int Monitor::Analyse() {
               Debug(1, "Not analysing %d", shared_data->analysing);
             } // end if doing motion detection
           } // end if Ready
-          packet->hw_frame = nullptr; // Free it
+          // The device frame used to be released here, which meant the
+          // encoder could never see it: Event::Run does not touch a packet
+          // until analyzed is set, and that happens further down this same
+          // function. So the recording path always re-uploaded a software copy
+          // even when the frame was still sitting on the card. Leave it
+          // attached and let the event thread release it once it has written
+          // the packet; anything never recorded is released when the packet is
+          // destroyed. The device frame budget bounds how much this can cost --
+          // once occupancy reaches it, transfer_hwframe stops retaining frames
+          // at all and we are back to the old behaviour.
         } // end if videostream
 
         if (score > 255) score = 255;

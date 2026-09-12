@@ -405,7 +405,8 @@ bool VideoStore::open() {
           video_out_ctx->mb_decision = 2;
         }
         if (setup_hwaccel(video_out_ctx,
-              chosen_codec_data, hw_device_ctx, monitor->EncoderHWAccelDevice(), monitor->Width(), monitor->Height())) {
+              chosen_codec_data, hw_device_ctx, monitor->EncoderHWAccelDevice(), monitor->Width(), monitor->Height(),
+              monitor->GetVideoCodecContext() ? monitor->GetVideoCodecContext()->hw_frames_ctx : nullptr)) {
           avcodec_free_context(&video_out_ctx);
           av_dict_free(&opts);
           if (hw_device_ctx) {

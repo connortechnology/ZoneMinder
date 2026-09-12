@@ -718,6 +718,10 @@ void Event::AddPacket_(const std::shared_ptr<ZMPacket>packet) {
     if (have_video_keyframe) {
       size_t frags_before = videoStore->fragments().size();
       videoStore->writePacket(packet);
+      // Done with the device frame: writePacket has taken its own reference for
+      // as long as the encoder needs one, so dropping ours here returns the pool
+      // slot now rather than whenever this packet finally leaves the queue.
+      packet->hw_frame = nullptr;
       // Update m3u8 whenever a new fragment is completed (live HLS)
       if (videoStore->fragments().size() > frags_before) {
         std::string m3u8_path = path + "/index.m3u8";
