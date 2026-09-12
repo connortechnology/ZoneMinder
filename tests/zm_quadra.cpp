@@ -32,8 +32,6 @@ zm_quadra::BlockUsage Decoder() {
   usage.load = 41;
   usage.model_load = 38;
   usage.active_instances = 3;
-  usage.max_instances = 32;
-  usage.active_pixels = 3ULL * 3840 * 2160;
   return usage;
 }
 
@@ -46,8 +44,15 @@ TEST_CASE("zm_quadra::describe", "[quadra]") {
     REQUIRE(line.find("card 0") != std::string::npos);
   }
 
-  SECTION("reports instances against the cap") {
-    REQUIRE(zm_quadra::describe(Decoder()).find("3/32 instances") != std::string::npos);
+  SECTION("reports the instance count") {
+    REQUIRE(zm_quadra::describe(Decoder()).find("3 instances") != std::string::npos);
+  }
+
+  // The card gives 128 for every block, which is the size of sw_instance[]
+  // rather than a limit, so printing it as a denominator would imply headroom
+  // nothing has established.
+  SECTION("does not present a cap it cannot vouch for") {
+    REQUIRE(zm_quadra::describe(Decoder()).find("/") == std::string::npos);
   }
 
   SECTION("reports both loads, which disagree often enough to be worth seeing") {
@@ -56,32 +61,21 @@ TEST_CASE("zm_quadra::describe", "[quadra]") {
     REQUIRE(line.find("modelled 38%") != std::string::npos);
   }
 
-  SECTION("reports active pixels, the quantity card memory is actually spent on") {
-    // 3 * 3840 * 2160 = 24883200 pixels.
-    REQUIRE(zm_quadra::describe(Decoder()).find("24.9 Mpixel") != std::string::npos);
-  }
-
   SECTION("prints unknown values rather than a misleading number") {
     zm_quadra::BlockUsage usage = Decoder();
     usage.load = -1;
     usage.model_load = -1;
-    usage.max_instances = -1;
     const std::string line = zm_quadra::describe(usage);
     REQUIRE(line.find("load ?") != std::string::npos);
     REQUIRE(line.find("modelled ?") != std::string::npos);
-    REQUIRE(line.find("3/? instances") != std::string::npos);
     // A card that reports nothing must not read as a card under no load.
     REQUIRE(line.find("0%") == std::string::npos);
   }
 
-  SECTION("names every block type") {
+  SECTION("names the block types that are sampled") {
     zm_quadra::BlockUsage usage = Decoder();
     usage.type = NI_DEVICE_TYPE_ENCODER;
     REQUIRE(zm_quadra::describe(usage).find("encoder") != std::string::npos);
-    usage.type = NI_DEVICE_TYPE_SCALER;
-    REQUIRE(zm_quadra::describe(usage).find("scaler") != std::string::npos);
-    usage.type = NI_DEVICE_TYPE_AI;
-    REQUIRE(zm_quadra::describe(usage).find("ai") != std::string::npos);
   }
 }
 

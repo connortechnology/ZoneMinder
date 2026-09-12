@@ -34,14 +34,12 @@ std::string percent(int value) {
 }  // namespace
 
 std::string describe(const BlockUsage &usage) {
-  return stringtf("%s card %d: %u/%s instances, load %s (modelled %s), %.1f Mpixel active",
+  return stringtf("%s card %d: %u instances, load %s (modelled %s)",
       block_name(usage.type),
       usage.card_idx,
       usage.active_instances,
-      usage.max_instances < 0 ? "?" : std::to_string(usage.max_instances).c_str(),
       percent(usage.load).c_str(),
-      percent(usage.model_load).c_str(),
-      usage.active_pixels / 1000000.0);
+      percent(usage.model_load).c_str());
 }
 
 std::vector<BlockUsage> block_usage(ni_device_type_t type) {
@@ -71,17 +69,6 @@ std::vector<BlockUsage> block_usage(ni_device_type_t type) {
     usage.load = device.load;
     usage.model_load = device.model_load;
     usage.active_instances = device.active_num_inst;
-    usage.max_instances = device.max_instance_cnt;
-
-    // active_num_inst is a count; the pixels behind it are what cost memory, so
-    // walk the instances for their resolutions rather than trusting the count
-    // to mean the same thing on a 720p card as on a 4K one.
-    for (int n = 0; n < NI_MAX_CONTEXTS_PER_HW_INSTANCE; n++) {
-      const ni_sw_instance_info_t &instance = device.sw_instance[n];
-      if (instance.status != EN_ACTIVE) continue;
-      if (instance.width <= 0 or instance.height <= 0) continue;
-      usage.active_pixels += static_cast<uint64_t>(instance.width) * instance.height;
-    }
     result.push_back(usage);
   }
   return result;

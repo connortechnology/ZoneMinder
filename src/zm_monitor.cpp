@@ -2176,8 +2176,10 @@ void Monitor::UpdateFPS() {
     // and raising one monitor to level 2 is enough to see the whole card.
     if (now - last_card_usage_sample_ >= kCardUsageSampleInterval) {
       last_card_usage_sample_ = now;
-      for (ni_device_type_t block : {NI_DEVICE_TYPE_DECODER, NI_DEVICE_TYPE_ENCODER,
-                                     NI_DEVICE_TYPE_SCALER, NI_DEVICE_TYPE_AI}) {
+      // Decoder and encoder only: the scaler and AI blocks report zero
+      // instances and zero load even while inference is running, so they add
+      // two lines of nothing per card.
+      for (ni_device_type_t block : {NI_DEVICE_TYPE_DECODER, NI_DEVICE_TYPE_ENCODER}) {
         for (const zm_quadra::BlockUsage &usage : zm_quadra::block_usage(block)) {
           Debug(2, "Quadra %s", zm_quadra::describe(usage).c_str());
         }

@@ -36,19 +36,28 @@ extern "C" {
  */
 namespace zm_quadra {
 
-// One hardware block on one card. A card carries a decoder, an encoder, a
-// scaler and an AI block, each with its own instances and load.
+// One hardware block on one card.
+//
+// Only the decoder and encoder are worth reading. The scaler and AI blocks are
+// in the pool but nothing registers with them -- both report active_num_inst 0
+// and load 0 on a card demonstrably running inference -- so sampling them
+// produces two lines of zeroes per card and no information.
+//
+// There is no per-instance detail to be had either. sw_instance[] is sized
+// NI_MAX_CONTEXTS_PER_HW_INSTANCE and every entry reads EN_IDLE even while
+// active_num_inst says nine, so libxcoder keeps the aggregate and not the
+// members. Resolutions, and the frame bytes that follow from them, come from
+// the decoder's own frames context instead -- see hw_frame_bytes.
+//
+// max_instance_cnt is not reported here: the card gives 128 for all four
+// blocks, which is the size of that same array rather than a limit anything
+// would hit, and printing "9/128" implies headroom we have not established.
 struct BlockUsage {
   ni_device_type_t type = NI_DEVICE_TYPE_DECODER;
   int card_idx = -1;
   int load = -1;         // percent, as the firmware reports it
   int model_load = -1;   // percent, as libxcoder models it
   unsigned int active_instances = 0;
-  int max_instances = -1;
-  // Pixels summed over the active instances. Card memory goes on frames, and a
-  // frame costs width*height*1.5 bytes per pool slot, so this -- not a count of
-  // instances -- is the quantity a memory budget has to be written against.
-  uint64_t active_pixels = 0;
 };
 
 // Reads the resource pool for one block type, one entry per card. Empty when
