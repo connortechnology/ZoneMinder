@@ -498,6 +498,33 @@ bool shed_report_due(int64_t now_us, int64_t last_report_us, int64_t interval_us
 // monitor has no override and takes the global budget.
 unsigned int effective_device_frame_budget(const std::vector<int> &monitor_budgets,
                                            unsigned int global_budget);
+
+// What one frame costs in card memory. The pool reserves this per slot, so it
+// is the unit a memory budget has to be written in -- a frame count means
+// different things at 720p and at 4K.
+int64_t hw_frame_bytes(AVPixelFormat sw_format, int width, int height);
+
+// A hardware frame pool: how many slots it has and what they cost.
+//
+// This is the figure the device frame budget has been guessed at all along.
+// pool_size is the ceiling on how many frames anything may pin at once, since
+// pinning more than the pool holds leaves the decoder waiting for a slot, and
+// ffmpeg has known it the whole time -- it sizes the decode pool internally
+// from the codec DPB and records it here.
+struct HwPoolInfo {
+  int pool_size = 0;   // 0 when the pool was created to grow on demand
+  int width = 0;
+  int height = 0;
+  AVPixelFormat sw_format = AV_PIX_FMT_NONE;
+  int64_t frame_bytes = 0;
+  int64_t pool_bytes = 0;  // pool_size * frame_bytes
+};
+
+// Reads a frames context. Returns a zeroed HwPoolInfo when there is no pool.
+HwPoolInfo describe_hw_pool(const AVBufferRef *frames_ctx);
+
+// One line for logging. Sizes that were not reported print as "?".
+std::string describe_hw_pool_line(const HwPoolInfo &info);
 #ifdef HAVE_QUADRA
 int ni_get_cardno(const AVCodecContext *ctx);
 #endif

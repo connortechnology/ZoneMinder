@@ -755,6 +755,7 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   // counts downloads and the event thread counts uploads.
   std::atomic<uint64_t> hw_frame_downloads_{0};
   std::atomic<uint64_t> hw_frame_uploads_{0};
+  bool hw_pool_reported_ = false;
   uint64_t last_hw_frame_downloads_ = 0;
   uint64_t last_hw_frame_uploads_ = 0;
 

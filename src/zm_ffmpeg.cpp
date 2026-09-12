@@ -407,6 +407,43 @@ bool zm_device_frame_should_shed() {
   return true;
 }
 
+int64_t hw_frame_bytes(AVPixelFormat sw_format, int width, int height) {
+  if (sw_format == AV_PIX_FMT_NONE or width <= 0 or height <= 0) return 0;
+  // Alignment 1: the pool reserves the packed size, and we want the figure to
+  // be comparable across monitors rather than to match any one allocator.
+  const int size = av_image_get_buffer_size(sw_format, width, height, 1);
+  return (size > 0) ? size : 0;
+}
+
+HwPoolInfo describe_hw_pool(const AVBufferRef *frames_ctx) {
+  HwPoolInfo info;
+  if (!frames_ctx) return info;
+
+  const AVHWFramesContext *ctx =
+      reinterpret_cast<const AVHWFramesContext *>(frames_ctx->data);
+  if (!ctx) return info;
+
+  info.pool_size = ctx->initial_pool_size;
+  info.width = ctx->width;
+  info.height = ctx->height;
+  info.sw_format = ctx->sw_format;
+  info.frame_bytes = hw_frame_bytes(info.sw_format, info.width, info.height);
+  info.pool_bytes = info.frame_bytes * (info.pool_size > 0 ? info.pool_size : 0);
+  return info;
+}
+
+std::string describe_hw_pool_line(const HwPoolInfo &info) {
+  const char *format_name = av_get_pix_fmt_name(info.sw_format);
+  return stringtf("%s pool of %s frames at %dx%d, %.1f MB per frame, %.1f MB reserved",
+      format_name ? format_name : "?",
+      // Zero means the pool grows on demand, which is a different thing from a
+      // pool of no frames and must not read as one.
+      info.pool_size > 0 ? std::to_string(info.pool_size).c_str() : "on-demand",
+      info.width, info.height,
+      info.frame_bytes / 1048576.0,
+      info.pool_bytes / 1048576.0);
+}
+
 unsigned int effective_device_frame_budget(const std::vector<int> &monitor_budgets,
                                            unsigned int global_budget) {
   if (monitor_budgets.empty()) return global_budget;

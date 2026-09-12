@@ -2131,6 +2131,23 @@ void Monitor::UpdateFPS() {
     // an all-GPU path would remove. Queue depth is here because it is what
     // bounds how long a device frame would have to be held to avoid the round
     // trip -- the encode happens on the event thread, behind this one.
+    // The decode pool is the ceiling the budget has to live under, and ffmpeg
+    // has known its size since the first frame was decoded. Report it once,
+    // when it first exists -- it is fixed for the life of the decoder.
+    if (!hw_pool_reported_ and mVideoCodecContext and mVideoCodecContext->hw_frames_ctx) {
+      const HwPoolInfo pool = describe_hw_pool(mVideoCodecContext->hw_frames_ctx);
+      if (pool.width > 0) {
+        hw_pool_reported_ = true;
+        Info("Decode pool: %s; device frame budget is %u",
+             describe_hw_pool_line(pool).c_str(), zm_device_frame_budget());
+        if (pool.pool_size > 0 and zm_device_frame_budget() >= static_cast<unsigned int>(pool.pool_size)) {
+          Warning("Device frame budget %u is at or above the decode pool of %d frames; "
+                  "decoding will stall waiting for slots we are holding",
+                  zm_device_frame_budget(), pool.pool_size);
+        }
+      }
+    }
+
     const uint64_t downloads = hw_frame_downloads_.load();
     const uint64_t uploads = hw_frame_uploads_.load();
     const unsigned int on_card = zm_device_frames_in_flight();

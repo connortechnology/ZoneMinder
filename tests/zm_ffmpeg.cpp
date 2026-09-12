@@ -121,3 +121,69 @@ TEST_CASE("effective_device_frame_budget", "[ffmpeg]") {
     REQUIRE(effective_device_frame_budget({}, kGlobal) == kGlobal);
   }
 }
+
+TEST_CASE("hw_frame_bytes", "[ffmpeg]") {
+  SECTION("yuv420p costs width * height * 1.5") {
+    REQUIRE(hw_frame_bytes(AV_PIX_FMT_YUV420P, 1920, 1080) == 1920 * 1080 * 3 / 2);
+    REQUIRE(hw_frame_bytes(AV_PIX_FMT_YUV420P, 640, 480) == 640 * 480 * 3 / 2);
+  }
+
+  // The point of measuring in bytes: a frame count means wildly different
+  // things depending on the monitor, so a budget written in frames cannot be
+  // compared across them.
+  SECTION("4K costs about nine times what 720p does") {
+    const int64_t uhd = hw_frame_bytes(AV_PIX_FMT_YUV420P, 3840, 2160);
+    const int64_t hd = hw_frame_bytes(AV_PIX_FMT_YUV420P, 1280, 720);
+    REQUIRE(uhd == 9 * hd);
+  }
+
+  // Pins the packed size specifically. An allocator-aligned figure would be
+  // larger here and would vary with whatever alignment happened to be passed,
+  // which is no use for comparing one monitor against another.
+  SECTION("a width that is not a multiple of the alignment is still packed") {
+    REQUIRE(hw_frame_bytes(AV_PIX_FMT_YUV420P, 700, 500) == 700 * 500 * 3 / 2);
+  }
+
+  SECTION("nv12 costs the same as yuv420p, being the same sampling") {
+    REQUIRE(hw_frame_bytes(AV_PIX_FMT_NV12, 1920, 1080) ==
+            hw_frame_bytes(AV_PIX_FMT_YUV420P, 1920, 1080));
+  }
+
+  SECTION("an unusable format or geometry costs nothing rather than guessing") {
+    REQUIRE(hw_frame_bytes(AV_PIX_FMT_NONE, 1920, 1080) == 0);
+    REQUIRE(hw_frame_bytes(AV_PIX_FMT_YUV420P, 0, 1080) == 0);
+    REQUIRE(hw_frame_bytes(AV_PIX_FMT_YUV420P, 1920, -1) == 0);
+  }
+}
+
+TEST_CASE("describe_hw_pool_line", "[ffmpeg]") {
+  HwPoolInfo info;
+  info.pool_size = 20;
+  info.width = 1920;
+  info.height = 1080;
+  info.sw_format = AV_PIX_FMT_YUV420P;
+  info.frame_bytes = hw_frame_bytes(info.sw_format, info.width, info.height);
+  info.pool_bytes = info.frame_bytes * info.pool_size;
+
+  SECTION("names the format, the slots and the geometry") {
+    const std::string line = describe_hw_pool_line(info);
+    REQUIRE(line.find("yuv420p") != std::string::npos);
+    REQUIRE(line.find("20 frames") != std::string::npos);
+    REQUIRE(line.find("1920x1080") != std::string::npos);
+  }
+
+  SECTION("reports the reservation, which is what card memory actually goes on") {
+    // 20 * 1920 * 1080 * 1.5 = 59.3 MB
+    REQUIRE(describe_hw_pool_line(info).find("59.3 MB reserved") != std::string::npos);
+  }
+
+  // A pool that grows on demand has no fixed ceiling, which is a different
+  // thing from a pool with no slots and must not read as one.
+  SECTION("a growing pool says so rather than reading as empty") {
+    info.pool_size = 0;
+    info.pool_bytes = 0;
+    const std::string line = describe_hw_pool_line(info);
+    REQUIRE(line.find("on-demand frames") != std::string::npos);
+    REQUIRE(line.find("0 frames") == std::string::npos);
+  }
+}
