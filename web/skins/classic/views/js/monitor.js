@@ -1131,7 +1131,7 @@ function ObjectDetection_onChange(od_select) {
     $j('#ObjectDetectionModel').hide();
     $j('#ObjectDetectionObjectThreshold').hide();
     $j('#ObjectDetectionNMSThreshold').hide();
-  } else if (od == 'quadra' || od == 'memx' || od == 'mx_accl' || od == 'openvino' || od == 'speedai') {
+  } else if (od == 'quadra' || od == 'memx' || od == 'mx_accl' || od == 'openvino') {
     $j('#ObjectDetectionModel').show();
     $j('#ObjectDetectionObjectThreshold').show();
     $j('#ObjectDetectionNMSThreshold').show();

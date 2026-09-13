@@ -979,15 +979,6 @@ endif()
 # let a packager override the lot. Every directory named here has to be one only
 # root can write to, or perl's taint checks will refuse to run anything at all.
 set(_zm_script_path "/bin:/usr/bin:/usr/local/bin")
-
-# The SpeedAI runtime installs outside the FHS locations and the Perl daemons
-# have to be able to find its binaries. These used to be hardcoded into the
-# PATH assignment in zmdc.pl.in and zmpkg.pl.in; carry them on the default
-# instead, so a packager overriding ZM_SCRIPT_PATH still gets to decide.
-foreach(_zm_speedai_dir "/opt/untether/speedai/bin" "/opt/untether/speedai/share/scripts")
-  set(_zm_script_path "${_zm_script_path}:${_zm_speedai_dir}")
-endforeach()
-unset(_zm_speedai_dir)
 find_program(ZM_DB_CLIENT_EXECUTABLE NAMES mariadb mysql)
 if(ZM_DB_CLIENT_EXECUTABLE)
   get_filename_component(_zm_db_client_dir "${ZM_DB_CLIENT_EXECUTABLE}" DIRECTORY)

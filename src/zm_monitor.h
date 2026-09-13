@@ -603,7 +603,7 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   // monitor sheds hundreds of frames a minute at the budget that a 20fps one
   // barely reaches.
   int     device_frame_budget;
-  ObjectDetectionOption objectdetection;    // none, quadra, speedai, uvicorn
+  ObjectDetectionOption objectdetection;    // none, quadra, uvicorn, mx_accl, openvino
   std::string objectdetection_model;
   float   objectdetection_object_threshold;
   float   objectdetection_nms_threshold;

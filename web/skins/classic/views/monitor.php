@@ -1171,8 +1171,6 @@ echo htmlSelect('newMonitor[Decoder]', $decoders, $monitor->Decoder());
               <label><?php echo translate('Object Detection')?></label>
 <?php
         $od_options = ['none'=>'None', 'uvicorn'=>'Remote API'];
-        if (defined('HAVE_UNTETHER'))
-          $od_options['speedai'] = 'Untether SpeedAI';
         if (defined('ZM_HAVE_QUADRA') and ZM_HAVE_QUADRA)
           $od_options['quadra'] = 'NetInt Quadra';
         if (defined('HAVE_MEMX'))
@@ -1185,7 +1183,7 @@ echo htmlSelect('newMonitor[Decoder]', $decoders, $monitor->Decoder());
         echo htmlSelect('newMonitor[ObjectDetection]', $od_options, $monitor->ObjectDetection(), [ 'data-on-change-this'=>'ObjectDetection_onChange']);
 ?>
             </li>
-<?php if (defined('HAVE_UNTETHER') or (defined('ZM_HAVE_QUADRA') and ZM_HAVE_QUADRA) or (defined('ZM_HAVE_OPENVINO') and ZM_HAVE_OPENVINO)) { ?>
+<?php if ((defined('ZM_HAVE_QUADRA') and ZM_HAVE_QUADRA) or (defined('ZM_HAVE_OPENVINO') and ZM_HAVE_OPENVINO)) { ?>
             <li id="ObjectDetectionModel" class="ObjectDetectionModel">
               <label><?php echo translate('Object Detection Model')?></label>
 <?php
@@ -1205,9 +1203,6 @@ echo htmlSelect('newMonitor[Decoder]', $decoders, $monitor->Decoder());
                 if (!isset($models['mx_accl'])) $models['mx_accl'] = [];
                 $models['mx_accl'][$model] = $model;
               }
-            } else if ($extension == 'uxf' and defined('HAVE_UNTETHER')) {
-              if (!isset($models['speedai'])) $models['speedai'] = [];
-              $models['speedai'][$model] = $model;
             } else if ($extension == 'nb' and defined('ZM_HAVE_QUADRA') and ZM_HAVE_QUADRA) {
               if (!isset($models['quadra'])) $models['quadra'] = [];
               $models['quadra'][$model] = $model;
