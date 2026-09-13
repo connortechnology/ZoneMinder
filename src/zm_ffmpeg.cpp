@@ -340,6 +340,7 @@ std::atomic<uint64_t> device_frames_shed_total{0};
 // Report the episode on a timer instead, carrying the count so the rate shows.
 constexpr int64_t kShedReportIntervalUs = 60 * 1000 * 1000;
 constexpr int64_t kAvLogRepeatIntervalUs = 60 * 1000 * 1000;
+std::atomic<int> device_frame_card{-1};
 std::atomic<int64_t> device_frames_shed_reported_at{0};
 std::atomic<uint64_t> device_frames_shed_at_last_report{0};
 
@@ -348,6 +349,10 @@ int64_t steady_now_us() {
       std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 }  // namespace
+
+void zm_set_device_frame_card(int card) {
+  device_frame_card.store(card, std::memory_order_relaxed);
+}
 
 bool shed_report_due(int64_t now_us, int64_t last_report_us, int64_t interval_us) {
   // Nothing reported yet: the first shed of a run is always worth saying.
@@ -390,12 +395,16 @@ bool zm_device_frame_should_shed() {
       const uint64_t total = device_frames_shed_total.load(std::memory_order_relaxed);
       const uint64_t since = total - device_frames_shed_at_last_report.exchange(
           total, std::memory_order_relaxed);
-      Warning("Holding %u hardware frames, at the budget of %u; "
+      const int card = device_frame_card.load(std::memory_order_relaxed);
+      const std::string where =
+          (card >= 0) ? stringtf(" on card %d", card) : std::string();
+      Warning("Holding %u hardware frames%s, at the budget of %u; "
               "releasing frames back to the card until occupancy falls to %u "
               "(%ju given back since the last report). "
               "Recording is unaffected -- frames are re-uploaded for encoding -- "
               "but the saving from keeping them on the card is lost meanwhile.",
-              in_flight, budget, budget / 2, static_cast<uintmax_t>(since));
+              in_flight, where.c_str(), budget, budget / 2,
+              static_cast<uintmax_t>(since));
     }
   } else if (in_flight <= budget / 2) {
     // Low-water reached: stop shedding and let occupancy build again. At Debug
@@ -478,16 +487,18 @@ unsigned int effective_device_frame_budget(const std::vector<int> &monitor_budge
                                            unsigned int global_budget) {
   if (monitor_budgets.empty()) return global_budget;
 
-  unsigned int total = 0;
+  unsigned int smallest = 0;
+  bool have = false;
   for (int budget : monitor_budgets) {
     const unsigned int effective =
         (budget < 0) ? global_budget : static_cast<unsigned int>(budget);
     // Uncapped for one monitor is uncapped for the process: there is a single
     // gauge, so there is no way to hold this monitor's frames and shed another's.
     if (effective == 0) return 0;
-    total += effective;
+    if (!have or effective < smallest) smallest = effective;
+    have = true;
   }
-  return total;
+  return smallest;
 }
 
 bool software_frames_expected(bool object_detection_enabled, unsigned int device_frame_budget) {
