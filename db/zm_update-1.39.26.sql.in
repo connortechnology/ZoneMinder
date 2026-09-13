@@ -66,18 +66,6 @@ SET
 -- nullable rather than defaulting to 0.
 --
 
-SET @s = (SELECT IF(
-    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema = DATABASE()
-     AND table_name = 'Monitors' AND column_name = 'DeviceFrameBudget'
-    ) > 0,
-"SELECT 'Column DeviceFrameBudget already exists'",
-"ALTER TABLE `Monitors` ADD `DeviceFrameBudget` int(10) default NULL AFTER `DecoderHWAccelDevice`"
-));
-
-PREPARE stmt FROM @s;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
 -- Installs the consolidated event_update_trigger and event_delete_trigger,
 -- and drops the bucket triggers again for good measure.
 source @PKGDATADIR@/db/triggers.sql
