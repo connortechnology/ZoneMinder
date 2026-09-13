@@ -2162,7 +2162,14 @@ void Monitor::UpdateFPS() {
         // the frames context, which does not exist until a frame is decoded.
         // Servers commonly hold more than one card, so an unattributed figure
         // is not much use.
+#ifdef HAVE_QUADRA
         const int card = ni_get_cardno(mVideoCodecContext);
+#else
+        // Card attribution is a NetInt notion -- ni_get_cardno only exists under
+        // HAVE_QUADRA, and reading it unguarded stops the build on every other
+        // backend. -1 is the same value it returns when it cannot tell.
+        const int card = -1;
+#endif
         zm_set_device_frame_card(card);
         Info("Decode pool on card %d: %s; device frame budget is %u",
              card, describe_hw_pool_line(pool).c_str(), zm_device_frame_budget());
