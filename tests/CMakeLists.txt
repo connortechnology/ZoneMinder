@@ -17,6 +17,7 @@ set(TEST_SOURCES
   zm_db_contention_live.cpp
   zm_db_schema.cpp
   zm_box.cpp
+  zm_audio_detector.cpp
   zm_comms.cpp
   zm_crypt.cpp
   zm_ffmpeg.cpp
@@ -30,10 +31,13 @@ set(TEST_SOURCES
   zm_netint_lpr.cpp
   zm_netint_yolo.cpp
   zm_object_classes.cpp
+  zm_packetqueue.cpp
+  zm_monitor_action.cpp
   zm_onvif_auth_error.cpp
   zm_onvif_renewal.cpp
   zm_onvif_wsse.cpp
   zm_pixformat.cpp
+  zm_rtsp_deprecation.cpp
   zm_stream.cpp
   zm_stream_races.cpp
   zm_swscale_range.cpp
@@ -51,7 +55,7 @@ set(TEST_SOURCES
   zm_ffmpeg_camera.cpp
   zm_ffmpeg_fallback.cpp)
 
-add_executable(tests main.cpp ${TEST_SOURCES})
+add_executable(tests ${TEST_SOURCES})
 
 target_link_libraries(tests
   PRIVATE

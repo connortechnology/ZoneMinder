@@ -55,7 +55,10 @@
 #include <algorithm>
 #include <cstring>
 #include <sys/types.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
+#include <string>
 #include <utility>
 
 #if ZM_MEM_MAPPED
@@ -115,8 +118,9 @@ std::string load_monitor_sql =
 #if MOSQUITTOPP_FOUND
     ", `MQTT_Enabled`, `MQTT_Subscriptions`"
 #endif
-    ", `StartupDelay`"
-    " FROM `Monitors`";
+  ", `StartupDelay`"
+  ", `AudioDetection`, `AudioThreshold`, `AudioAlarmScore`"
+  " FROM `Monitors`";
 
 std::string CameraType_Strings[] = {"Unknown", "Local",  "Remote",   "File",
                                     "Ffmpeg",  "LibVLC", "NVSOCKET", "VNC"};
@@ -201,6 +205,9 @@ Monitor::Monitor() :
   output_container(""),
   imagePixFormat(AV_PIX_FMT_NONE),
   record_audio(false),
+  audio_detection(false),
+  audio_threshold(0),
+  audio_alarm_score(0),
   wallclock_timestamps(false),
 //event_prefix
 //label_format
@@ -297,6 +304,7 @@ Monitor::Monitor() :
   //linked_monitors_string
   n_linked_monitors(0),
   linked_monitors(nullptr),
+  alarm_actions_fired(false),
   RTSP2Web_Manager(nullptr),
   Go2RTC_Manager(nullptr),
   Janus_Manager(nullptr),
@@ -759,6 +767,13 @@ void Monitor::Load(MYSQL_ROW dbrow, bool load_zones = true, Purpose p = QUERY) {
   startup_delay = dbrow[col] ? atoi(dbrow[col]) : 0;
   col++;
 
+  audio_detection = dbrow[col] ? atoi(dbrow[col]) : false;
+  col++;
+  audio_threshold = dbrow[col] ? atoi(dbrow[col]) : 0;
+  col++;
+  audio_alarm_score = dbrow[col] ? atoi(dbrow[col]) : 0;
+  col++;
+
   // How many frames we need to have before we start analysing.
   // Must account for alarm_frame_count because openEvent walks back
   // max(pre_event_count, alarm_frame_count) frames from the analysis point.
@@ -830,6 +845,10 @@ void Monitor::LoadCamera() {
             camera_height, colours, brightness, contrast, hue, colour,
             purpose == CAPTURE, record_audio);
       } else if (protocol == "rtsp") {
+        Warning("Monitor %u (%s): the Remote/RTSP capture method is deprecated as of 1.40 and "
+                "will be removed in 1.41. Change this monitor to Type 'Ffmpeg' with Source Path %s",
+                id, name.c_str(),
+                remove_authentication(RtspUrlFromRemote(host, port, path, user, pass)).c_str());
         camera = zm::make_unique<RemoteCameraRtsp>(
             this, method,
             host,  // Host
@@ -1319,6 +1338,7 @@ bool Monitor::connect() {
     shared_data->valid = true;
 
     ReloadLinkedMonitors();
+    LoadActions();
 
     // Normally we trust ZoneCount in the monitor field.  In a healthy db it should be correct. 
     ReloadZones();
@@ -2333,6 +2353,26 @@ int Monitor::Analyse() {
         cause += "AMCREST";
       }
 
+      // Audio is scored from the capture thread's most recent reading rather
+      // than per audio packet: the score belongs to a video frame, and audio
+      // packets do not arrive in step with them.
+      if (audio_detection and shared_data->audio_alarm) {
+        score += audio_alarm_score;
+        Debug(4, "Triggered on AUDIO level %d >= %d, score += %d",
+              shared_data->audio_level, audio_threshold, audio_alarm_score);
+        Event::StringSet noteSet;
+        // A constant, like the ONVIF and Amcrest notes above. Event::updateNotes
+        // only ever inserts into the set and rewrites the Notes column on each
+        // new string, so a live measurement here added a fresh entry - and a
+        // database write - on nearly every alarmed frame, and the event ended up
+        // carrying "level 10, level 11, level 12, ..." for every value it passed
+        // through. The reading belongs in the log line above, which has it.
+        noteSet.insert(AUDIO_CAUSE);
+        noteSetMap[AUDIO_CAUSE] = noteSet;
+        if (!cause.empty()) cause += ", ";
+        cause += AUDIO_CAUSE;
+      }
+
       // Specifically told to be on.  Setting the score here is not enough to trigger the alarm. Must jump directly to ALARM
       if (trigger_data->trigger_state == TriggerState::TRIGGER_ON) {
         score += trigger_data->trigger_score;
@@ -2375,6 +2415,7 @@ int Monitor::Analyse() {
           }  // end if doing analysing
         }
         shared_data->state = state = IDLE;
+        EndAlarmActions();
       }  // end if signal change
 
       if (signal) {
@@ -2522,6 +2563,11 @@ int Monitor::Analyse() {
               Info("%s: %03d - Gone into alarm state PreAlarmCount: %u > AlarmFrameCount:%u Cause:%s",
                    name.c_str(), packet->image_index, Event::PreAlarmCount(), alarm_frame_count, cause.c_str());
               shared_data->state = state = ALARM;
+              // Only the genuine entry into alarm fires actions. The
+              // ALERT->ALARM path below is a re-trigger within one alarm and
+              // would sound a speaker repeatedly through a single incident.
+              alarm_actions_fired = true;
+              RunActions(EventAction::ALARM);
             } else if (state != PREALARM) {
               Info("%s: %03d - Gone into prealarm state", name.c_str(),
                    analysis_image_count);
@@ -2565,8 +2611,8 @@ int Monitor::Analyse() {
               if ((analysis_image_count - last_alarm_count) >
                   post_event_count) {
                 shared_data->state = state = IDLE;
-                Info("%s: %03d - Left alert state", name.c_str(),
-                     analysis_image_count);
+                Info("%s: %03d - Left alert state", name.c_str(), analysis_image_count);
+                EndAlarmActions();
               }
             } else if (state == PREALARM) {
               // Back to IDLE
@@ -2760,7 +2806,8 @@ int Monitor::Analyse() {
         closeEvent();
       }
       shared_data->state = state = IDLE;
-    }  // end if ( trigger_data->trigger_state != TRIGGER_OFF )
+      EndAlarmActions();
+    } // end if ( trigger_data->trigger_state != TRIGGER_OFF )
 
     if (packet->codec_type == AVMEDIA_TYPE_VIDEO) {
       if (packetqueue.should_try_clear(packet->keyframe)) {
@@ -3436,6 +3483,11 @@ void Monitor::Reload() {
     Load(dbrow, true /*load zones */, purpose);
     delete row;
   }  // end if row
+
+  // Actions are otherwise only read during setup, so an action added or edited
+  // in the web UI would not fire until the monitor's daemon was restarted.
+  // Zones are already re-read by Load() above; actions have the same lifetime.
+  LoadActions();
 }  // end void Monitor::Reload()
 
 void Monitor::ReloadZones() {
@@ -3495,6 +3547,176 @@ void Monitor::ReloadLinkedMonitors() {
     }
   }  // end if p_linked_monitors
 }  // end void Monitor::ReloadLinkedMonitors()
+
+std::string Monitor::RtspUrlFromRemote(
+    const std::string &host, const std::string &port,
+    const std::string &path, const std::string &user, const std::string &pass) {
+  std::string url = "rtsp://";
+  if (!user.empty()) {
+    // Credentials are percent-encoded: a password containing @ or : would
+    // otherwise split the authority in the wrong place.
+    url += UriEncode(user);
+    if (!pass.empty()) url += ":" + UriEncode(pass);
+    url += "@";
+  }
+  url += host;
+  // The stored port is kept even when it is the default, so the operator can
+  // paste the result without having to know what the default is.
+  if (!port.empty()) url += ":" + port;
+  if (path.empty()) {
+    url += "/";
+  } else {
+    if (path[0] != '/') url += "/";
+    url += path;
+  }
+  return url;
+}
+
+const char *Monitor::ActionCommandName(const std::string &action_type) {
+  // Deliberately a whitelist keyed off the DB enum rather than passing the
+  // stored string through: nothing out of the database reaches the control
+  // daemon without being recognised here first.
+  if (action_type == "LightOn") return "lightOn";
+  if (action_type == "LightOff") return "lightOff";
+  if (action_type == "IndicatorLightOn") return "indicatorLightOn";
+  if (action_type == "IndicatorLightOff") return "indicatorLightOff";
+  if (action_type == "AudioPlay") return "audioPlay";
+  if (action_type == "AudioStop") return "audioStop";
+  return nullptr;
+}
+
+const char *Monitor::ActionTriggerName(EventAction::TriggerOn trigger) {
+  switch (trigger) {
+    case EventAction::EVENT_START: return "EventStart";
+    case EventAction::EVENT_END:   return "EventEnd";
+    case EventAction::ALARM:       return "Alarm";
+    case EventAction::ALARM_END:   return "AlarmEnd";
+    case EventAction::MANUAL:      return "Manual";
+  }
+  return "";
+}
+
+// zmcontrol.pl reads one line of JSON from its socket and calls the named
+// method on the Control object, so this is the whole wire format.
+std::string Monitor::ActionMessage(const EventAction &action) {
+  const char *command = ActionCommandName(action.action_type);
+  if (!command) return "";
+
+  std::string message = std::string("{\"command\":\"") + command + "\"";
+  // Only audioPlay takes a file; -1 means the action does not carry one.
+  if (action.audio_file >= 0 && action.action_type == "AudioPlay")
+    message += ",\"file\":" + std::to_string(action.audio_file);
+  message += "}";
+  return message;
+}
+
+void Monitor::LoadActions() {
+  actions.clear();
+
+  std::string sql = stringtf(
+      "SELECT `TriggerOn`, `ActionType`, `TargetMonitorId`, `AudioFile`"
+      " FROM `MonitorActions` WHERE `MonitorId`=%u AND `Enabled`=1"
+      " ORDER BY `Sequence`, `Id`", id);
+
+  MYSQL_RES *result = zmDbFetch(sql);
+  if (!result) {
+    Error("Can't load actions for monitor %u: %s", id, mysql_error(&dbconn));
+    return;
+  }
+
+  while (MYSQL_ROW dbrow = mysql_fetch_row(result)) {
+    EventAction action;
+    const std::string trigger = dbrow[0] ? dbrow[0] : "";
+    if (trigger == "EventStart") action.trigger = EventAction::EVENT_START;
+    else if (trigger == "EventEnd") action.trigger = EventAction::EVENT_END;
+    else if (trigger == "Alarm") action.trigger = EventAction::ALARM;
+    else if (trigger == "AlarmEnd") action.trigger = EventAction::ALARM_END;
+    else if (trigger == "Manual") action.trigger = EventAction::MANUAL;
+    else {
+      Warning("Monitor %u: ignoring action with unknown trigger '%s'", id, trigger.c_str());
+      continue;
+    }
+
+    action.action_type = dbrow[1] ? dbrow[1] : "";
+    if (!ActionCommandName(action.action_type)) {
+      Warning("Monitor %u: ignoring action with unknown type '%s'",
+              id, action.action_type.c_str());
+      continue;
+    }
+
+    action.target_monitor_id = dbrow[2] ? atoi(dbrow[2]) : 0;
+    if (!action.target_monitor_id) {
+      Warning("Monitor %u: ignoring %s action with no target monitor",
+              id, action.action_type.c_str());
+      continue;
+    }
+    action.audio_file = dbrow[3] ? atoi(dbrow[3]) : -1;
+
+    actions.push_back(action);
+  }
+  mysql_free_result(result);
+  Debug(1, "Monitor %u loaded %zu actions", id, actions.size());
+}
+
+// Actions are fire-and-forget: a speaker that is offline must never hold up
+// event handling, so a failed connect is logged and skipped rather than
+// retried. Manual actions are driven from the web ui and are never run here.
+void Monitor::EndAlarmActions() {
+  // Every path out of the alarm condition calls this, including the abnormal
+  // ones. A light switched on by an alarm must not stay on because the camera
+  // lost signal or the trigger was turned off.
+  if (!alarm_actions_fired) return;
+  alarm_actions_fired = false;
+  RunActions(EventAction::ALARM_END);
+}
+
+void Monitor::RunActions(EventAction::TriggerOn trigger) {
+  for (const EventAction &action : actions) {
+    if (action.trigger != trigger) continue;
+
+    const std::string message = ActionMessage(action);
+    if (message.empty()) continue;
+
+    std::string sock_path = stringtf("%s/zmcontrol-%u.sock",
+        staticConfig.PATH_SOCKS.c_str(), action.target_monitor_id);
+
+    int sd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sd < 0) {
+      Error("Can't create socket for action %s: %s",
+            action.action_type.c_str(), strerror(errno));
+      continue;
+    }
+
+    struct sockaddr_un addr = {};
+    addr.sun_family = AF_UNIX;
+    if (sock_path.length() >= sizeof(addr.sun_path)) {
+      Error("Control socket path too long: %s", sock_path.c_str());
+      ::close(sd);
+      continue;
+    }
+    strncpy(addr.sun_path, sock_path.c_str(), sizeof(addr.sun_path)-1);
+
+    if (::connect(sd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+      // Usually means no zmcontrol daemon is running for the target.
+      Warning("Monitor %u: %s action on monitor %u skipped, can't connect to %s: %s",
+              id, action.action_type.c_str(), action.target_monitor_id,
+              sock_path.c_str(), strerror(errno));
+      ::close(sd);
+      continue;
+    }
+
+    // zmcontrol.pl reads a line, so the newline is required.
+    const std::string line = message + "\n";
+    if (::write(sd, line.c_str(), line.length()) < 0) {
+      Error("Monitor %u: failed writing %s action to monitor %u: %s",
+            id, action.action_type.c_str(), action.target_monitor_id, strerror(errno));
+    } else {
+      Debug(1, "Monitor %u ran %s action on monitor %u: %s",
+            id, ActionTriggerName(trigger), action.target_monitor_id, message.c_str());
+    }
+    ::close(sd);
+  }  // end foreach action
+}  // end void Monitor::RunActions(EventAction::TriggerOn)
 
 std::vector<std::shared_ptr<Monitor>> Monitor::LoadMonitors(
     const std::string &where, Purpose purpose) {
@@ -3646,6 +3868,24 @@ int Monitor::Capture() {
       }
     } else if (packet->codec_type == AVMEDIA_TYPE_AUDIO) {
       if (audio_fifo) audio_fifo->writePacket(*packet);
+
+      if (audio_detection) {
+        // Opened here rather than at camera setup because a stream can gain
+        // audio on a reconnect, and because a monitor with detection off
+        // should not carry a decoder it never uses.
+        if (!audio_detector.IsOpen()) {
+          AVStream *audio_stream = camera->getAudioStream();
+          if (audio_stream) audio_detector.Open(audio_stream->codecpar);
+        }
+        if (audio_detector.IsOpen()) {
+          const int level = audio_detector.Process(packet->packet.get());
+          const bool alarm = AudioDetector::IsAlarm(level, audio_threshold);
+          shared_data->audio_level = static_cast<uint8_t>(level);
+          shared_data->audio_alarm = alarm ? 1 : 0;
+          if (alarm)
+            Debug(3, "Audio level %d over threshold %d", level, audio_threshold);
+        }
+      }
 
       // Only queue if we have some video packets in there. Should push this logic into packetqueue
       if (record_audio and (packetqueue.packet_count(video_stream_id) or event)) {
@@ -4231,6 +4471,15 @@ Event * Monitor::openEvent(
       (cause == "Continuous" ? 0 : (pre_event_count > alarm_frame_count ? pre_event_count : alarm_frame_count))
       );
   auto starting_packet = *(*start_it);
+  if (!starting_packet) {
+    Warning("Unable to get starting packet");
+    // Every other path out of here hands start_it to the Event, which frees it
+    // in ~Event. Leaking it leaves a registered iterator pinned to the front of
+    // the queue, which stops clearPackets() removing anything for the life of
+    // the process.
+    packetqueue.free_it(start_it);
+    return nullptr;
+  }
   auto av_packet = starting_packet->av_packet();
   ZM_DUMP_PACKET(av_packet, "start packet");
 
@@ -4253,6 +4502,8 @@ Event * Monitor::openEvent(
 #if MOSQUITTOPP_FOUND
   if (mqtt) mqtt->send(stringtf("event start: %" PRId64, event->Id()));
 #endif
+
+  RunActions(EventAction::EVENT_START);
 
   if (!event_start_command.empty()) {
     Debug(1, "event start command is: %s %" PRId64 " %d", event_start_command.c_str(), event->Id(), event->MonitorId());
@@ -4312,6 +4563,10 @@ void Monitor::closeEvent() {
 #if MOSQUITTOPP_FOUND
   if (mqtt) mqtt->send(stringtf("event end: %" PRId64, event->Id()));
 #endif
+  // Run on this thread, before the event is handed to the closing thread: the
+  // lambda below does not capture `this` and the Monitor may outlive it.
+  RunActions(EventAction::EVENT_END);
+
   Debug(1, "Starting thread to close event");
   std::lock_guard<std::mutex> close_lck(close_event_thread_mutex);
   close_event_thread = std::thread([](Event *e, const std::string &command) {
