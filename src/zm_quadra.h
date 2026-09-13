@@ -58,25 +58,11 @@ struct BlockUsage {
   int load = -1;         // percent, as the firmware reports it
   int model_load = -1;   // percent, as libxcoder models it
   unsigned int active_instances = 0;
-
-  // From a firmware query on the device, which is the only place these exist --
-  // the shared pool does not carry them. This is what a budget has to be
-  // written against: memory the card is actually holding, rather than a count
-  // of sessions. The query needs write access to the locks in /dev/shm, which
-  // the daemon has; it does not need root, despite ni_rsrc_mon saying so for
-  // its own other operations.
-  int video_mem_usage = -1;   // percent of the card's video memory in use
-  int share_mem_usage = -1;   // percent of shared memory in use
-  int p2p_mem_usage = -1;     // percent of the peer-to-peer area in use
-  int64_t total_pixel_load = -1;
 };
 
-// Reads one block type, one entry per card. Instance counts and load come from
-// the shared pool; memory and pixel load come from a read-only query on the
-// device, which is what ni_rsrc_mon does and cannot disturb anything running.
-//
-// Empty when the pool cannot be read, which includes the caller lacking
-// permission on it; that is logged once and then left alone.
+// Reads the resource pool for one block type, one entry per card. Empty when
+// the pool cannot be read, which includes the caller lacking permission on it;
+// that is logged once and then left alone.
 std::vector<BlockUsage> block_usage(ni_device_type_t type);
 
 // A one-line summary for logging. Values the card did not report print as "?"
