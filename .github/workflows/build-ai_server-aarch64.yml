@@ -89,7 +89,10 @@ jobs:
           # gpg picks passphrase from environment via loopback
         run: |
           cd ../
-          ln -sf zoneminder ZoneMinder_ZoneMinder.git
+          # No symlink games: -l below points the script straight at the
+          # checkout. The old "ln -sf zoneminder ..." dangled, because the
+          # checkout directory is named for the repository (ZoneMinder), so
+          # the script fell through to cloning ZoneMinder/ZoneMinder instead.
           # Needed because we are running as root
           git config --global --add safe.directory /__w/zoneminder/zoneminder
           git config --global --add safe.directory /__w/zoneminder/ZoneMinder_ZoneMinder.git/.git
@@ -103,7 +106,12 @@ jobs:
           # Tell gpg to use loopback + passphrase
           export GPG_TTY=$(tty || true)
           ls -l /bin/bash
-          ./do_debian_package.sh -s=CURRENT -t=binary
+          # -b is not optional: without it do_debian_package.sh defaults BRANCH to
+          # master and then checks it out, so the package would be built from
+          # master's source and merely labelled as this branch. -v=1 gives the
+          # -jammy1 style revision every other repo uses.
+          ./do_debian_package.sh -s=CURRENT -t=binary -b=${GITHUB_REF_NAME} -v=1 \
+            -l="$GITHUB_WORKSPACE"
       - name: Cleanup
         run: |
           rm -rf *_zoneminder_release *.build

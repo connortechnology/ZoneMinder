@@ -482,6 +482,10 @@ AVBufferRef *encoder_share_pool(AVBufferRef *decoder_pool, bool software_frames_
 // nothing is being shed; a budget of zero disables shedding entirely.
 bool software_frames_expected(bool object_detection_enabled, unsigned int device_frame_budget);
 
+// Records which card this daemon's device frames are on, for the shed report.
+// -1 when it is not known, or when the daemon spans more than one card.
+void zm_set_device_frame_card(int card);
+
 // Whether a shedding episode is due to be reported. A monitor at its cap
 // re-enters shedding several times a second, so the message is put on a timer
 // rather than tied to the latch; last_report_us of 0 means nothing has been
@@ -491,11 +495,17 @@ bool shed_report_due(int64_t now_us, int64_t last_report_us, int64_t interval_us
 // The process-wide device frame budget for a daemon serving these monitors.
 //
 // The gauge counts the process, and zmc is normally one process per monitor, so
-// this is usually just that monitor's figure. Where one daemon serves several
-// -- local devices sharing a /dev node -- their budgets add up, because the one
-// gauge covers all of them. A monitor asking for no cap (0) disables it for the
-// process, there being only the one gauge to disable. An entry of -1 means the
-// monitor has no override and takes the global budget.
+// this is usually just that monitor's figure. An entry of -1 means the monitor
+// has no override and takes the global budget; 0 asks for no cap and disables
+// it for the process, there being only the one gauge to disable.
+//
+// Where one daemon serves several monitors the budgets are NOT added. It is
+// common to have more than one card in a server, the gauge has no card
+// dimension, and which card a monitor lands on is not known until it has
+// decoded a frame -- long after this is resolved. Adding them would let the
+// monitors on one card pin the whole combined figure on that card alone. The
+// smallest is used instead, which no card can exceed, at the cost of
+// under-provisioning a daemon whose monitors do share a card.
 unsigned int effective_device_frame_budget(const std::vector<int> &monitor_budgets,
                                            unsigned int global_budget);
 

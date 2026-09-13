@@ -107,10 +107,15 @@ TEST_CASE("effective_device_frame_budget", "[ffmpeg]") {
     REQUIRE(effective_device_frame_budget({-1}, kGlobal) != 0);
   }
 
-  SECTION("a daemon serving several monitors gets their budgets added") {
-    // One gauge covers the process, so it has to cover all of them.
-    REQUIRE(effective_device_frame_budget({16, 4}, kGlobal) == 20);
-    REQUIRE(effective_device_frame_budget({-1, -1}, kGlobal) == 2 * kGlobal);
+  // Budgets are deliberately not added. Servers commonly hold more than one
+  // card, the gauge has no card dimension, and which card a monitor is on is
+  // not known until it decodes -- long after this is resolved. Adding them
+  // would let the monitors on one card pin the combined figure on that card.
+  SECTION("a daemon serving several monitors takes the smallest, not the sum") {
+    REQUIRE(effective_device_frame_budget({16, 4}, kGlobal) == 4);
+    REQUIRE(effective_device_frame_budget({4, 16}, kGlobal) == 4);
+    REQUIRE(effective_device_frame_budget({-1, -1}, kGlobal) == kGlobal);
+    REQUIRE(effective_device_frame_budget({-1, 4}, kGlobal) == 4);
   }
 
   SECTION("one monitor asking for no cap uncaps the process") {

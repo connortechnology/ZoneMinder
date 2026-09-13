@@ -2158,8 +2158,14 @@ void Monitor::UpdateFPS() {
       const HwPoolInfo pool = describe_hw_pool(mVideoCodecContext->hw_frames_ctx);
       if (pool.width > 0) {
         hw_pool_reported_ = true;
-        Info("Decode pool: %s; device frame budget is %u",
-             describe_hw_pool_line(pool).c_str(), zm_device_frame_budget());
+        // Which card this monitor landed on. Only knowable now: it comes from
+        // the frames context, which does not exist until a frame is decoded.
+        // Servers commonly hold more than one card, so an unattributed figure
+        // is not much use.
+        const int card = ni_get_cardno(mVideoCodecContext);
+        zm_set_device_frame_card(card);
+        Info("Decode pool on card %d: %s; device frame budget is %u",
+             card, describe_hw_pool_line(pool).c_str(), zm_device_frame_budget());
         if (pool.pool_size > 0 and zm_device_frame_budget() >= static_cast<unsigned int>(pool.pool_size)) {
           Warning("Device frame budget %u is at or above the decode pool of %d frames; "
                   "decoding will stall waiting for slots we are holding",
