@@ -32,6 +32,10 @@ zm_quadra::BlockUsage Decoder() {
   usage.load = 41;
   usage.model_load = 38;
   usage.active_instances = 3;
+  usage.video_mem_usage = 5;
+  usage.share_mem_usage = 12;
+  usage.p2p_mem_usage = 0;
+  usage.total_pixel_load = 148125000;
   return usage;
 }
 
@@ -52,7 +56,23 @@ TEST_CASE("zm_quadra::describe", "[quadra]") {
   // rather than a limit, so printing it as a denominator would imply headroom
   // nothing has established.
   SECTION("does not present a cap it cannot vouch for") {
-    REQUIRE(zm_quadra::describe(Decoder()).find("/") == std::string::npos);
+    // Specifically that the instance count carries no denominator; the line
+    // does contain a slash, in the pixel rate's units.
+    REQUIRE(zm_quadra::describe(Decoder()).find("3/") == std::string::npos);
+    REQUIRE(zm_quadra::describe(Decoder()).find("128") == std::string::npos);
+  }
+
+  // The figures the shared pool does not carry, and the reason for querying the
+  // firmware at all: a budget has to be written against what the card holds.
+  SECTION("reports the memory the card is actually using") {
+    const std::string line = zm_quadra::describe(Decoder());
+    REQUIRE(line.find("memory video 5%") != std::string::npos);
+    REQUIRE(line.find("share 12%") != std::string::npos);
+    REQUIRE(line.find("p2p 0%") != std::string::npos);
+  }
+
+  SECTION("reports pixel load") {
+    REQUIRE(zm_quadra::describe(Decoder()).find("148.1 Mpixel/s") != std::string::npos);
   }
 
   SECTION("reports both loads, which disagree often enough to be worth seeing") {
@@ -65,8 +85,13 @@ TEST_CASE("zm_quadra::describe", "[quadra]") {
     zm_quadra::BlockUsage usage = Decoder();
     usage.load = -1;
     usage.model_load = -1;
+    usage.video_mem_usage = -1;
+    usage.share_mem_usage = -1;
+    usage.p2p_mem_usage = -1;
     const std::string line = zm_quadra::describe(usage);
     REQUIRE(line.find("load ?") != std::string::npos);
+    // A card that would not answer must not read as one using no memory.
+    REQUIRE(line.find("memory video ?") != std::string::npos);
     REQUIRE(line.find("modelled ?") != std::string::npos);
     // A card that reports nothing must not read as a card under no load.
     REQUIRE(line.find("0%") == std::string::npos);

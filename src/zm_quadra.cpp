@@ -31,15 +31,53 @@ std::string percent(int value) {
   return (value < 0) ? std::string("?") : std::to_string(value) + "%";
 }
 
+// Fills in the figures only the firmware has. Best effort: the pool data is
+// still worth reporting if the device will not open or answer.
+void query_firmware_load(const ni_device_info_t &device, ni_device_type_t type,
+                         BlockUsage &usage) {
+  ni_device_context_t *device_context = ni_rsrc_get_device_context(type, device.module_id);
+  if (!device_context) return;
+
+  ni_session_context_t session;
+  if (ni_device_session_context_init(&session) != NI_RETCODE_SUCCESS) {
+    ni_rsrc_free_device_context(device_context);
+    return;
+  }
+
+  // Read-only, so the query cannot disturb a session anything else is running.
+  session.device_handle = ni_device_open2(device_context->p_device_info->dev_name,
+                                          NI_DEVICE_READ_ONLY);
+  if (session.device_handle != NI_INVALID_DEVICE_HANDLE) {
+    session.blk_io_handle = session.device_handle;
+    session.hw_id = device_context->p_device_info->hw_id;
+
+    if (ni_device_session_query(&session, type) == NI_RETCODE_SUCCESS) {
+      usage.video_mem_usage = static_cast<int>(session.load_query.fw_video_mem_usage);
+      usage.share_mem_usage = static_cast<int>(session.load_query.fw_share_mem_usage);
+      usage.p2p_mem_usage = static_cast<int>(session.load_query.fw_p2p_mem_usage);
+      usage.total_pixel_load = static_cast<int64_t>(session.load_query.total_pixel_load);
+    }
+    ni_device_close(session.device_handle);
+  }
+
+  ni_device_session_context_clear(&session);
+  ni_rsrc_free_device_context(device_context);
+}
+
 }  // namespace
 
 std::string describe(const BlockUsage &usage) {
-  return stringtf("%s card %d: %u instances, load %s (modelled %s)",
+  return stringtf("%s card %d: %u instances, load %s (modelled %s), "
+                  "memory video %s share %s p2p %s, %.1f Mpixel/s",
       block_name(usage.type),
       usage.card_idx,
       usage.active_instances,
       percent(usage.load).c_str(),
-      percent(usage.model_load).c_str());
+      percent(usage.model_load).c_str(),
+      percent(usage.video_mem_usage).c_str(),
+      percent(usage.share_mem_usage).c_str(),
+      percent(usage.p2p_mem_usage).c_str(),
+      usage.total_pixel_load < 0 ? 0.0 : usage.total_pixel_load / 1000000.0);
 }
 
 std::vector<BlockUsage> block_usage(ni_device_type_t type) {
@@ -69,6 +107,7 @@ std::vector<BlockUsage> block_usage(ni_device_type_t type) {
     usage.load = device.load;
     usage.model_load = device.model_load;
     usage.active_instances = device.active_num_inst;
+    query_firmware_load(device, type, usage);
     result.push_back(usage);
   }
   return result;
