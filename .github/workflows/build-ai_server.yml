@@ -96,7 +96,11 @@ jobs:
           # Tell gpg to use loopback + passphrase
           export GPG_TTY=$(tty || true)
           ls -l /bin/bash
-          ./do_debian_package.sh -s=CURRENT -t=binary
+          # -b is not optional: without it do_debian_package.sh defaults BRANCH to
+          # master and then checks it out, so the package would be built from
+          # master's source and merely labelled as this branch. -v=1 gives the
+          # -jammy1 style revision every other repo uses.
+          ./do_debian_package.sh -s=CURRENT -t=binary -b=${GITHUB_REF_NAME} -v=1
       - name: Cleanup
         run: |
           rm -rf *_zoneminder_release *.build
