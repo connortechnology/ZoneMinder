@@ -534,14 +534,24 @@ std::string describe_hw_pool_line(const HwPoolInfo &info);
 // insert per frame, indefinitely, for something that changes nothing. Count the
 // repeats and print one line an interval instead.
 struct AvLogRepeat {
-  std::string last;
-  // Explicit rather than treating a zero timestamp as "never": the timestamp
-  // gets overwritten with the time of the print, and a clock reading zero would
-  // leave the state looking unused for the rest of the process.
-  bool seen = false;
-  int64_t last_logged_us = 0;
-  uint64_t suppressed = 0;
+  struct Entry {
+    std::string message;
+    int64_t last_logged_us = 0;
+    uint64_t suppressed = 0;
+  };
+  // Each distinct message is tracked separately, not just the previous one. A
+  // decoder complaining about a stream cycles through variants -- one camera
+  // alternates between three SEI sizes -- and remembering only the last message
+  // suppresses none of them, because every message differs from the one before.
+  //
+  // Bounded, and the oldest entry is evicted when full, so a source that emits
+  // endlessly varying text costs a fixed amount and simply stops being limited
+  // rather than growing without end.
+  std::vector<Entry> recent;
 };
+
+// How many distinct messages are tracked before the oldest is evicted.
+constexpr size_t kAvLogRepeatTracked = 32;
 
 // Whether to print this message now. suppressed_out receives how many messages
 // were dropped since the last print, so the caller can say so.

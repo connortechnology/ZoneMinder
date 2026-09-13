@@ -215,6 +215,36 @@ TEST_CASE("av_log_should_print", "[ffmpeg]") {
     REQUIRE(av_log_should_print(state, "second", 1000, kMinute, &suppressed));
   }
 
+  // The failure the first version shipped with. The camera's SEI complaints
+  // cycle through three sizes, so every message differs from the one before,
+  // and a scheme that only remembers the previous message suppresses nothing.
+  SECTION("messages that alternate are each limited on their own") {
+    const char *distinct[] = {"size 66", "size 50", "size 34"};
+    for (const char *m : distinct) REQUIRE(av_log_should_print(state, m, 0, kMinute, &suppressed));
+
+    // Now the real traffic, which repeats some of them within a round.
+    const char *cycle[] = {"size 66", "size 66", "size 50", "size 50", "size 34"};
+    // Still inside the interval: every one of them is now known.
+    for (int round = 1; round < 200; round++) {
+      for (const char *m : cycle) {
+        REQUIRE_FALSE(av_log_should_print(state, m, round * 1000, kMinute, &suppressed));
+      }
+    }
+
+    // Each reports its own count: 199 rounds, and "size 66" appears twice a round.
+    REQUIRE(av_log_should_print(state, "size 66", kMinute, kMinute, &suppressed));
+    REQUIRE(suppressed == 2 * 199);
+    REQUIRE(av_log_should_print(state, "size 34", kMinute, kMinute, &suppressed));
+    REQUIRE(suppressed == 199);
+  }
+
+  SECTION("an endlessly varying source costs a bounded amount") {
+    for (int i = 0; i < 10 * static_cast<int>(kAvLogRepeatTracked); i++) {
+      REQUIRE(av_log_should_print(state, "msg " + std::to_string(i), i, kMinute, &suppressed));
+    }
+    REQUIRE(state.recent.size() == kAvLogRepeatTracked);
+  }
+
   SECTION("the count resets once reported, so it is per interval not cumulative") {
     REQUIRE(av_log_should_print(state, "x", 0, kMinute, &suppressed));
     REQUIRE_FALSE(av_log_should_print(state, "x", 1, kMinute, &suppressed));

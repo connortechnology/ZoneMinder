@@ -449,16 +449,28 @@ std::string describe_hw_pool_line(const HwPoolInfo &info) {
 bool av_log_should_print(AvLogRepeat &state, const std::string &message,
                          int64_t now_us, int64_t interval_us,
                          uint64_t *suppressed_out) {
-  if (state.seen and message == state.last
-      and now_us - state.last_logged_us < interval_us) {
-    state.suppressed++;
-    return false;
+  for (AvLogRepeat::Entry &entry : state.recent) {
+    if (entry.message != message) continue;
+    if (now_us - entry.last_logged_us < interval_us) {
+      entry.suppressed++;
+      return false;
+    }
+    if (suppressed_out) *suppressed_out = entry.suppressed;
+    entry.suppressed = 0;
+    entry.last_logged_us = now_us;
+    return true;
   }
-  if (suppressed_out) *suppressed_out = state.suppressed;
-  state.suppressed = 0;
-  state.seen = true;
-  state.last = message;
-  state.last_logged_us = now_us;
+
+  // Not seen before. Evict the least recently printed if the table is full.
+  if (state.recent.size() >= kAvLogRepeatTracked) {
+    size_t oldest = 0;
+    for (size_t i = 1; i < state.recent.size(); i++) {
+      if (state.recent[i].last_logged_us < state.recent[oldest].last_logged_us) oldest = i;
+    }
+    state.recent.erase(state.recent.begin() + oldest);
+  }
+  state.recent.push_back({message, now_us, 0});
+  if (suppressed_out) *suppressed_out = 0;
   return true;
 }
 
