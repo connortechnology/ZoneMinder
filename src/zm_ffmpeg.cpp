@@ -91,11 +91,17 @@ static CodecData enc_codecs[] = {
 #endif
   { AV_CODEC_ID_H265, "hevc", "hevc_vaapi", AV_PIX_FMT_NV12, AV_PIX_FMT_VAAPI, AV_HWDEVICE_TYPE_VAAPI, nullptr, nullptr },
   { AV_CODEC_ID_H265, "hevc", "hevc_qsv", AV_PIX_FMT_YUV420P, AV_PIX_FMT_QSV, AV_HWDEVICE_TYPE_QSV, nullptr, nullptr },
+  // nvenc twice: the CUDA row first so a frame decoded by the cuda hwaccel can
+  // be handed to the encoder still on the card (setup_hwaccel then shares the
+  // decoder's pool), the software row after it as the fallback for when no CUDA
+  // device opens or the frames arrive downloaded.
+  { AV_CODEC_ID_H265, "hevc", "hevc_nvenc", AV_PIX_FMT_NV12, AV_PIX_FMT_CUDA, AV_HWDEVICE_TYPE_CUDA, nullptr, nullptr },
   { AV_CODEC_ID_H265, "hevc", "hevc_nvenc", AV_PIX_FMT_YUV420P, AV_PIX_FMT_NV12, AV_HWDEVICE_TYPE_NONE, nullptr, nullptr },
   { AV_CODEC_ID_H265, "hevc", "libx265", AV_PIX_FMT_YUV420P, AV_PIX_FMT_YUV420P, AV_HWDEVICE_TYPE_NONE, nullptr, nullptr },
 
   { AV_CODEC_ID_H264, "h264", "h264_vaapi", AV_PIX_FMT_NV12, AV_PIX_FMT_VAAPI, AV_HWDEVICE_TYPE_VAAPI, nullptr, nullptr },
   { AV_CODEC_ID_H264, "h264", "h264_qsv", AV_PIX_FMT_YUV420P, AV_PIX_FMT_QSV, AV_HWDEVICE_TYPE_QSV, nullptr, nullptr },
+  { AV_CODEC_ID_H264, "h264", "h264_nvenc", AV_PIX_FMT_NV12, AV_PIX_FMT_CUDA, AV_HWDEVICE_TYPE_CUDA, nullptr, nullptr },
   { AV_CODEC_ID_H264, "h264", "h264_nvenc", AV_PIX_FMT_YUV420P, AV_PIX_FMT_NV12, AV_HWDEVICE_TYPE_NONE, nullptr, nullptr },
   { AV_CODEC_ID_H264, "h264", "h264_omx", AV_PIX_FMT_YUV420P, AV_PIX_FMT_YUV420P,  AV_HWDEVICE_TYPE_NONE, nullptr, nullptr },
   { AV_CODEC_ID_H264, "h264", "h264_v4l2m2m", AV_PIX_FMT_YUV420P, AV_PIX_FMT_YUV420P,  AV_HWDEVICE_TYPE_NONE, nullptr, nullptr },
