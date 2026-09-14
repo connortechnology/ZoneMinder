@@ -57,6 +57,7 @@ VideoStore::VideoStore(
   encode_count_(0),
   video_encoded(false),
   video_encoder_failed(false),
+  shares_decoder_pool(false),
   video_passthrough_fallback(false),
   hw_device_ctx(nullptr),
   resample_ctx(nullptr),
@@ -411,10 +412,10 @@ bool VideoStore::open() {
         const bool rewrites_frames = software_frames_expected(
             monitor->ObjectDetection() != Monitor::OBJECT_DETECTION_NONE,
             zm_device_frame_budget());
+        AVBufferRef *const decoder_pool = decoder_ctx ? decoder_ctx->hw_frames_ctx : nullptr;
         if (setup_hwaccel(video_out_ctx,
               chosen_codec_data, hw_device_ctx, monitor->EncoderHWAccelDevice(), monitor->Width(), monitor->Height(),
-              encoder_share_pool(decoder_ctx ? decoder_ctx->hw_frames_ctx : nullptr,
-                                 rewrites_frames))) {
+              encoder_share_pool(decoder_pool, rewrites_frames))) {
           avcodec_free_context(&video_out_ctx);
           av_dict_free(&opts);
           if (hw_device_ctx) {
@@ -469,8 +470,15 @@ bool VideoStore::open() {
         }
         av_dict_free(&opts);
 
+        // Ask the context rather than assume: setup_hwaccel only shares the pool
+        // when format and geometry match, so offering it is not the same as
+        // getting it. Identical AVBufferRef data means the same pool.
+        shares_decoder_pool = decoder_pool and video_out_ctx->hw_frames_ctx
+                              and (video_out_ctx->hw_frames_ctx->data == decoder_pool->data);
+
         if (video_out_codec) {
-          Info("Selected video encoder %s", video_out_codec->name);
+          Info("Selected video encoder %s%s", video_out_codec->name,
+               shares_decoder_pool ? " (taking frames from the decoder's pool)" : "");
           zm_dump_codec(video_out_ctx);
           break;
         }
@@ -1310,7 +1318,11 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
 
     av_frame_ptr frame(av_frame_alloc());
 
-    if (zm_packet->hw_frame) {
+    // Only take the device frame when this encoder draws from the same pool.
+    // Otherwise it is a surface the encoder does not own, which it encodes as
+    // black while reporting success -- and since both sides are
+    // AV_PIX_FMT_VAAPI the upload below does not fire to rescue it either.
+    if (zm_packet->hw_frame and shares_decoder_pool) {
       av_frame_ref(frame.get(), zm_packet->hw_frame.get());
     } else if (zm_packet->out_frame) {
       av_frame_ref(frame.get(), zm_packet->out_frame.get());
