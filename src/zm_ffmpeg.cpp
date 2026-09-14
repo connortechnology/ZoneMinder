@@ -398,11 +398,18 @@ bool zm_device_frame_should_shed() {
       const int card = device_frame_card.load(std::memory_order_relaxed);
       const std::string where =
           (card >= 0) ? stringtf(" on card %d", card) : std::string();
+      // What shedding actually costs depends on the monitor, and this gauge
+      // cannot see which kind it is serving, so say both rather than assert the
+      // wrong one. The previous wording claimed the frames get re-uploaded for
+      // encoding; on a monitor that records by passthrough nothing encodes at
+      // all, and one such monitor shed 99971 frames for exactly zero uploads.
       Warning("Holding %u hardware frames%s, at the budget of %u; "
               "releasing frames back to the card until occupancy falls to %u "
-              "(%ju given back since the last report). "
-              "Recording is unaffected -- frames are re-uploaded for encoding -- "
-              "but the saving from keeping them on the card is lost meanwhile.",
+              "(%ju given back since the last report). The software copy is "
+              "already downloaded so recording is unaffected; what is given up "
+              "is handing the device frame straight to the encoder, which costs "
+              "an upload per frame on a monitor that encodes and nothing at all "
+              "on one that records by passthrough.",
               in_flight, where.c_str(), budget, budget / 2,
               static_cast<uintmax_t>(since));
     }

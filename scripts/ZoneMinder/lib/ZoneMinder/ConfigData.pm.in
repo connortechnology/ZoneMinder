@@ -2510,10 +2510,19 @@ our @options = (
       Recording is unaffected either way, only the saving is lost.
 
       One zmc serves one monitor, so the real load on a card is this
-      figure times the number of monitors decoding on it. Raise it for a
-      monitor that reports being at the budget continuously, which means
-      it is pinning frames faster than it releases them and is paying the
-      round trip for most of its frames.
+      figure times the number of monitors decoding on it.
+
+      This only buys anything on a monitor that encodes from the device
+      frame. A monitor recording by passthrough never encodes, and one
+      doing object detection encodes an annotated software copy instead;
+      both download every frame regardless, so for them holding frames
+      costs pool slots and saves nothing. Check the HW frames debug line:
+      uploads at zero while recording means nothing is taking the device
+      frame, and the budget is not worth raising.
+
+      Raise it for a monitor that both reports being at the budget
+      continuously and shows uploads tracking downloads, which together
+      mean it is paying the round trip for most of its frames.
 
       Set to 0 to disable the cap. Doing so also lets the encoder share
       the decoder's frame pool, which removes the round trip entirely,
