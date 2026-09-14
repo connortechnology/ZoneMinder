@@ -59,6 +59,8 @@ VideoStore::VideoStore(
   video_encoder_failed(false),
   video_passthrough_fallback(false),
   hw_device_ctx(nullptr),
+  encoder_pool_shared(false),
+  upload_frames_ctx(nullptr),
   resample_ctx(nullptr),
   fifo(nullptr),
   converted_in_samples(nullptr),
@@ -404,17 +406,30 @@ bool VideoStore::open() {
            * the motion of the chroma plane does not match the luma plane. */
           video_out_ctx->mb_decision = 2;
         }
-        // Only offer the decoder's pool when every frame will reach the encoder
-        // still on the device. Uploading into a pool the decoder owns fails, so
-        // a pipeline that rewrites frames has to have a pool of its own.
+        // Share the decoder's pool so a decoded frame reaches the encoder
+        // untouched and we do not reserve a second set of surfaces (16 at 4K is
+        // ~200MB of card memory). The software frames a shed or an AI rewrite
+        // produces still have to go somewhere: they upload into our own
+        // upload_frames_ctx rather than taking a surface out of the shared pool.
+        //
+        // Quadra is the exception. Its encoder renders a surface from any pool
+        // but its own as black, without an error, so there the pool the encoder
+        // was opened with has to be the pool every frame comes from -- which
+        // rules out sharing as soon as a software frame is possible at all.
         const AVCodecContext *decoder_ctx = monitor->GetVideoCodecContext();
-        const bool rewrites_frames = software_frames_expected(
-            monitor->ObjectDetection() != Monitor::OBJECT_DETECTION_NONE,
-            zm_device_frame_budget());
+        bool rewrites_frames = false;
+#ifdef HAVE_QUADRA
+        if (chosen_codec_data->hwdevice_type == AV_HWDEVICE_TYPE_NI_QUADRA) {
+          rewrites_frames = software_frames_expected(
+              monitor->ObjectDetection() != Monitor::OBJECT_DETECTION_NONE,
+              zm_device_frame_budget());
+        }
+#endif
+        AVBufferRef *const share_pool =
+            encoder_share_pool(decoder_ctx ? decoder_ctx->hw_frames_ctx : nullptr, rewrites_frames);
         if (setup_hwaccel(video_out_ctx,
               chosen_codec_data, hw_device_ctx, monitor->EncoderHWAccelDevice(), monitor->Width(), monitor->Height(),
-              encoder_share_pool(decoder_ctx ? decoder_ctx->hw_frames_ctx : nullptr,
-                                 rewrites_frames))) {
+              share_pool)) {
           avcodec_free_context(&video_out_ctx);
           av_dict_free(&opts);
           if (hw_device_ctx) {
@@ -427,7 +442,14 @@ bool VideoStore::open() {
           video_out_codec = nullptr;
           continue;
         }
-        
+        // setup_hwaccel only takes the offered pool when its format and geometry
+        // match, so ask the context which pool it ended up with rather than
+        // assuming the offer was accepted.
+        encoder_pool_shared = share_pool and video_out_ctx->hw_frames_ctx
+                              and video_out_ctx->hw_frames_ctx->data == share_pool->data;
+        if (encoder_pool_shared)
+          Debug(1, "Encoder is on the decoder's frame pool; uploads will use a pool of their own");
+
 #ifdef HAVE_QUADRA
         if (hw_device_ctx) {
           int devid = ni_get_cardno(video_in_ctx);
@@ -724,6 +746,39 @@ bool VideoStore::open() {
   return true;
 } // end bool VideoStore::open()
 
+int VideoStore::alloc_upload_pool() {
+  // Same device, format and geometry as the pool the encoder was opened with,
+  // so an uploaded frame is interchangeable with a decoded one; only the
+  // surfaces differ. Small because it covers just the frames the pipeline could
+  // not keep on the device -- sheds and AI rewrites -- not the whole stream.
+  const AVHWFramesContext *encoder_frames =
+      reinterpret_cast<AVHWFramesContext *>(video_out_ctx->hw_frames_ctx->data);
+
+  AVBufferRef *frames_ref = av_hwframe_ctx_alloc(encoder_frames->device_ref);
+  if (!frames_ref) {
+    Error("Failed to allocate an upload frame context");
+    return AVERROR(ENOMEM);
+  }
+  AVHWFramesContext *frames = reinterpret_cast<AVHWFramesContext *>(frames_ref->data);
+  frames->format = encoder_frames->format;
+  frames->sw_format = encoder_frames->sw_format;
+  frames->width = encoder_frames->width;
+  frames->height = encoder_frames->height;
+  frames->initial_pool_size = 4;
+
+  int ret = av_hwframe_ctx_init(frames_ref);
+  if (ret < 0) {
+    Error("Failed to initialize the upload frame context: %s", av_make_error_string(ret).c_str());
+    av_buffer_unref(&frames_ref);
+    return ret;
+  }
+  upload_frames_ctx = frames_ref;
+  Debug(1, "Allocated a %d frame %s upload pool (%dx%d, sw %s) beside the shared decoder pool",
+        frames->initial_pool_size, av_get_pix_fmt_name(frames->format),
+        frames->width, frames->height, av_get_pix_fmt_name(frames->sw_format));
+  return 0;
+}
+
 void VideoStore::set_filename(const std::string &new_filename) {
   filename = new_filename;
   // oc->url is what FFmpeg's MOV muxer re-opens during the faststart trailer
@@ -868,6 +923,10 @@ VideoStore::~VideoStore() {
     if (hw_device_ctx) {
       Debug(3, "Freeing hw_device_ctx");
       av_buffer_unref(&hw_device_ctx);
+    }
+    if (upload_frames_ctx) {
+      Debug(3, "Freeing upload_frames_ctx");
+      av_buffer_unref(&upload_frames_ctx);
     }
   }
 
@@ -1425,7 +1484,15 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
       if (!hw_frame) {
         return AVERROR(ENOMEM);
       }
-      if ((ret = av_hwframe_get_buffer(video_out_ctx->hw_frames_ctx, hw_frame.get(), 0)) < 0) {
+      AVBufferRef *upload_pool = video_out_ctx->hw_frames_ctx;
+      if (encoder_pool_shared) {
+        if (!upload_frames_ctx and (ret = alloc_upload_pool()) < 0) {
+          video_encoder_failed = true;
+          return ret;
+        }
+        upload_pool = upload_frames_ctx;
+      }
+      if ((ret = av_hwframe_get_buffer(upload_pool, hw_frame.get(), 0)) < 0) {
         Error("av_hwframe_get_buffer failed: %s", av_err2str(ret));
         video_encoder_failed = true;
         return ret;

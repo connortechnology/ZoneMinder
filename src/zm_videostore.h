@@ -72,6 +72,13 @@ class VideoStore {
   bool video_passthrough_fallback;
 
   AVBufferRef *hw_device_ctx;
+  // True when video_out_ctx->hw_frames_ctx is the decoder's pool rather than one
+  // of our own. Frames then reach the encoder without a copy, but an upload must
+  // not allocate out of that pool: the surface it took would be one the decoder
+  // is counting on, which stalls decoding. upload_frames_ctx is created on the
+  // first upload to hold those frames instead.
+  bool encoder_pool_shared;
+  AVBufferRef *upload_frames_ctx;
 
   SwrContext *resample_ctx;
   AVAudioFifo *fifo;
@@ -145,6 +152,9 @@ class VideoStore {
     Monitor * p_monitor);
   ~VideoStore();
   bool open();
+  // Builds upload_frames_ctx on first use; only called when the encoder is on
+  // the decoder's pool. Returns 0 or an AVERROR.
+  int alloc_upload_pool();
 
   void write_video_packet(AVPacket pkt);
   void write_audio_packet(AVPacket pkt);
