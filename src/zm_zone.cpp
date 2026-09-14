@@ -195,6 +195,102 @@ bool Zone::CheckExtendAlarmCount() {
   return false;
 }  // end bool Zone::CheckExtendAlarmCount
 
+//
+// The numeric half of the alarm rules, split out so the CUDA path applies the
+// same thresholds and arithmetic to the counts the card produced as
+// CheckAlarms() applies to the ones it counted itself. Each reads the stats
+// already filled in and returns false when the zone fails that stage.
+//
+
+bool Zone::ScoreAlarmedPixels() {
+  if (stats.alarm_pixels_) {
+    if (min_alarm_pixels && (stats.alarm_pixels_ < (unsigned int)min_alarm_pixels)) {
+      /* Not enough pixels alarmed */
+      return false;
+    } else if (max_alarm_pixels && (stats.alarm_pixels_ > (unsigned int)max_alarm_pixels)) {
+      /* Too many pixels alarmed */
+      overload_count = overload_frames;
+      return false;
+    }
+  } else {
+    /* No alarmed pixels */
+    return false;
+  }
+
+  stats.score_ = (100*stats.alarm_pixels_)/(max_alarm_pixels ? max_alarm_pixels : polygon.Area());
+  if (stats.score_ < 1)
+    stats.score_ = 1; /* Fix for score of 0 when frame meets thresholds but alarmed area is not big enough */
+  return true;
+}
+
+bool Zone::ScoreFilteredPixels() {
+  if (stats.alarm_filter_pixels_) {
+    if (min_filter_pixels && (stats.alarm_filter_pixels_ < min_filter_pixels)) {
+      /* Not enough pixels alarmed */
+      stats.score_ = 0;
+      return false;
+    } else if (max_filter_pixels && (stats.alarm_filter_pixels_ > max_filter_pixels)) {
+      /* Too many pixels alarmed */
+      overload_count = overload_frames;
+      stats.score_ = 0;
+      return false;
+    }
+  } else {
+    /* No filtered pixels */
+    stats.score_ = 0;
+    return false;
+  }
+
+  if (max_filter_pixels != 0)
+    stats.score_ = (100*stats.alarm_filter_pixels_)/max_filter_pixels;
+  else
+    stats.score_ = (100*stats.alarm_filter_pixels_)/polygon.Area();
+
+  if (stats.score_ < 1)
+    stats.score_ = 1; /* Fix for score of 0 when frame meets thresholds but alarmed area is not big enough */
+  return true;
+}
+
+bool Zone::ScoreBlobs() {
+  if (stats.alarm_blobs_) {
+    if (min_blobs && (stats.alarm_blobs_ < min_blobs)) {
+      /* Not enough blobs */
+      stats.score_ = 0;
+      return false;
+    } else if (max_blobs && (stats.alarm_blobs_ > max_blobs)) {
+      /* Too many blobs */
+      overload_count = overload_frames;
+      stats.score_ = 0;
+      return false;
+    }
+  } else {
+    /* No blobs */
+    stats.score_ = 0;
+    return false;
+  }
+
+  if (max_blob_pixels != 0)
+    stats.score_ = (100*stats.alarm_blob_pixels_)/max_blob_pixels;
+  else
+    stats.score_ = (100*stats.alarm_blob_pixels_)/polygon.Area();
+
+  if (stats.score_ < 1)
+    stats.score_ = 1; /* Fix for score of 0 when frame meets thresholds but alarmed area is not big enough */
+  return true;
+}
+
+void Zone::AdjustScoreForType() {
+  if (type == INCLUSIVE) {
+    // score >>= 1;
+    stats.score_ /= 2;
+  } else if (type == EXCLUSIVE) {
+    // stats.score <<= 1;
+    stats.score_ *= 2;
+  }
+
+  Debug(5, "Adjusted score is %d", stats.score_);
+}
+
 bool Zone::CheckAlarms(const Image *delta_image) {
   ResetStats();
 
@@ -320,23 +416,7 @@ bool Zone::CheckAlarms(const Image *delta_image) {
               id, stats.alarm_pixels_, stats.pixel_diff_);
   }
 
-  if (stats.alarm_pixels_) {
-    if (min_alarm_pixels && (stats.alarm_pixels_ < (unsigned int)min_alarm_pixels)) {
-      /* Not enough pixels alarmed */
-      return false;
-    } else if (max_alarm_pixels && (stats.alarm_pixels_ > (unsigned int)max_alarm_pixels)) {
-      /* Too many pixels alarmed */
-      overload_count = overload_frames;
-      return false;
-    }
-  } else {
-    /* No alarmed pixels */
-    return false;
-  }
-
-  stats.score_ = (100*stats.alarm_pixels_)/(max_alarm_pixels ? max_alarm_pixels : polygon.Area());
-  if (stats.score_ < 1)
-    stats.score_ = 1; /* Fix for score of 0 when frame meets thresholds but alarmed area is not big enough */
+  if (!ScoreAlarmedPixels()) return false;
   Debug(5, "Current score is %d", stats.score_);
 
   if (check_method >= FILTERED_PIXELS) {
@@ -403,30 +483,7 @@ bool Zone::CheckAlarms(const Image *delta_image) {
     if (config.record_diag_images_fifo)
       FifoDebug(5, "{\"zone\":%d,\"type\":\"FILT\",\"pixels\":%d}", id, stats.alarm_filter_pixels_);
 
-    if (stats.alarm_filter_pixels_) {
-      if (min_filter_pixels && (stats.alarm_filter_pixels_ < min_filter_pixels)) {
-        /* Not enough pixels alarmed */
-        stats.score_ = 0;
-        return false;
-      } else if (max_filter_pixels && (stats.alarm_filter_pixels_ > max_filter_pixels)) {
-        /* Too many pixels alarmed */
-        overload_count = overload_frames;
-        stats.score_ = 0;
-        return false;
-      }
-    } else {
-      /* No filtered pixels */
-      stats.score_ = 0;
-      return false;
-    }
-
-    if (max_filter_pixels != 0)
-      stats.score_ = (100*stats.alarm_filter_pixels_)/max_filter_pixels;
-    else
-      stats.score_ = (100*stats.alarm_filter_pixels_)/polygon.Area();
-
-    if (stats.score_ < 1)
-      stats.score_ = 1; /* Fix for score of 0 when frame meets thresholds but alarmed area is not big enough */
+    if (!ScoreFilteredPixels()) return false;
     Debug(5, "Current score is %d", stats.score_);
 
     if (check_method >= BLOBS) {
@@ -686,30 +743,7 @@ bool Zone::CheckAlarms(const Image *delta_image) {
                   id, stats.alarm_blob_pixels_, stats.alarm_blobs_);
       }
 
-      if (stats.alarm_blobs_) {
-        if (min_blobs && (stats.alarm_blobs_ < min_blobs)) {
-          /* Not enough pixels alarmed */
-          stats.score_ = 0;
-          return false;
-        } else if (max_blobs && (stats.alarm_blobs_ > max_blobs)) {
-          /* Too many pixels alarmed */
-          overload_count = overload_frames;
-          stats.score_ = 0;
-          return false;
-        }
-      } else {
-        /* No blobs */
-        stats.score_ = 0;
-        return false;
-      }
-
-      if (max_blob_pixels != 0)
-        stats.score_ = (100*stats.alarm_blob_pixels_)/max_blob_pixels;
-      else
-        stats.score_ = (100*stats.alarm_blob_pixels_)/polygon.Area();
-
-      if (stats.score_ < 1)
-        stats.score_ = 1; /* Fix for score of 0 when frame meets thresholds but alarmed area is not big enough */
+      if (!ScoreBlobs()) return false;
       Debug(5, "Current score is %d", stats.score_);
 
       alarm_lo_x = polygon.Extent().Hi().x_ + 1;
@@ -754,15 +788,7 @@ bool Zone::CheckAlarms(const Image *delta_image) {
     }
   }
 
-  if (type == INCLUSIVE) {
-    // score >>= 1;
-    stats.score_ /= 2;
-  } else if (type == EXCLUSIVE) {
-    // stats.score <<= 1;
-    stats.score_ *= 2;
-  }
-
-  Debug(5, "Adjusted score is %d", stats.score_);
+  AdjustScoreForType();
 
   // Now outline the changed region
   if (stats.score_) {
@@ -1223,3 +1249,185 @@ Zone::Zone(const Zone &z) :
   //z.stats.debug("Copy Source");
   stats.DumpToLog("Copy dest");
 }
+
+#if HAVE_CUDA
+zm::cuda::ZoneSpec Zone::CudaSpec() {
+  const int height = static_cast<int>(monitor->Height());
+
+  // ranges[] is an array of structs; the kernels want two flat arrays, so keep
+  // a copy in that shape. Rebuilt here rather than cached against a dirty flag
+  // because SetZones only runs on a reload.
+  cuda_row_lo_x.assign(height, -1);
+  cuda_row_hi_x.assign(height, -1);
+  if (ranges) {
+    const int lo_y = std::max(0, polygon.Extent().Lo().y_);
+    const int hi_y = std::min(height - 1, polygon.Extent().Hi().y_);
+    for (int y = lo_y; y <= hi_y; y++) {
+      cuda_row_lo_x[y] = ranges[y].lo_x;
+      cuda_row_hi_x[y] = ranges[y].hi_x;
+    }
+  }
+
+  zm::cuda::ZoneSpec spec;
+  spec.mask = pg_image ? pg_image->Buffer() : nullptr;
+  spec.row_lo_x = cuda_row_lo_x.data();
+  spec.row_hi_x = cuda_row_hi_x.data();
+  spec.lo_y = polygon.Extent().Lo().y_;
+  spec.hi_y = polygon.Extent().Hi().y_;
+  spec.min_pixel_threshold = static_cast<uint8_t>(min_pixel_threshold);
+  spec.max_pixel_threshold = static_cast<uint8_t>(max_pixel_threshold);
+  spec.filter_box_x = filter_box.x_;
+  spec.filter_box_y = filter_box.y_;
+  spec.want_filter = check_method >= FILTERED_PIXELS;
+  spec.want_blobs = check_method >= BLOBS;
+  spec.inactive = IsInactive();
+  return spec;
+}
+
+bool Zone::CheckAlarmsCuda(const zm::cuda::ZoneResult &result,
+                           zm::cuda::MotionDetector *detector,
+                           size_t zone_index) {
+  ResetStats();
+
+  if (overload_count) {
+    Info("In overload mode, %d frames of %d remaining", overload_count, overload_frames);
+    overload_count--;
+    return false;
+  }
+
+  stats.alarm_pixels_ = result.alarm_pixels;
+  if (result.alarm_pixels)
+    stats.pixel_diff_ = static_cast<unsigned int>(result.pixel_diff_sum / result.alarm_pixels);
+
+  Debug(5, "Got %d alarmed pixels, need %d -> %d, avg pixel diff %d",
+        stats.alarm_pixels_, min_alarm_pixels, max_alarm_pixels, stats.pixel_diff_);
+
+  if (config.record_diag_images_fifo) {
+    FifoDebug(5, "{\"zone\":%d,\"type\":\"ALRM\",\"pixels\":%d,\"avg_diff\":%d}",
+              id, stats.alarm_pixels_, stats.pixel_diff_);
+  }
+
+  if (!ScoreAlarmedPixels()) return false;
+  Debug(5, "Current score is %d", stats.score_);
+
+  int alarm_lo_x = 0;
+  int alarm_hi_x = 0;
+  int alarm_lo_y = 0;
+  int alarm_hi_y = 0;
+  int alarm_mid_x = -1;
+  int alarm_mid_y = -1;
+
+  if (check_method >= FILTERED_PIXELS) {
+    stats.alarm_filter_pixels_ = result.filter_pixels;
+
+    Debug(5, "Got %d filtered pixels, need %d -> %d",
+          stats.alarm_filter_pixels_, min_filter_pixels, max_filter_pixels);
+    if (config.record_diag_images_fifo)
+      FifoDebug(5, "{\"zone\":%d,\"type\":\"FILT\",\"pixels\":%d}", id, stats.alarm_filter_pixels_);
+
+    if (!ScoreFilteredPixels()) return false;
+    Debug(5, "Current score is %d", stats.score_);
+
+    if (check_method >= BLOBS) {
+      if (result.blobs_truncated) {
+        Warning("Zone %s: the device hit its blob limit, so this frame's blob counts are low. "
+                "Zone settings may be too sensitive.", label.c_str());
+      }
+
+      // Same elimination the CPU pass does, just over the card's component list
+      // rather than a tag table.
+      for (const zm::cuda::Blob &blob : result.blobs) {
+        const int count = static_cast<int>(blob.count);
+        if ((min_blob_pixels && count < min_blob_pixels)
+            || (max_blob_pixels && count > max_blob_pixels)) {
+          Debug(6, "Eliminated blob, %d pixels (%d,%d - %d,%d)",
+                count, blob.lo_x, blob.lo_y, blob.hi_x, blob.hi_y);
+          continue;
+        }
+        stats.alarm_blobs_++;
+        stats.alarm_blob_pixels_ += blob.count;
+        if (!stats.min_blob_size_ || blob.count < stats.min_blob_size_) stats.min_blob_size_ = blob.count;
+        if (!stats.max_blob_size_ || blob.count > stats.max_blob_size_) stats.max_blob_size_ = blob.count;
+      }
+
+      Debug(5, "Got %d blob pixels, %d blobs, need %d -> %d, %d -> %d",
+            stats.alarm_blob_pixels_, stats.alarm_blobs_, min_blob_pixels, max_blob_pixels,
+            min_blobs, max_blobs);
+      if (config.record_diag_images_fifo) {
+        FifoDebug(5, "{\"zone\":%d,\"type\":\"FBLB\",\"pixels\":%d,\"blobs\":%d}",
+                  id, stats.alarm_blob_pixels_, stats.alarm_blobs_);
+      }
+
+      if (!ScoreBlobs()) return false;
+      Debug(5, "Current score is %d", stats.score_);
+
+      alarm_lo_x = polygon.Extent().Hi().x_ + 1;
+      alarm_hi_x = polygon.Extent().Lo().x_ - 1;
+      alarm_lo_y = polygon.Extent().Hi().y_ + 1;
+      alarm_hi_y = polygon.Extent().Lo().y_ - 1;
+
+      for (const zm::cuda::Blob &blob : result.blobs) {
+        const int count = static_cast<int>(blob.count);
+        if ((min_blob_pixels && count < min_blob_pixels)
+            || (max_blob_pixels && count > max_blob_pixels)) continue;
+
+        if (blob.count == stats.max_blob_size_) {
+          if (config.weighted_alarm_centres) {
+            // The kernels total the member pixels' coordinates for exactly
+            // this, so a weighted centre costs no transfer.
+            alarm_mid_x = static_cast<int>(round(static_cast<double>(blob.x_sum) / blob.count));
+            alarm_mid_y = static_cast<int>(round(static_cast<double>(blob.y_sum) / blob.count));
+          } else {
+            alarm_mid_x = int((blob.hi_x + blob.lo_x + 1) / 2);
+            alarm_mid_y = int((blob.hi_y + blob.lo_y + 1) / 2);
+          }
+        }
+
+        if (alarm_lo_x > blob.lo_x) alarm_lo_x = blob.lo_x;
+        if (alarm_lo_y > blob.lo_y) alarm_lo_y = blob.lo_y;
+        if (alarm_hi_x < blob.hi_x) alarm_hi_x = blob.hi_x;
+        if (alarm_hi_y < blob.hi_y) alarm_hi_y = blob.hi_y;
+      }
+    } else {
+      alarm_mid_x = int((alarm_hi_x + alarm_lo_x + 1) / 2);
+      alarm_mid_y = int((alarm_hi_y + alarm_lo_y + 1) / 2);
+    }
+  }
+
+  AdjustScoreForType();
+
+  if (stats.score_) {
+    stats.alarm_box_ = Box(Vector2(alarm_lo_x, alarm_lo_y), Vector2(alarm_hi_x, alarm_hi_y));
+    stats.alarm_centre_ = Vector2(alarm_mid_x, alarm_mid_y);
+
+    if ((type < PRECLUSIVE) && (check_method >= BLOBS) && (monitor->GetOptSaveJPEGs() > 1) && detector) {
+      // The one frame in the run where the mask has to come back: something is
+      // being saved that shows the alarmed pixels. The kernels already zero
+      // everything outside the polygon, so there is nothing to mask out here.
+      const int width = static_cast<int>(monitor->Width());
+      const int height = static_cast<int>(monitor->Height());
+      if (!image || image->Colours() != 1 || (int)image->Width() != width || (int)image->Height() != height) {
+        delete image;
+        image = new Image(width, width, height, 1, ZM_SUBPIX_ORDER_NONE);
+      }
+      if (detector->DownloadMask(zone_index, image->Buffer(), width)) {
+        Image *mask_image = image;
+        AVPixelFormat capture_fmt = zm_pixformat_from_colours(monitor->Colours(), monitor->SubpixelOrder());
+        if (capture_fmt == AV_PIX_FMT_GRAY8) {
+          image = mask_image->HighlightEdges(alarm_rgb, ZM_COLOUR_RGB24, ZM_SUBPIX_ORDER_RGB, &polygon.Extent());
+        } else {
+          image = mask_image->HighlightEdges(alarm_rgb, monitor->Colours(), monitor->SubpixelOrder(), &polygon.Extent());
+        }
+        delete mask_image;
+      } else {
+        Warning("Zone %s: could not fetch the alarm mask: %s", label.c_str(), detector->LastError());
+      }
+    }
+
+    Debug(1, "%s: Pixel Diff: %d, Alarm Pixels: %d, Filter Pixels: %d, Blob Pixels: %d, Blobs: %d, Score: %d",
+          Label(), stats.pixel_diff_, stats.alarm_pixels_, stats.alarm_filter_pixels_,
+          stats.alarm_blob_pixels_, stats.alarm_blobs_, stats.score_);
+  }
+  return true;
+}
+#endif  // HAVE_CUDA

@@ -195,7 +195,9 @@ __global__ void BlobStatsKernel(const uint32_t *__restrict__ labels,
                                 int width, int lo_y, int hi_y,
                                 uint32_t *__restrict__ counts,
                                 int *__restrict__ lo_xs, int *__restrict__ hi_xs,
-                                int *__restrict__ lo_ys, int *__restrict__ hi_ys) {
+                                int *__restrict__ lo_ys, int *__restrict__ hi_ys,
+                                unsigned long long *__restrict__ x_sums,
+                                unsigned long long *__restrict__ y_sums) {
   const int x = blockIdx.x * blockDim.x + threadIdx.x;
   const int y = lo_y + blockIdx.y * blockDim.y + threadIdx.y;
   if (x >= width || y > hi_y) return;
@@ -212,6 +214,22 @@ __global__ void BlobStatsKernel(const uint32_t *__restrict__ labels,
   atomicMax(&hi_xs[slot], x);
   atomicMin(&lo_ys[slot], y);
   atomicMax(&hi_ys[slot], y);
+  // Coordinate totals so a weighted alarm centre (ZM_WEIGHTED_ALARM_CENTRES)
+  // can be worked out without bringing the mask back to the host.
+  atomicAdd(&x_sums[slot], static_cast<unsigned long long>(x));
+  atomicAdd(&y_sums[slot], static_cast<unsigned long long>(y));
+}
+
+// Inactive zones blank their area of the delta so no other zone sees motion
+// there, which the CPU path does with Image::Fill before any zone is checked.
+__global__ void MaskOutKernel(uint8_t *__restrict__ delta, size_t delta_pitch,
+                              const uint8_t *__restrict__ poly, size_t poly_pitch,
+                              int width, int lo_y, int hi_y) {
+  const int x = blockIdx.x * blockDim.x + threadIdx.x;
+  const int y = lo_y + blockIdx.y * blockDim.y + threadIdx.y;
+  if (x >= width || y > hi_y) return;
+
+  if (poly[y * poly_pitch + x]) delta[y * delta_pitch + x] = 0;
 }
 
 // fast_blend quantises the percentage to a power-of-two shift and works in
@@ -273,6 +291,7 @@ class MotionDetector::Impl {
     int filter_box_y = 1;
     bool want_filter = false;
     bool want_blobs = false;
+    bool inactive = false;
   };
 
   ~Impl() { Release(); }
@@ -373,7 +392,8 @@ bool MotionDetector::Init(int width, int height, void *cuda_context) {
 
   // Counters (alarm count, diff sum, filter count, blob count, changed flag)
   // followed by the per-blob arrays.
-  const size_t scratch_bytes = sizeof(unsigned long long) * 8 + kMaxBlobs * (sizeof(uint32_t) + 4 * sizeof(int));
+  const size_t scratch_bytes = sizeof(unsigned long long) * 8
+      + kMaxBlobs * (sizeof(uint32_t) + 4 * sizeof(int) + 2 * sizeof(unsigned long long));
   err = cudaMalloc(&impl_->scratch, scratch_bytes);
   if (err != cudaSuccess) {
     impl_->last_error = std::string("Failed to allocate device scratch: ") + cudaGetErrorString(err);
@@ -410,6 +430,7 @@ bool MotionDetector::SetZones(const std::vector<ZoneSpec> &specs) {
     // A 1x1 box keeps every pixel, which is what the CPU path short-circuits.
     zone.want_filter = spec.want_filter && (spec.filter_box_x > 1 || spec.filter_box_y > 1);
     zone.want_blobs = spec.want_blobs;
+    zone.inactive = spec.inactive;
     wants_blobs = wants_blobs || spec.want_blobs;
 
     cudaError_t err = cudaMallocPitch(reinterpret_cast<void **>(&zone.mask),
@@ -490,6 +511,16 @@ bool MotionDetector::Detect(const uint8_t *y_plane, size_t pitch, std::vector<Zo
 
   results.assign(impl_->zones.size(), ZoneResult());
 
+  // Inactive zones first: they blank their area of the delta so no zone checked
+  // below sees motion there, which is what Image::Fill does on the CPU path.
+  for (const Impl::Zone &zone : impl_->zones) {
+    if (!zone.inactive || zone.hi_y < zone.lo_y) continue;
+    const dim3 zone_grid = Grid2D(width_, zone.hi_y - zone.lo_y + 1, block);
+    MaskOutKernel<<<zone_grid, block>>>(impl_->delta, impl_->delta_pitch,
+                                        zone.mask, zone.mask_pitch,
+                                        width_, zone.lo_y, zone.hi_y);
+  }
+
   // Counters live at the front of the scratch allocation; the blob arrays
   // follow it.
   unsigned long long *counters = static_cast<unsigned long long *>(impl_->scratch);
@@ -503,11 +534,13 @@ bool MotionDetector::Detect(const uint8_t *y_plane, size_t pitch, std::vector<Zo
   int *blob_hi_x = blob_lo_x + kMaxBlobs;
   int *blob_lo_y = blob_hi_x + kMaxBlobs;
   int *blob_hi_y = blob_lo_y + kMaxBlobs;
+  unsigned long long *blob_x_sum = reinterpret_cast<unsigned long long *>(blob_hi_y + kMaxBlobs);
+  unsigned long long *blob_y_sum = blob_x_sum + kMaxBlobs;
 
   for (size_t i = 0; i < impl_->zones.size(); i++) {
     Impl::Zone &zone = impl_->zones[i];
     ZoneResult &result = results[i];
-    if (zone.hi_y < zone.lo_y) continue;
+    if (zone.inactive || zone.hi_y < zone.lo_y) continue;
 
     const int rows = zone.hi_y - zone.lo_y + 1;
     const dim3 zone_grid = Grid2D(width_, rows, block);
@@ -552,13 +585,16 @@ bool MotionDetector::Detect(const uint8_t *y_plane, size_t pitch, std::vector<Zo
       cudaMemset(blob_lo_y, 0x7F, kMaxBlobs * sizeof(int));
       cudaMemset(blob_hi_x, 0x80, kMaxBlobs * sizeof(int));
       cudaMemset(blob_hi_y, 0x80, kMaxBlobs * sizeof(int));
+      cudaMemset(blob_x_sum, 0, kMaxBlobs * sizeof(unsigned long long));
+      cudaMemset(blob_y_sum, 0, kMaxBlobs * sizeof(unsigned long long));
 
       BlobSlotKernel<<<zone_grid, block>>>(impl_->labels, impl_->slot_map,
                                            width_, zone.lo_y, zone.hi_y, blob_count);
       BlobStatsKernel<<<zone_grid, block>>>(impl_->labels, impl_->slot_map,
                                             width_, zone.lo_y, zone.hi_y,
                                             blob_counts, blob_lo_x, blob_hi_x,
-                                            blob_lo_y, blob_hi_y);
+                                            blob_lo_y, blob_hi_y,
+                                            blob_x_sum, blob_y_sum);
       cudaMemcpy(&host_blob_count, blob_count, sizeof(uint32_t), cudaMemcpyDeviceToHost);
     }
 
@@ -580,11 +616,14 @@ bool MotionDetector::Detect(const uint8_t *y_plane, size_t pitch, std::vector<Zo
       std::vector<uint32_t> counts(host_blob_count);
       std::vector<int> lo_x(host_blob_count), hi_x(host_blob_count);
       std::vector<int> lo_y(host_blob_count), hi_y(host_blob_count);
+      std::vector<unsigned long long> x_sum(host_blob_count), y_sum(host_blob_count);
       cudaMemcpy(counts.data(), blob_counts, host_blob_count * sizeof(uint32_t), cudaMemcpyDeviceToHost);
       cudaMemcpy(lo_x.data(), blob_lo_x, host_blob_count * sizeof(int), cudaMemcpyDeviceToHost);
       cudaMemcpy(hi_x.data(), blob_hi_x, host_blob_count * sizeof(int), cudaMemcpyDeviceToHost);
       cudaMemcpy(lo_y.data(), blob_lo_y, host_blob_count * sizeof(int), cudaMemcpyDeviceToHost);
       cudaMemcpy(hi_y.data(), blob_hi_y, host_blob_count * sizeof(int), cudaMemcpyDeviceToHost);
+      cudaMemcpy(x_sum.data(), blob_x_sum, host_blob_count * sizeof(unsigned long long), cudaMemcpyDeviceToHost);
+      cudaMemcpy(y_sum.data(), blob_y_sum, host_blob_count * sizeof(unsigned long long), cudaMemcpyDeviceToHost);
 
       result.blobs.reserve(host_blob_count);
       for (uint32_t b = 0; b < host_blob_count; b++) {
@@ -595,6 +634,8 @@ bool MotionDetector::Detect(const uint8_t *y_plane, size_t pitch, std::vector<Zo
         blob.hi_x = hi_x[b];
         blob.lo_y = lo_y[b];
         blob.hi_y = hi_y[b];
+        blob.x_sum = x_sum[b];
+        blob.y_sum = y_sum[b];
         result.blobs.push_back(blob);
       }
     }

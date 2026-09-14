@@ -24,6 +24,7 @@
 
 #include <atomic>
 #include <list>
+#include <functional>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -1227,6 +1228,22 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   void CheckAction();
 
   unsigned int DetectMotion( const Image &comp_image, Event::StringSet &zoneSet );
+  // Zone ordering and score combination, shared by the CPU and CUDA paths.
+  unsigned int EvaluateZones(Event::StringSet &zoneSet,
+                             const std::function<bool(Zone &, size_t)> &check);
+#if HAVE_CUDA
+  // Motion detection against a frame that never leaves the card. Returns false
+  // when this frame cannot be handled that way and the caller should fall back
+  // to the host path.
+  bool Analyse_MotionDetection_Cuda(const std::shared_ptr<ZMPacket> &packet,
+                                    Event::StringSet &zoneSet,
+                                    int &motion_score);
+  std::unique_ptr<zm::cuda::MotionDetector> cuda_motion;
+  // Set once the device path has failed, so a broken card costs one warning
+  // rather than one per frame.
+  bool cuda_motion_failed = false;
+  bool cuda_zones_uploaded = false;
+#endif
   unsigned int AnalyseFrame( const Image &frame_image, Event::StringSet &zoneSet );
   unsigned int AnalyseFrame( const Image &frame_image, Event::StringSet &zoneSet, Image *analysis_image );
   // DetectBlack seems to be unused. Check it on zm_monitor.cpp for more info.

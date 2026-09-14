@@ -31,6 +31,10 @@
 #include <string>
 #include <vector>
 
+#if HAVE_CUDA
+#include "zm_cuda_motion.h"
+#endif
+
 class Event;
 class Image;
 class Monitor;
@@ -99,6 +103,11 @@ class Zone {
 
   int         overload_count;
   int         extend_alarm_count;
+#if HAVE_CUDA
+  // ranges[] as two plain arrays, which is the shape the kernels take.
+  std::vector<int> cuda_row_lo_x;
+  std::vector<int> cuda_row_hi_x;
+#endif
   std::string diag_path;
 
  protected:
@@ -122,6 +131,13 @@ class Zone {
     int p_extend_alarm_frames);
 
   void std_alarmedpixels(const Image* pdelta_image, Image* pmask_image, const Image* ppoly_image, unsigned int* pixel_count, unsigned int* pixel_sum);
+
+  // The alarm rules as pure arithmetic over the stats, shared by the CPU pass
+  // and the CUDA one so a zone scores the same either way.
+  bool ScoreAlarmedPixels();
+  bool ScoreFilteredPixels();
+  bool ScoreBlobs();
+  void AdjustScoreForType();
 
  public:
   Zone(
@@ -207,6 +223,19 @@ class Zone {
   };
 
   bool CheckAlarms(const Image *delta_image);
+
+#if HAVE_CUDA
+  // This zone as the kernels need it. The arrays the spec points at belong to
+  // the zone and stay valid until it is reloaded.
+  zm::cuda::ZoneSpec CudaSpec();
+  // The same rules CheckAlarms applies, run against counts the card produced
+  // instead of ones counted here. detector is only touched when the zone
+  // alarms and an analysis image is being saved, to fetch the mask for the
+  // highlight.
+  bool CheckAlarmsCuda(const zm::cuda::ZoneResult &result,
+                       zm::cuda::MotionDetector *detector,
+                       size_t zone_index);
+#endif
   std::string DumpSettings(bool verbose) const;
 
   static bool ParsePolygonString( const char *polygon_string, Polygon &polygon );

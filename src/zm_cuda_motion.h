@@ -55,6 +55,9 @@ struct ZoneSpec {
 
   bool want_filter = false;
   bool want_blobs = false;
+  // An inactive zone is not checked; it blanks its own area of the delta so no
+  // other zone sees motion there.
+  bool inactive = false;
 };
 
 struct Blob {
@@ -63,6 +66,9 @@ struct Blob {
   int lo_y = 0;
   int hi_x = 0;
   int hi_y = 0;
+  // Totals of the member pixels' coordinates, for a weighted centre.
+  uint64_t x_sum = 0;
+  uint64_t y_sum = 0;
 };
 
 struct ZoneResult {
