@@ -145,6 +145,9 @@ mark_as_advanced(
 
 option(ENABLE_WERROR "Fail the build if a compiler warning is emitted" 0)
 option(BUILD_TEST_SUITE "Build the test suite" 0)
+# Off by default on purpose: it needs nvcc, which the package builders do not
+# have, and a build without it is byte for byte the build we shipped before.
+option(ZM_CUDA "Build the CUDA motion detection path (requires the CUDA toolkit)" 0)
 option(BUILD_MAN "Build man pages" 1)
 option(ASAN "DEBUGGING: Build with AddressSanitizer (ASan) support" 0)
 option(TSAN "DEBUGGING: Build with ThreadSanitizer (TSan) support" 0)
@@ -507,6 +510,29 @@ else()
   set(HAVE_OPENVINO 0)
   set(optlibsnotfound "${optlibsnotfound} OpenVINO")
   message(STATUS "Intel OpenVINO support: No")
+endif()
+
+# CUDA motion detection. Opt in with -DZM_CUDA=ON; the kernels are the only
+# thing nvcc compiles, everything else stays on the host compiler.
+if(ZM_CUDA)
+  find_package(CUDAToolkit REQUIRED)
+  enable_language(CUDA)
+  set(HAVE_CUDA 1)
+  # CMake puts the CUDA host compiler's own library directories on every link
+  # line. nvcc's newest supported gcc trails the system one (nvcc 12 stops at
+  # gcc 13), so that can place an older libstdc++ ahead of the real one and the
+  # link then fails on symbols only the newer ABI has. The CUDA runtime
+  # libraries live elsewhere, so dropping these directories costs nothing.
+  list(FILTER CMAKE_CUDA_IMPLICIT_LINK_DIRECTORIES EXCLUDE REGEX "/lib/gcc/")
+  # The driver API is needed to make the decoder's own context current before a
+  # launch: ffmpeg owns that context and the kernels have to run inside it.
+  list(APPEND ZM_BIN_LIBS CUDA::cudart CUDA::cuda_driver)
+  set(optlibsfound "${optlibsfound} CUDA")
+  message(STATUS "CUDA motion detection: Yes (${CUDAToolkit_VERSION})")
+else()
+  set(HAVE_CUDA 0)
+  set(optlibsnotfound "${optlibsnotfound} CUDA")
+  message(STATUS "CUDA motion detection: No (-DZM_CUDA=ON to enable)")
 endif()
 
 # jpeg

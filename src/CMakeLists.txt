@@ -97,6 +97,18 @@ set(ZM_BIN_SRC_FILES
   netint_network.cpp  ni_yolo_utils.cpp yolov4_postprocess.cpp  yolov5_postprocess.cpp yolov8_postprocess.cpp
 )
 
+if(ZM_CUDA)
+  set(ZM_BIN_SRC_FILES
+    ${ZM_BIN_SRC_FILES}
+    zm_cuda_motion.cu
+  )
+  # Pascal through Blackwell. Keeping the list explicit means the kernels are
+  # embedded for the cards ZoneMinder actually runs on rather than whatever
+  # nvcc happens to default to.
+  set_source_files_properties(zm_cuda_motion.cu PROPERTIES
+    CUDA_ARCHITECTURES "61;70;75;86;89;90")
+endif()
+
 if(GSOAP_FOUND)
   set(ZM_BIN_SRC_FILES
   ${ZM_BIN_SRC_FILES}
