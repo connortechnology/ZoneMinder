@@ -419,11 +419,13 @@ bool DecoderThread::Decode() {
 #endif
     if (packet->ai_frame) {
       Debug(1, "Assigning ai_frame for index %d", index);
-      monitor_->image_buffer[index]->AVPixFormat(monitor_->image_pixelformats[index] = static_cast<AVPixelFormat>(packet->ai_frame->format));
+      monitor_->image_pixelformats[index] = monitor_->image_buffer[index]->AVPixFormat(
+          static_cast<AVPixelFormat>(packet->ai_frame->format));
       monitor_->image_buffer[index]->Assign(packet->ai_frame.get());
     } else if (packet->ai_image) {
       Debug(1, "Assigning ai_image for index %d", index);
-      monitor_->image_buffer[index]->AVPixFormat(monitor_->image_pixelformats[index] = static_cast<AVPixelFormat>(packet->ai_frame->format));
+      monitor_->image_pixelformats[index] = monitor_->image_buffer[index]->AVPixFormat(
+          static_cast<AVPixelFormat>(packet->ai_frame->format));
       monitor_->image_buffer[index]->Assign(*(packet->ai_image));
     } else {
       if (packet->needs_hw_transfer(monitor_->mVideoCodecContext))
@@ -440,7 +442,8 @@ bool DecoderThread::Decode() {
     // downloading every single frame.
     if (was_on_device and transferred > 0) monitor_->hw_frame_downloads_++;
   }
-      monitor_->image_buffer[index]->AVPixFormat(monitor_->image_pixelformats[index] = static_cast<AVPixelFormat>(packet->in_frame->format));
+      monitor_->image_pixelformats[index] = monitor_->image_buffer[index]->AVPixFormat(
+          static_cast<AVPixelFormat>(packet->in_frame->format));
       monitor_->image_buffer[index]->Assign(packet->in_frame.get());
     }
 #endif // AI_IN_DECODE

@@ -2839,7 +2839,11 @@ int Monitor::Analyse() {
           analysis_image_buffer[index]->AVPixFormat(static_cast<AVPixelFormat>(packet->ai_frame->format));
           Debug(1, "ai_frame pixformat %d, for index %d, packet %d", packet->ai_frame->format, index, packet->image_index);
           analysis_image_buffer[index]->Assign(packet->ai_frame.get());
-          analysis_image_pixelformats[index] = static_cast<AVPixelFormat>(packet->ai_frame->format);
+          // Take the format the buffer actually adopted: a frame in a format
+          // Image cannot store (NV12 off a cuda/vaapi download) is converted by
+          // Assign, so recording the frame's own format here would publish a
+          // pixel format the shm bytes do not have.
+          analysis_image_pixelformats[index] = analysis_image_buffer[index]->AVPixFormat();
         } else if (packet->analysis_image) {
           analysis_image_buffer[index]->Assign(*packet->analysis_image);
           analysis_image_pixelformats[index] = packet->analysis_image->AVPixFormat();
@@ -2852,12 +2856,20 @@ int Monitor::Analyse() {
           analysis_image_buffer[index]->AVPixFormat(static_cast<AVPixelFormat>(packet->in_frame->format));
           Debug(1, "in_frame pixformat %d, for index %d, packet %d", packet->in_frame->format, index, packet->image_index);
           analysis_image_buffer[index]->Assign(packet->in_frame.get());
-          analysis_image_pixelformats[index] = static_cast<AVPixelFormat>(packet->in_frame->format);
+          // Take the format the buffer actually adopted: a frame in a format
+          // Image cannot store (NV12 off a cuda/vaapi download) is converted by
+          // Assign, so recording the frame's own format here would publish a
+          // pixel format the shm bytes do not have.
+          analysis_image_pixelformats[index] = analysis_image_buffer[index]->AVPixFormat();
         } else if (packet->out_frame) {
           analysis_image_buffer[index]->AVPixFormat(static_cast<AVPixelFormat>(packet->out_frame->format));
           Debug(1, "out_frame pixformat %d, for index %d, packet %d", packet->out_frame->format, index, packet->image_index);
           analysis_image_buffer[index]->Assign(packet->out_frame.get());
-          analysis_image_pixelformats[index] = static_cast<AVPixelFormat>(packet->out_frame->format);
+          // Take the format the buffer actually adopted: a frame in a format
+          // Image cannot store (NV12 off a cuda/vaapi download) is converted by
+          // Assign, so recording the frame's own format here would publish a
+          // pixel format the shm bytes do not have.
+          analysis_image_pixelformats[index] = analysis_image_buffer[index]->AVPixFormat();
         } else if (decoding == DECODING_ALWAYS) {
           Error("Unable to find an image to assign for index %d packet %d", index, packet->image_index);
         }
@@ -2874,12 +2886,20 @@ int Monitor::Analyse() {
           analysis_image_buffer[index]->AVPixFormat(static_cast<AVPixelFormat>(packet->in_frame->format));
           Debug(1, "in_frame pixformat %d, for index %d, packet %d", packet->in_frame->format, index, packet->image_index);
           analysis_image_buffer[index]->Assign(packet->in_frame.get());
-          analysis_image_pixelformats[index] = static_cast<AVPixelFormat>(packet->in_frame->format);
+          // Take the format the buffer actually adopted: a frame in a format
+          // Image cannot store (NV12 off a cuda/vaapi download) is converted by
+          // Assign, so recording the frame's own format here would publish a
+          // pixel format the shm bytes do not have.
+          analysis_image_pixelformats[index] = analysis_image_buffer[index]->AVPixFormat();
         } else if (packet->out_frame) {
           analysis_image_buffer[index]->AVPixFormat(static_cast<AVPixelFormat>(packet->out_frame->format));
           Debug(1, "out_frame pixformat %d, for index %d, packet %d", packet->out_frame->format, index, packet->image_index);
           analysis_image_buffer[index]->Assign(packet->out_frame.get());
-          analysis_image_pixelformats[index] = static_cast<AVPixelFormat>(packet->out_frame->format);
+          // Take the format the buffer actually adopted: a frame in a format
+          // Image cannot store (NV12 off a cuda/vaapi download) is converted by
+          // Assign, so recording the frame's own format here would publish a
+          // pixel format the shm bytes do not have.
+          analysis_image_pixelformats[index] = analysis_image_buffer[index]->AVPixFormat();
         } else {
           Debug(1, "Unable to find an image to assign for index %d packet %d", index, packet->image_index);
         }
