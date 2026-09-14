@@ -6386,12 +6386,20 @@ AVPixelFormat Image::AVPixFormat() const {
 }
 
 AVPixelFormat Image::AVPixFormat(AVPixelFormat new_pixelformat) {
-  if (new_pixelformat == AV_PIX_FMT_YUYV422) {
-    // Packed YUV 4:2:2 (2 bytes/pixel) — cannot be stored natively because
-    // Image buffers are sized for planar YUV420P (1.5 bytes/pixel).
-    // Keep the current target format so Assign() converts via sws_scale.
-    Debug(1, "YUYV422 input will be converted to %s on Assign",
-          av_get_pix_fmt_name(imagePixFormat));
+  // Formats Image has no storage layout for. Keeping the current target format
+  // means Assign() sees a mismatch and converts via sws_scale, which is the
+  // whole handling these need.
+  //
+  // YUYV422 is packed 4:2:2 at 2 bytes/pixel, where Image buffers are sized for
+  // planar YUV420P at 1.5. NV12 and NV21 are the semi-planar 4:2:0 pair -- a Y
+  // plane with interleaved chroma -- which is what a VAAPI or QSV decode hands
+  // back after download, so enabling hardware decoding reached this with no
+  // mapping and logged an error per frame.
+  if (new_pixelformat == AV_PIX_FMT_YUYV422
+      or new_pixelformat == AV_PIX_FMT_NV12
+      or new_pixelformat == AV_PIX_FMT_NV21) {
+    Debug(1, "%s input will be converted to %s on Assign",
+          av_get_pix_fmt_name(new_pixelformat), av_get_pix_fmt_name(imagePixFormat));
     return imagePixFormat;
   }
   if (!zm_colours_from_pixformat(new_pixelformat, colours, subpixelorder)) {
