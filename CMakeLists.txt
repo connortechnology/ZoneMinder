@@ -532,6 +532,54 @@ endif()
 # BUILD_SHARED_LIBS. There is nothing to force here.
 list(APPEND ZM_BIN_LIBS chmike::CxxUrl)
 
+# 64-bit atomics are not always inline instructions. On 32-bit targets without
+# an 8-byte atomic instruction -- armv7/armhf, which is what a 32-bit Raspberry
+# Pi OS runs, and likewise mips and ppc32 -- gcc emits calls to __atomic_load_8
+# and friends instead, and those live in libatomic. The failure is at link time
+# and names the symbol rather than the cause:
+#
+#   undefined reference to symbol '__atomic_load_8@@LIBATOMIC_1.0'
+#   libatomic.so.1: error adding symbols: DSO missing from command line
+#
+# Test rather than guess at the architecture: whether the libcall is needed
+# depends on the target and the -march the compiler was given, not on the name
+# of the platform. check_cxx_source_compiles links, so it sees the same failure
+# the real build would.
+include(CheckCXXSourceCompiles)
+set(_zm_atomic64_src "
+#include <atomic>
+#include <cstdint>
+int main() {
+  std::atomic<uint64_t> counter(0);
+  counter.fetch_add(1);
+  return static_cast<int>(counter.load());
+}
+")
+check_cxx_source_compiles("${_zm_atomic64_src}" ZM_HAVE_BUILTIN_ATOMIC64)
+if(NOT ZM_HAVE_BUILTIN_ATOMIC64)
+  # Ask for -latomic rather than hunting for the file. libatomic.so.1 is the
+  # runtime and often the only copy under /usr/lib/<triple>, with the linker
+  # name libatomic.so living in gcc's own directory, so find_library() misses it
+  # on a perfectly working toolchain. The compiler driver knows where its own
+  # runtime libraries are; let it resolve the name.
+  set(_zm_atomic_required_save "${CMAKE_REQUIRED_LIBRARIES}")
+  set(CMAKE_REQUIRED_LIBRARIES atomic)
+  check_cxx_source_compiles("${_zm_atomic64_src}" ZM_ATOMIC64_NEEDS_LIBATOMIC)
+  set(CMAKE_REQUIRED_LIBRARIES "${_zm_atomic_required_save}")
+  unset(_zm_atomic_required_save)
+  if(NOT ZM_ATOMIC64_NEEDS_LIBATOMIC)
+    message(FATAL_ERROR
+      "64-bit atomics do not link on this target, with or without libatomic. "
+      "Install libatomic (libatomic1 on Debian, libatomic on Fedora) or add the "
+      "right library to ZM_EXTRA_LIBS.")
+  endif()
+  list(APPEND ZM_BIN_LIBS atomic)
+  message(STATUS "64-bit atomics need libatomic on this target: linking -latomic")
+else()
+  message(STATUS "64-bit atomics are inline on this target, libatomic not needed")
+endif()
+unset(_zm_atomic64_src)
+
 # libjwt
 if (${ZM_JWT_BACKEND} STREQUAL "libjwt")
   find_package(LibJWT REQUIRED COMPONENTS ${ZM_CRYPTO_BACKEND})
