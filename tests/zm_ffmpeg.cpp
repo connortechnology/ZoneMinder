@@ -415,3 +415,26 @@ TEST_CASE("analysis_should_pace", "[ffmpeg]") {
     CHECK_FALSE(analysis_should_pace(burst + 1, burst, 10'000'000, 0, paced));
   }
 }
+
+TEST_CASE("hw_jpeg_encoder_name", "[ffmpeg]") {
+  SECTION("devices whose jpeg encoder is worth using") {
+    REQUIRE(std::string(hw_jpeg_encoder_name(AV_HWDEVICE_TYPE_VAAPI)) == "mjpeg_vaapi");
+    REQUIRE(std::string(hw_jpeg_encoder_name(AV_HWDEVICE_TYPE_QSV)) == "mjpeg_qsv");
+  }
+  SECTION("no device at all") {
+    REQUIRE(hw_jpeg_encoder_name(AV_HWDEVICE_TYPE_NONE) == nullptr);
+  }
+#ifdef HAVE_QUADRA
+  // The enum value only exists in NetInt's ffmpeg, so this can only be asserted
+  // where that is what we built against.
+  SECTION("NetInt Quadra is excluded deliberately") {
+    // jpeg_ni_quadra_enc exists, but it costs the card far more than the jpegs
+    // are worth. Returning it here would quietly opt every Quadra monitor in.
+    REQUIRE(hw_jpeg_encoder_name(AV_HWDEVICE_TYPE_NI_QUADRA) == nullptr);
+  }
+#endif
+  SECTION("a device with no jpeg encoder falls back to software") {
+    REQUIRE(hw_jpeg_encoder_name(AV_HWDEVICE_TYPE_CUDA) == nullptr);
+    REQUIRE(hw_jpeg_encoder_name(AV_HWDEVICE_TYPE_VDPAU) == nullptr);
+  }
+}

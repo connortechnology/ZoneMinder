@@ -633,6 +633,16 @@ bool av_log_should_print(AvLogRepeat &state, const std::string &message,
 int ni_get_cardno(const AVCodecContext *ctx);
 #endif
 int libjpeg_to_ffmpeg_qv(int libjpeg_quality);
+
+// The jpeg encoder that can take a frame from this device without downloading
+// it, or nullptr when there is not one worth using.
+//
+// NetInt Quadra is deliberately absent even though jpeg_ni_quadra_enc exists:
+// it puts far more load on the card than the jpegs are worth, which is why the
+// row for it in the encoder table stays commented out. Keeping the decision
+// here rather than in the encoder table means the video encoder's codec
+// selection is unaffected by what we do for jpegs.
+const char *hw_jpeg_encoder_name(enum AVHWDeviceType device_type);
 enum AVPixelFormat get_hw_format(AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts);
 
 #endif // ZM_FFMPEG_H

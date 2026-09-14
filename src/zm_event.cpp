@@ -69,6 +69,7 @@ Event::Event(
   mJpegCodecContext(nullptr),
   mJpegSwsContext(nullptr),
   mJpegCodecQuality(-1),
+  mJpegCodecIsHardware(false),
   hw_device_ctx(nullptr),
   //video_file(""),
   //video_path(""),
@@ -202,6 +203,65 @@ int Event::OpenJpegCodec(AVFrame *frame, int quality) {
   if (mJpegCodecContext) {
     avcodec_free_context(&mJpegCodecContext);
     mJpegCodecContext = nullptr;
+  }
+
+  mJpegCodecIsHardware = false;
+
+  // A frame still on the accelerator can be encoded where it sits, which is
+  // the whole point of keeping it there: measured on an Intel iGPU, jpeg from a
+  // resident frame costs 0.39ms against 8.27ms for decode-and-encode in
+  // software. Use the frame's own frames context rather than making one --
+  // an encoder handed a surface from a pool it does not own produces a black
+  // jpeg and reports no error, which is the trap the video encoder hit.
+  if (frame->hw_frames_ctx) {
+    const AVHWFramesContext *frames_ctx =
+        reinterpret_cast<AVHWFramesContext *>(frame->hw_frames_ctx->data);
+    const char *hw_name = hw_jpeg_encoder_name(frames_ctx->device_ctx->type);
+    const AVCodec *hw_codec = hw_name ? avcodec_find_encoder_by_name(hw_name) : nullptr;
+    if (hw_codec) {
+      mJpegCodecContext = avcodec_alloc_context3(hw_codec);
+      if (mJpegCodecContext) {
+        // Geometry has to match the pool, not the monitor: they differ when the
+        // camera's stream is not the configured size, and a mismatch is refused.
+        mJpegCodecContext->width = frames_ctx->width;
+        mJpegCodecContext->height = frames_ctx->height;
+        mJpegCodecContext->time_base = (AVRational) {1, 25};
+        mJpegCodecContext->pix_fmt = frames_ctx->format;
+        mJpegCodecContext->sw_pix_fmt = frames_ctx->sw_format;
+        mJpegCodecContext->hw_frames_ctx = av_buffer_ref(frame->hw_frames_ctx);
+        // The hardware encoder wants the libjpeg quality as it stands: 1-100,
+        // higher is better. That is not what the software mjpeg encoder wants,
+        // which is why this does not reuse the conversion below -- feeding it a
+        // qscale scaled by FF_QP2LAMBDA is both inverted and far out of range,
+        // so a monitor configured for quality 30 produced a larger file than
+        // one configured for 70. Measured on mjpeg_vaapi, global_quality 10
+        // through 95 gives 90KB through 831KB for the same frame, monotonically.
+        mJpegCodecContext->global_quality = quality;
+        // One image in, one jpeg out: ask for no pipelining, so a packet is
+        // ready without having to drain. Ignored by encoders that do not have
+        // the option, which is why the drain path still has to exist.
+        av_opt_set_int(mJpegCodecContext->priv_data, "async_depth", 1, 0);
+
+        int hw_ret = mJpegCodecContext->hw_frames_ctx
+                   ? avcodec_open2(mJpegCodecContext, hw_codec, nullptr)
+                   : AVERROR(ENOMEM);
+        if (hw_ret >= 0) {
+          mJpegCodecIsHardware = true;
+          mJpegCodecQuality = quality;
+          Debug(1, "Encoding jpegs with %s from the device frame, %dx%d %s",
+                hw_name, frames_ctx->width, frames_ctx->height,
+                av_get_pix_fmt_name(frames_ctx->sw_format));
+          return 0;
+        }
+        // Fall through to software. Worth saying once at Info: it is the
+        // difference between 0.4ms and 8ms a frame, so an operator who expected
+        // the hardware path should be able to see that it did not happen.
+        Info("Could not open %s (%s); encoding jpegs in software instead",
+             hw_name, av_make_error_string(hw_ret).c_str());
+        avcodec_free_context(&mJpegCodecContext);
+        mJpegCodecContext = nullptr;
+      }
+    }
   }
 
   std::list<const CodecData *>codec_data = get_encoder_data("mjpeg", "");
@@ -518,7 +578,11 @@ bool Event::WriteJpeg(AVFrame *in_frame, const std::string &filename, bool alarm
 
   // swscale ignores the source dimensions given at context creation, so the
   // context only has to be rebuilt when the quality changes.
-  if (!mJpegCodecContext or !mJpegSwsContext or (mJpegCodecQuality != thisquality)) {
+  // The hardware path never builds an sws context -- there is nothing to
+  // convert -- so requiring one here would reopen the codec on every frame.
+  if (!mJpegCodecContext
+      or (!mJpegCodecIsHardware and !mJpegSwsContext)
+      or (mJpegCodecQuality != thisquality)) {
     Debug(1, "Opening jpeg codec at quality %d, ctx %p", thisquality, mJpegCodecContext);
     OpenJpegCodec(in_frame, thisquality);
   }
@@ -541,34 +605,49 @@ bool Event::WriteJpeg(AVFrame *in_frame, const std::string &filename, bool alarm
     Error("Couldn't get lock on %s, continuing", filename.c_str());
   }
 
-  Debug(1, "Have sws context, converting from %dx%d %s to %dx%d %s",
-      in_frame->width, in_frame->height, av_get_pix_fmt_name(static_cast<AVPixelFormat>(in_frame->format)),
-      mJpegCodecContext->width, mJpegCodecContext->width, av_get_pix_fmt_name(AV_PIX_FMT_YUVJ420P)
-      );
+  if (!mJpegCodecIsHardware) {
+    Debug(1, "Have sws context, converting from %dx%d %s to %dx%d %s",
+        in_frame->width, in_frame->height, av_get_pix_fmt_name(static_cast<AVPixelFormat>(in_frame->format)),
+        mJpegCodecContext->width, mJpegCodecContext->width, av_get_pix_fmt_name(AV_PIX_FMT_YUVJ420P)
+        );
+  }
 
-  int ret = sws_scale(mJpegSwsContext, in_frame->data, in_frame->linesize, 0, in_frame->height, output_frame->data, output_frame->linesize);
-  if (ret < 0) {
-    Error("cannot do sw scale: inframe data 0x%lx, linesize %d/%d/%d/%d, height %d to %d linesize",
-        (unsigned long)in_frame->data, in_frame->linesize[0], in_frame->linesize[1],
-        in_frame->linesize[2], in_frame->linesize[3], in_frame->height, output_frame->linesize[0]);
-    return ret;
+  // A device frame has nothing in host memory to scale, and the encoder wants
+  // the surface exactly as it is, so it is sent through untouched. The software
+  // path still converts into output_frame, which only it allocates.
+  AVFrame *send_frame = mJpegCodecIsHardware ? in_frame : output_frame.get();
+
+  int ret = 0;
+  if (!mJpegCodecIsHardware) {
+    ret = sws_scale(mJpegSwsContext, in_frame->data, in_frame->linesize, 0, in_frame->height,
+                    output_frame->data, output_frame->linesize);
+    if (ret < 0) {
+      Error("cannot do sw scale: inframe data 0x%lx, linesize %d/%d/%d/%d, height %d to %d linesize",
+          (unsigned long)in_frame->data, in_frame->linesize[0], in_frame->linesize[1],
+          in_frame->linesize[2], in_frame->linesize[3], in_frame->height, output_frame->linesize[0]);
+      return ret;
+    }
   }
 
   zm_dump_video_frame(in_frame, "Image.WriteJpeg(frame)");
 
-  // The mjpeg encoder takes its quantiser from the frame, not the context.
-  // Without this global_quality is ignored and every jpeg comes out at the
-  // codec default no matter what quality was configured.
-  output_frame->quality = mJpegCodecContext->global_quality;
-  ret = avcodec_send_frame(mJpegCodecContext, output_frame.get());
+  // The software mjpeg encoder takes its quantiser from the frame, not the
+  // context: without this global_quality is ignored and every jpeg comes out at
+  // the codec default. The hardware encoder reads global_quality off the
+  // context instead, and its scale is different, so leave its frames alone.
+  if (!mJpegCodecIsHardware) {
+    send_frame->quality = mJpegCodecContext->global_quality;
+  }
+  ret = avcodec_send_frame(mJpegCodecContext, send_frame);
   while (ret == AVERROR(EAGAIN) and !zm_terminate)
-    ret = avcodec_send_frame(mJpegCodecContext, output_frame.get());
+    ret = avcodec_send_frame(mJpegCodecContext, send_frame);
   Debug(1, "Retcode from avcodec_send_frame, %d", ret);
   if (ret == 0) {
     Debug(1, "After send frame");
     AVPacket *pkt = av_packet_alloc();
+    bool drained = false;
     while (!zm_terminate) {
-      Debug(1, "Getting packet");
+      Debug(3, "Getting packet");
       ret = avcodec_receive_packet(mJpegCodecContext, pkt);
       if (ret == 0) {
        // or ret == AVERROR(EOF)) {  // EOF is ok because it is jpeg:
@@ -576,7 +655,19 @@ bool Event::WriteJpeg(AVFrame *in_frame, const std::string &filename, bool alarm
         fwrite(pkt->data, 1, pkt->size, outfile);
         break;
       } else if (ret == AVERROR(EAGAIN)) {
-        Debug(1, "EAGAIN");
+        // The software encoder answers a frame with a packet straight away, so
+        // this used to be a retry. A hardware encoder does not: it holds frames
+        // to keep the pipeline busy and reports EAGAIN until it is given more
+        // or told there are none, which turned this into a spin that only ever
+        // ended at shutdown. One image in, one jpeg out, so say there are no
+        // more and take the packet.
+        if (drained) {
+          Warning("No jpeg from %s even after draining", mJpegCodecContext->codec->name);
+          break;
+        }
+        Debug(3, "EAGAIN, draining the encoder for this frame");
+        drained = true;
+        avcodec_send_frame(mJpegCodecContext, nullptr);
       } else if (ret < 0) {
         Warning("Error getting packet %d %s", ret, av_make_error_string(ret).c_str());
         if (pkt->size) {
@@ -589,6 +680,9 @@ bool Event::WriteJpeg(AVFrame *in_frame, const std::string &filename, bool alarm
       }
     }  // end while
     av_packet_free(&pkt);
+    // Draining leaves the encoder at end of stream; reset it so the next frame
+    // can be sent to the same context rather than reopening one per jpeg.
+    if (drained and mJpegCodecContext) avcodec_flush_buffers(mJpegCodecContext);
   } else {
     Error("Ret from send_frame %d", ret);
   }
@@ -718,10 +812,6 @@ void Event::AddPacket_(const std::shared_ptr<ZMPacket>packet) {
     if (have_video_keyframe) {
       size_t frags_before = videoStore->fragments().size();
       videoStore->writePacket(packet);
-      // Done with the device frame: writePacket has taken its own reference for
-      // as long as the encoder needs one, so dropping ours here returns the pool
-      // slot now rather than whenever this packet finally leaves the queue.
-      packet->hw_frame = nullptr;
       // Update m3u8 whenever a new fragment is completed (live HLS)
       if (videoStore->fragments().size() > frags_before) {
         std::string m3u8_path = path + "/index.m3u8";
@@ -738,6 +828,14 @@ void Event::AddPacket_(const std::shared_ptr<ZMPacket>packet) {
   if ((packet->codec_type == AVMEDIA_TYPE_VIDEO) or packet->image) {
     AddFrame(packet);
   }
+
+  // Done with the device frame. Both consumers have had it by now: the encoder,
+  // which took its own reference for as long as it needs one, and AddFrame,
+  // which encodes the event jpegs from it where the hardware can. Dropping our
+  // pointer here returns the pool slot rather than holding it until the packet
+  // leaves the queue -- and it has to be after AddFrame, not before, or the
+  // jpeg path only ever sees the software copy.
+  packet->hw_frame = nullptr;
 #if ZM_HAS_NLOHMANN_JSON
   if (packet->detections.size()) {
     std::string sql = stringtf("INSERT INTO Event_Data (EventId,MonitorId,FrameId,Timestamp,Data) VALUES (%" PRId64 ", %d, %d, NOW(), '%s')", id, monitor->Id(), frames, packet->detections.dump().c_str());
@@ -864,6 +962,10 @@ void Event::AddFrame(const std::shared_ptr<ZMPacket>&packet) {
     if (
         (packet->ai_frame and WriteJpeg(packet->ai_frame.get(), event_file.c_str()))
         or
+        // Still on the card: encode it there. A failure falls through to the
+        // software frame below, so this cannot cost us the image.
+        (packet->hw_frame and WriteJpeg(packet->hw_frame.get(), event_file.c_str()))
+        or
         (packet->in_frame and WriteJpeg(packet->in_frame.get(), event_file.c_str()))
         or
         (packet->image and WriteFrameImage(packet->image, packet->timestamp, event_file.c_str()))
@@ -882,6 +984,8 @@ void Event::AddFrame(const std::shared_ptr<ZMPacket>&packet) {
     Debug(1, "Writing snapshot to %s", snapshot_file.c_str());
     if (
         (packet->ai_frame and WriteJpeg(packet->ai_frame.get(), snapshot_file.c_str()))
+        or
+        (packet->hw_frame and WriteJpeg(packet->hw_frame.get(), snapshot_file.c_str()))
         or
         (packet->in_frame and WriteJpeg(packet->in_frame.get(), snapshot_file.c_str()))
         or
@@ -907,6 +1011,8 @@ void Event::AddFrame(const std::shared_ptr<ZMPacket>&packet) {
       bool written = false;
       if (packet->ai_frame) {
         written = WriteJpeg(packet->ai_frame.get(), alarm_file.c_str());
+      } else if (packet->hw_frame and WriteJpeg(packet->hw_frame.get(), alarm_file.c_str())) {
+        written = true;
       } else if (packet->in_frame) {
         written = WriteJpeg(packet->in_frame.get(), alarm_file.c_str());
       } else if (packet->image) {

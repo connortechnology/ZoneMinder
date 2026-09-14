@@ -135,6 +135,10 @@ class Event {
   // ZM_JPEG_FILE_QUALITY, so in the default configuration every frame in an
   // event wants the same quality and this never reopens.
   int mJpegCodecQuality;
+  // Whether mJpegCodecContext is a hardware encoder taking device frames. When
+  // it is, WriteJpeg must hand the frame over untouched: there is nothing in
+  // host memory for swscale to read.
+  bool mJpegCodecIsHardware;
   int OpenJpegCodec(const Image *, int quality);
   int OpenJpegCodec(AVFrame *frame, int quality);
 

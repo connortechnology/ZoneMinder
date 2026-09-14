@@ -1338,6 +1338,14 @@ int zm_get_samples_from_fifo(AVAudioFifo *fifo, AVFrame *frame) {
 #include <algorithm> // for std::max and std::min
 
 // Converts libjpeg quality [0-100] to ffmpeg -q:v [2-31] for MJPEG encoding
+const char *hw_jpeg_encoder_name(enum AVHWDeviceType device_type) {
+  switch (device_type) {
+    case AV_HWDEVICE_TYPE_VAAPI: return "mjpeg_vaapi";
+    case AV_HWDEVICE_TYPE_QSV:   return "mjpeg_qsv";
+    default: return nullptr;
+  }
+}
+
 int libjpeg_to_ffmpeg_qv(int libjpeg_quality) {
     // Clamp libjpeg_quality to valid range
     libjpeg_quality = std::max(0, std::min(100, libjpeg_quality));
