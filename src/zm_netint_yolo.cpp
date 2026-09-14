@@ -18,7 +18,7 @@
 constexpr size_t NB_MODEL_NAME_OFFSET = 0x0C;
 constexpr size_t NB_MODEL_NAME_MAX_LEN = 64;
 
-#define SOFTWARE_DRAWBOX 1
+#define SOFTWARE_DRAWBOX 0
 
 namespace zm_yolo {
 
@@ -663,6 +663,7 @@ int Quadra_Yolo::annotate(
     ) {
   AVFrame *input = in_frame;
   if (drawbox) {
+    SystemTimePoint box_starttime = std::chrono::system_clock::now();
 #if SOFTWARE_DRAWBOX
     int ret = draw_roi_box_in_place(input, roi, roi_extra, monitor->LabelSize(), box_color);
     if (ret < 0) Error("draw roi box failed");
@@ -684,6 +685,8 @@ int Quadra_Yolo::annotate(
       zm_dump_video_frame(input, "Quadra: drawbox output");
     }
 #endif
+    annotate_box_us_ += std::chrono::duration_cast<Microseconds>(
+        std::chrono::system_clock::now() - box_starttime).count();
   }  // end if drawbox
 
   if (drawtext) {
@@ -711,9 +714,21 @@ int Quadra_Yolo::annotate(
       zm_dump_video_frame(input, "Quadra: drawtext");
     }
 #endif
-    SystemTimePoint endtime = std::chrono::system_clock::now();
-    Debug(1, "draw_roi_text took: %.2f seconds", FPSeconds(endtime - starttime).count());
+    annotate_text_us_ += std::chrono::duration_cast<Microseconds>(
+        std::chrono::system_clock::now() - starttime).count();
   }  // end if drawtext
+
+  // Report the means rather than each detection: at frame rate with several
+  // detections a frame, a line per call is unreadable, and one sample of a
+  // filter says nothing about its cost.
+  annotate_count_++;
+  if (annotate_count_ % 100 == 0) {
+    Debug(1, "Annotation over %ju detections (%s): drawbox %.2fms, drawtext %.2fms each",
+        static_cast<uintmax_t>(annotate_count_),
+        SOFTWARE_DRAWBOX ? "software" : "hardware filters",
+        annotate_box_us_ / 1000.0 / annotate_count_,
+        annotate_text_us_ / 1000.0 / annotate_count_);
+  }
   *output = input;
   // So in_frame should not be touched, and we should have an output frame, that references the same data as in_frame.
   return 1;

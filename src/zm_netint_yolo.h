@@ -89,6 +89,14 @@ class Quadra_Yolo {
     AVRegionOfInterestNetintExtra *last_roi_extra;
     int last_roi_count;
 
+    // Annotation cost, split by the two operations, so the software and
+    // hardware paths can be compared on the same monitor. Accumulated per
+    // detection and reported as a mean, because a per-detection line at
+    // frame rate is unreadable and a single sample says nothing.
+    uint64_t annotate_box_us_ = 0;
+    uint64_t annotate_text_us_ = 0;
+    uint64_t annotate_count_ = 0;
+
     bool use_hwframe;
     nlohmann::json detections;
 
