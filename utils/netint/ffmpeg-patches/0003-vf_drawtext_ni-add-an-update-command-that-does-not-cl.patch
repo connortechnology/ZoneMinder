@@ -15,29 +15,32 @@ not copied: they start at zero in the new context, while uninit() closes
 the two scaler sessions the old one held. The next filter_frame reopens
 both and rebuilds both pools.
 
-On a 3840x2160 h264 stream labelling detections, changing the label 6 to
-12 times a second, that churn starves the card:
+Measured on a 3840x2160 h264 stream labelling detections, a call that
+changed the label cost 45ms against 7ms for the draw alone -- that
+difference is the two sessions and two pools, since nothing else about
+the two calls differs.
 
-  drawtext blocked 6.37s on 2 labels (4 of 11 calls)
-  send_packet avg 96.3ms exceeds frame budget 66.5ms (capture 15fps)
-
-drawtext went back to spinning in ni_scaler_session_read_hwdesc for
-seconds at a time -- the same starvation patch 1 of this series fixes --
-and the decoder stopped making its frame budget, so frames were dropped
-and went out unannotated. Measured cost was 45ms a call against 7ms for
-the draw alone.
-
-None of what a caller changes per frame needs the session rebuilt.
-text_num is counted from which slots carry text, x and y are evaluated
-from x_pexpr/y_pexpr rather than the option strings, and a slot used for
-the first time needs its face, size and glyphs. fontsize already
-re-parses itself in update_fontsize() on every frame.
+None of what a caller changes per frame needs any of that. text_num is
+counted from which slots carry text, x and y are evaluated from
+x_pexpr/y_pexpr rather than the option strings, and a slot used for the
+first time needs its face, size and glyphs. fontsize already re-parses
+itself in update_fontsize() on every frame.
 
 Add an "update" command that applies the option string to the live
 context and re-derives exactly those, leaving the sessions and the pools
 alone. "reinit" keeps its meaning for callers that want a full rebuild.
 
+This is a cost, not a correctness fix, and it is worth being exact about
+which. An earlier draft of this patch claimed the session churn was also
+what made drawtext block for seconds in
+ni_scaler_session_read_hwdesc. It was not. That was the output pool
+being four frames deep, which patch 1 of this series fixes: with the
+pool sized and reinit still in use, 74 calls blocked against 12 reinits,
+so the blocking was overwhelmingly on calls that sent no command at all.
+Applying this patch alone will not stop a filter starving.
+
 Depends on patch 2 of this series: without AV_OPT_FLAG_RUNTIME_PARAM the
+
 av_set_options_string() here is refused the same way reinit's was.
 
 --- a/libavfilter/vf_drawtext_ni.c
