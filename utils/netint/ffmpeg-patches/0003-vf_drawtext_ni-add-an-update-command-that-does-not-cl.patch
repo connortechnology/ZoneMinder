@@ -42,7 +42,7 @@ av_set_options_string() here is refused the same way reinit's was.
 
 --- a/libavfilter/vf_drawtext_ni.c
 +++ b/libavfilter/vf_drawtext_ni.c
-@@ -1632,6 +1632,85 @@
+@@ -1635,6 +1635,85 @@
      NetIntDrawTextContext *new = NULL;
      int ret;
  

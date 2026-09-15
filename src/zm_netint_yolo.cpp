@@ -252,9 +252,29 @@ bool Quadra_Yolo::setup(
     // the options NETINT did not mark runtime -- a reinit command carrying
     // them is refused. reinit runs av_opt_copy from the live context before
     // applying its own string, so what is set here survives every reinit.
+    // The filter takes an output frame from its own pool for every frame it
+    // draws, and that pool defaults to four. Four in flight is not enough
+    // while this monitor also holds decoded frames of its own:
+    // ni_scaler_session_read_hwdesc gets frame index 0 and spins for seconds,
+    // with ni_rsrc_mon showing the scaler at 0% load and 0% frame memory.
+    // The card has the frames; the session's pool does not.
+    //
+    // Set as an option rather than through filter_ctx->extra_hw_frames, which
+    // is libavfilter's own accounting and fixed once the filter is
+    // initialised: a pool bigger than that field leaves these frames outside
+    // the hardware frames context hwdownload was configured for, and it
+    // refuses every one with EINVAL. Needs
+    // utils/netint/ffmpeg-patches/0001, which adds the option.
+    const int budget = monitor->DeviceFrameBudget() > 0
+        ? monitor->DeviceFrameBudget()
+        : static_cast<int>(zm_device_frame_budget());
+    const int pool_size = std::max(8, budget / 2);
+
     std::string options = stringtf(
-        "ni_quadra_drawtext=text=init:expansion=none:fontsize=%d:font=Sans:box=1",
-        fontsize);
+        "ni_quadra_drawtext=text=init:expansion=none:fontsize=%d:font=Sans:box=1"
+        ":pool_size=%d",
+        fontsize, pool_size);
+    Debug(1, "drawtext output pool of %d frames (budget %d)", pool_size, budget);
     const int padding = std::max(2, fontsize / 6);
     for (size_t i = 0; i < kDrawtextSlots; i++)
       options += stringtf(":bc%zu=%s:bb%zu=%d", i, kLabelBackground, i, padding);

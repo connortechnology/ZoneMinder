@@ -31,7 +31,7 @@ aliases -- matching the set upstream marks.
 
 --- a/libavfilter/vf_drawtext_ni.c
 +++ b/libavfilter/vf_drawtext_ni.c
-@@ -294,6 +294,12 @@
+@@ -295,6 +295,12 @@
  
  #define OFFSET(x) offsetof(NetIntDrawTextContext, x)
  #define FLAGS AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_VIDEO_PARAM
@@ -44,7 +44,7 @@ aliases -- matching the set upstream marks.
  
  static const AVOption ni_drawtext_options[] = {
      { "fontfile",    "set font file",        OFFSET(fontfile[0]),           AV_OPT_TYPE_STRING, {.str=NULL},  0, 0, FLAGS },
-@@ -329,73 +335,73 @@
+@@ -330,73 +336,73 @@
      { "ff29",        "set font file",        OFFSET(fontfile[29]),          AV_OPT_TYPE_STRING, {.str=NULL},  0, 0, FLAGS },
      { "ff30",        "set font file",        OFFSET(fontfile[30]),          AV_OPT_TYPE_STRING, {.str=NULL},  0, 0, FLAGS },
      { "ff31",        "set font file",        OFFSET(fontfile[31]),          AV_OPT_TYPE_STRING, {.str=NULL},  0, 0, FLAGS },
@@ -184,7 +184,7 @@ aliases -- matching the set upstream marks.
      { "fontcolor_expr", "set foreground color expression", OFFSET(fontcolor_expr[0]),   AV_OPT_TYPE_STRING,  {.str=NULL}, 0, 0, FLAGS },
      { "fc_expr0",    "set foreground color expression", OFFSET(fontcolor_expr[0]),   AV_OPT_TYPE_STRING,  {.str=NULL}, 0, 0, FLAGS },
      { "fc_expr1",    "set foreground color expression", OFFSET(fontcolor_expr[1]),   AV_OPT_TYPE_STRING,  {.str=NULL}, 0, 0, FLAGS },
-@@ -499,144 +505,144 @@
+@@ -502,144 +508,144 @@
      { "bb30",        "set box borders width", OFFSET(boxborderw[30]),       AV_OPT_TYPE_STRING, {.str="0"},   0, 0, FLAGS },
      { "bb31",        "set box borders width", OFFSET(boxborderw[31]),       AV_OPT_TYPE_STRING, {.str="0"},   0, 0, FLAGS },
      { "line_spacing",  "set line spacing in pixels", OFFSET(line_spacing),   AV_OPT_TYPE_INT,    {.i64=0},     INT_MIN,  INT_MAX,FLAGS },
