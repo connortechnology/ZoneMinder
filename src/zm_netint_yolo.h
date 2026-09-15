@@ -100,6 +100,16 @@ class Quadra_Yolo {
     // what a busier one left set.
     size_t drawtext_slots_used_ = 0;
 
+    // av_opt_set failing is silent otherwise: the filter simply draws nothing
+    // and the log shows a successful call that cost the price of a few string
+    // formats. Count them, and report the first in full.
+    uint64_t drawtext_opt_errors_ = 0;
+    bool drawtext_opt_reported_ = false;
+    // Sets one filter option, counting and reporting a rejection.
+    int set_drawtext_opt(const std::string &key, const std::string &value);
+    bool drawbox_opt_reported_ = false;
+    bool drawbox_cmd_reported_ = false;
+
     bool use_hwframe;
     nlohmann::json detections;
 

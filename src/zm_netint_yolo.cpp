@@ -490,12 +490,24 @@ int Quadra_Yolo::draw_roi_box(
     int h = (roi.bottom - roi.top) - 2*i;
 
     Debug(1, "draw_roi_box: x %d, y %d, w %d, h %d color %s line_width %d", x, y, w, h, color, line_width);
-    drawbox_filter.opt_set("x", x);
-    drawbox_filter.opt_set("y", y);
-    drawbox_filter.opt_set("w", w);
-    drawbox_filter.opt_set("h", h);
+    // Checked for the same reason as the drawtext slots: a refused option
+    // leaves the filter drawing the previous box, or none, and says nothing.
+    int r = 0;
+    if (drawbox_filter.opt_set("x", x) < 0) r = -1;
+    if (drawbox_filter.opt_set("y", y) < 0) r = -1;
+    if (drawbox_filter.opt_set("w", w) < 0) r = -1;
+    if (drawbox_filter.opt_set("h", h) < 0) r = -1;
+    if (r < 0 and !drawbox_opt_reported_) {
+      drawbox_opt_reported_ = true;
+      Error("drawbox rejected a geometry option; boxes will not follow detections");
+    }
   }
-  drawbox_filter.send_command("ni_quadra_drawbox", "color", color);
+  int cmd_ret = drawbox_filter.send_command("ni_quadra_drawbox", "color", color);
+  if (cmd_ret < 0 and !drawbox_cmd_reported_) {
+    drawbox_cmd_reported_ = true;
+    Error("drawbox rejected the colour command: %d %s; boxes will use the previous colour",
+          cmd_ret, av_make_error_string(cmd_ret).c_str());
+  }
 
   int ret = drawbox_filter.execute(inframe, outframe);
   SystemTimePoint endtime = std::chrono::system_clock::now();
@@ -718,11 +730,18 @@ int Quadra_Yolo::annotate(
   // filter says nothing about its cost.
   annotate_count_++;
   if (annotate_count_ % 100 == 0) {
-    Debug(1, "Annotation over %ju detections (%s): drawbox %.2fms, drawtext %.2fms each",
+    Debug(1, "Annotation over %ju detections (%s): drawbox %.2fms, drawtext %.2fms each"
+             "%s",
         static_cast<uintmax_t>(annotate_count_),
         SOFTWARE_DRAWBOX ? "software" : "hardware filters",
         annotate_box_us_ / 1000.0 / annotate_count_,
-        annotate_text_us_ / 1000.0 / annotate_count_);
+        annotate_text_us_ / 1000.0 / annotate_count_,
+        // A timing means nothing if the options were refused, so never print
+        // one that looks respectable without saying the labels are missing.
+        drawtext_opt_errors_
+            ? stringtf(" -- %ju option rejections, labels NOT drawn",
+                       static_cast<uintmax_t>(drawtext_opt_errors_)).c_str()
+            : "");
   }
   *output = input;
   // So in_frame should not be touched, and we should have an output frame, that references the same data as in_frame.
@@ -944,6 +963,20 @@ int Quadra_Yolo::ni_read_roi(AVFrame *out, int frame_count) {
   return roi_num;
 }
 
+int Quadra_Yolo::set_drawtext_opt(const std::string &key, const std::string &value) {
+  int ret = drawtext_filter.opt_set(key, value);
+  if (ret < 0) {
+    drawtext_opt_errors_++;
+    if (!drawtext_opt_reported_) {
+      drawtext_opt_reported_ = true;
+      Error("drawtext rejected %s='%s': %d %s. Labels will not be drawn; "
+            "further rejections are counted in the annotation report.",
+            key.c_str(), value.c_str(), ret, av_make_error_string(ret).c_str());
+    }
+  }
+  return ret;
+}
+
 int Quadra_Yolo::draw_texts(AVFrame *in_frame, AVFrame **output,
                             const std::vector<TextItem> &items) {
   if (items.empty()) {
@@ -984,19 +1017,25 @@ int Quadra_Yolo::draw_texts(AVFrame *in_frame, AVFrame **output,
   //
   // Avoiding reinit is the point regardless: it ran uninit() and init() per
   // call, reloading the font through fontconfig each time.
+  int failed = 0;
   for (size_t i = 0; i < count; i++) {
-    drawtext_filter.opt_set(stringtf("t%zu", i), items[i].text);
-    drawtext_filter.opt_set(stringtf("x%zu", i), items[i].x);
-    drawtext_filter.opt_set(stringtf("y%zu", i), items[i].y);
-    drawtext_filter.opt_set(stringtf("fc%zu", i), items[i].colour);
+    int ret;
+    if ((ret = set_drawtext_opt(stringtf("t%zu", i), items[i].text)) < 0) failed = ret;
+    if ((ret = set_drawtext_opt(stringtf("x%zu", i), std::to_string(items[i].x))) < 0) failed = ret;
+    if ((ret = set_drawtext_opt(stringtf("y%zu", i), std::to_string(items[i].y))) < 0) failed = ret;
+    if ((ret = set_drawtext_opt(stringtf("fc%zu", i), items[i].colour)) < 0) failed = ret;
   }
 
   // Slots a busier frame left behind would otherwise redraw its labels over
   // this one, so blank the tail rather than only writing what we need.
   for (size_t i = count; i < drawtext_slots_used_; i++) {
-    drawtext_filter.opt_set(stringtf("t%zu", i), "");
+    set_drawtext_opt(stringtf("t%zu", i), "");
   }
   drawtext_slots_used_ = count;
+
+  // A rejected option means the labels are simply not there. Say so rather
+  // than run the filter and report a time for drawing nothing.
+  if (failed < 0) return failed;
 
   return drawtext_filter.execute(in_frame, output);
 #endif
