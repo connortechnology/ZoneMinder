@@ -20,6 +20,11 @@ constexpr size_t NB_MODEL_NAME_MAX_LEN = 64;
 
 #define SOFTWARE_DRAWBOX 0
 
+// A call over this is not a slow blit, it is a wait: the filter allocates its
+// output from the frame pool and blocks when the card has none to give.
+static constexpr uint64_t kDrawtextBlockedUs = 250000;
+
+
 namespace zm_yolo {
 
 AVFrame *ai_input_frame(bool use_hwframe, AVFrame *hw_frame, AVFrame *in_frame) {
@@ -626,8 +631,9 @@ int Quadra_Yolo::process_roi(AVFrame *in_frame, AVFrame **filt_frame) {
       if (input != in_frame) av_frame_free(&input);
       input = text_output;
     }
-    annotate_text_us_ += std::chrono::duration_cast<Microseconds>(
-        std::chrono::system_clock::now() - text_starttime).count();
+    record_drawtext_time(std::chrono::duration_cast<Microseconds>(
+        std::chrono::system_clock::now() - text_starttime).count(),
+        text_items.size());
   }
   
   AVFrame *output = nullptr;
@@ -730,12 +736,17 @@ int Quadra_Yolo::annotate(
   // filter says nothing about its cost.
   annotate_count_++;
   if (annotate_count_ % 100 == 0) {
-    Debug(1, "Annotation over %ju detections (%s): drawbox %.2fms, drawtext %.2fms each"
+    Debug(1, "Annotation over %ju detections (%s): drawbox %.2fms each, "
+             "drawtext %ju calls mean %.2fms max %.2fms, %ju blocked over %.0fms"
              "%s",
         static_cast<uintmax_t>(annotate_count_),
         SOFTWARE_DRAWBOX ? "software" : "hardware filters",
         annotate_box_us_ / 1000.0 / annotate_count_,
-        annotate_text_us_ / 1000.0 / annotate_count_,
+        static_cast<uintmax_t>(drawtext_calls_),
+        drawtext_calls_ ? annotate_text_us_ / 1000.0 / drawtext_calls_ : 0.0,
+        drawtext_max_us_ / 1000.0,
+        static_cast<uintmax_t>(drawtext_slow_calls_),
+        kDrawtextBlockedUs / 1000.0,
         // A timing means nothing if the options were refused, so never print
         // one that looks respectable without saying the labels are missing.
         drawtext_opt_errors_
@@ -814,8 +825,9 @@ int Quadra_Yolo::draw_last_roi(std::shared_ptr<ZMPacket> packet) {
       if (input != in_frame) av_frame_free(&input);
       input = text_output;
     }
-    annotate_text_us_ += std::chrono::duration_cast<Microseconds>(
-        std::chrono::system_clock::now() - text_starttime).count();
+    record_drawtext_time(std::chrono::duration_cast<Microseconds>(
+        std::chrono::system_clock::now() - text_starttime).count(),
+        text_items.size());
   }
 
 #if !SOFTWARE_DRAWBOX
@@ -961,6 +973,19 @@ int Quadra_Yolo::ni_read_roi(AVFrame *out, int frame_count) {
   }
   if (roi_box) free(roi_box);
   return roi_num;
+}
+
+void Quadra_Yolo::record_drawtext_time(uint64_t us, size_t labels) {
+  drawtext_calls_++;
+  annotate_text_us_ += us;
+  if (us > drawtext_max_us_) drawtext_max_us_ = us;
+  if (us > kDrawtextBlockedUs) {
+    drawtext_slow_calls_++;
+    Warning("drawtext blocked %.2fs on %zu label%s (%ju of %ju calls so far)",
+        us / 1000000.0, labels, labels == 1 ? "" : "s",
+        static_cast<uintmax_t>(drawtext_slow_calls_),
+        static_cast<uintmax_t>(drawtext_calls_));
+  }
 }
 
 int Quadra_Yolo::set_drawtext_opt(const std::string &key, const std::string &value) {

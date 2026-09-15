@@ -95,6 +95,13 @@ class Quadra_Yolo {
     // frame rate is unreadable and a single sample says nothing.
     uint64_t annotate_box_us_ = 0;
     uint64_t annotate_text_us_ = 0;
+    // The mean hid a bimodal cost: most drawtext calls are a few ms, a
+    // minority block for seconds. Keep the shape, not just the average.
+    uint64_t drawtext_calls_ = 0;
+    uint64_t drawtext_slow_calls_ = 0;
+    uint64_t drawtext_max_us_ = 0;
+    // Records one drawtext call, reporting it individually when it blocks.
+    void record_drawtext_time(uint64_t us, size_t labels);
     uint64_t annotate_count_ = 0;
     // Highest drawtext slot written last frame, so a quieter frame can blank
     // what a busier one left set.

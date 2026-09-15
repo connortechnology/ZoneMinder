@@ -145,6 +145,7 @@ Monitor::Monitor() :
   type(LOCAL),
   capturing(CAPTURING_ALWAYS),
   analysing(ANALYSING_ALWAYS),
+  device_frame_budget(-1),
   objectdetection(OBJECT_DETECTION_NONE),
   objectdetection_model(""),
   objectdetection_object_threshold(0.4),
@@ -163,7 +164,6 @@ Monitor::Monitor() :
   restream(false),
   rtsp_user(0),
   janus_rtsp_session_timeout(0),
-  device_frame_budget(-1),
   curl(nullptr),
   //protocol
   //method
