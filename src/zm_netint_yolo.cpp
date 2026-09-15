@@ -261,27 +261,6 @@ bool Quadra_Yolo::setup(
 
     drawtext = drawtext_filter.setup(options, "ni_quadra_drawtext",
         dec_ctx, dec_stream->time_base, dec_ctx->hw_frames_ctx, dec_ctx->pix_fmt);
-
-    // The filter takes an output frame from its own pool for every frame, and
-    // that pool is DEFAULT_NI_FILTER_POOL_SIZE, which is four. Four frames in
-    // flight is not enough once this monitor holds decoded frames of its own:
-    // ni_scaler_session_read_hwdesc gets frame index 0 and spins, for seconds,
-    // while ni_rsrc_mon shows the scaler at 0% load and 0% frame memory. The
-    // card is not short of frames; the session's pool is.
-    //
-    // ff_ni_build_frame_pool adds ctx->extra_hw_frames to the pool, so ask for
-    // enough to cover what this monitor may hold at once. Needs
-    // utils/netint/ffmpeg-patches/0001, which is what builds this pool at all.
-    if (drawtext) {
-      // The monitor's own setting is -1 when it defers to the global, so use
-      // the effective figure -- the same one the decode pool line reports.
-      const int budget = monitor->DeviceFrameBudget() > 0
-          ? monitor->DeviceFrameBudget()
-          : static_cast<int>(zm_device_frame_budget());
-      const int extra = std::max(4, budget);
-      if (drawtext_filter.set_extra_hw_frames(extra))
-        Debug(1, "drawtext output pool: 4 + %d extra frames", extra);
-    }
   }
   //if (drawtext) drawtext = drawtext_filter.setup("ni_quadra_scale=iw:ih:format=rgba,ni_quadra_drawtext=text=init:fontsize=24:font=Sans", "ni_quadra_drawtext", true, dec_ctx->pix_fmt);
 #endif
