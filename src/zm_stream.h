@@ -199,6 +199,14 @@ class StreamBase {
   // dimension with it rather than distorting the frame. Takes the size to
   // encode -- the caller has already applied any scale.
   static void jpegEncodeDimensions(int &width, int &height);
+  // Works out when the frame after this one is due, and how long to wait.
+  // Advances on a fixed cadence from the previous due time rather than from
+  // now, so the time spent encoding and sending does not stretch the
+  // interval; and when a frame overran its whole slot, restarts the cadence
+  // instead of firing the missed frames back to back. Returns the sleep,
+  // never negative, and sets next_due.
+  static FPSeconds scheduleNextFrame(TimePoint now, TimePoint previous_due,
+                                     FPSeconds interval, TimePoint &next_due);
   void checkCommandQueue();
   virtual void processCommand(const CmdMsg *msg)=0;
   void reserveTempImgBuffer(size_t size);

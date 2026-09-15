@@ -44,6 +44,10 @@ class TestStream : public StreamBase {
   static void jpegDims(int &width, int &height) {
     jpegEncodeDimensions(width, height);
   }
+  static FPSeconds schedule(TimePoint now, TimePoint previous_due,
+                            FPSeconds interval, TimePoint &next_due) {
+    return scheduleNextFrame(now, previous_due, interval, next_due);
+  }
   void setView(int p_scale, int p_zoom) {
     scale = p_scale;
     zoom = p_zoom;
@@ -197,6 +201,65 @@ TEST_CASE("StreamBase::prepareImage pre-scaled frames") {
       REQUIRE(scaled.Width() == (kWidth * scale) / ZM_SCALE_BASE);
       REQUIRE(scaled.Height() == (kHeight * scale) / ZM_SCALE_BASE);
     }
+  }
+}
+
+TEST_CASE("StreamBase::scheduleNextFrame") {
+  const TimePoint kEpoch{};
+  const FPSeconds interval{1.0 / 15};   // 66.7ms, a 15fps stream
+  TimePoint next_due{};
+
+  SECTION("keeps a fixed cadence when sending costs nothing") {
+    // Due now, nothing spent: the next frame is due one interval on.
+    FPSeconds sleep = TestStream::schedule(kEpoch, kEpoch, interval, next_due);
+    CHECK(sleep.count() == Catch::Approx(1.0 / 15));
+    CHECK(next_due == kEpoch + std::chrono::duration_cast<Microseconds>(interval));
+  }
+
+  SECTION("sending time comes out of the wait, not on top of it") {
+    // 20ms spent encoding. The frame after is still due at one interval from
+    // when it was due, so we sleep the remaining 46ms, and the cadence holds.
+    const TimePoint due = kEpoch;
+    const TimePoint now = kEpoch + Milliseconds(20);
+    FPSeconds sleep = TestStream::schedule(now, due, interval, next_due);
+    CHECK(sleep.count() == Catch::Approx(1.0 / 15 - 0.020).margin(0.001));
+    CHECK(next_due == due + std::chrono::duration_cast<Microseconds>(interval));
+  }
+
+  SECTION("a frame that overran its slot does not send the next immediately") {
+    // This is the bug: the old code subtracted the lateness from the interval,
+    // drove the sleep negative and fired the next frame at once, which is the
+    // burst a viewer sees as a stutter.
+    const TimePoint due = kEpoch;
+    const TimePoint now = kEpoch + Milliseconds(100);   // 33ms over its slot
+    FPSeconds sleep = TestStream::schedule(now, due, interval, next_due);
+    CHECK(sleep.count() > 0.0);
+    CHECK(sleep.count() == Catch::Approx(1.0 / 15).margin(0.001));
+    CHECK(next_due == now + std::chrono::duration_cast<Microseconds>(interval));
+  }
+
+  SECTION("a long overrun restarts the cadence rather than catching up") {
+    // A second late is fifteen missed slots. Sending fifteen frames back to
+    // back would empty the buffer and then stall.
+    const TimePoint due = kEpoch;
+    const TimePoint now = kEpoch + Milliseconds(1000);
+    FPSeconds sleep = TestStream::schedule(now, due, interval, next_due);
+    CHECK(sleep.count() == Catch::Approx(1.0 / 15).margin(0.001));
+    CHECK(next_due == now + std::chrono::duration_cast<Microseconds>(interval));
+  }
+
+  SECTION("never returns a negative sleep") {
+    const TimePoint due = kEpoch + Milliseconds(500);
+    FPSeconds sleep = TestStream::schedule(kEpoch, due, interval, next_due);
+    CHECK(sleep.count() >= 0.0);
+  }
+
+  SECTION("a zero or negative interval does not spin or go backwards") {
+    FPSeconds sleep = TestStream::schedule(kEpoch, kEpoch, FPSeconds(0), next_due);
+    CHECK(sleep.count() == 0.0);
+    CHECK(next_due == kEpoch);
+    sleep = TestStream::schedule(kEpoch, kEpoch, FPSeconds(-1), next_due);
+    CHECK(sleep.count() == 0.0);
   }
 }
 

@@ -1084,27 +1084,18 @@ void MonitorStream::runStream() {
                                   * (rate ? abs(rate)/ZM_RATE_BASE : 1); // replay_rate is 100 for 1x
       Debug(3, "Using %f for maxfps.  capture_fps: %f maxfps %f * replay_rate: %d = %f", fps, capture_fps, max_fps, rate, sleep_time_seconds);
 
-      sleep_time = FPSeconds(sleep_time_seconds);
-      // Don't actually need this if
-      if (now > when_to_send_next_frame) {
-        sleep_time -= now-when_to_send_next_frame;
-        Debug(2, "Adjusting sleep time for when_to_send_next_frame - now = %f", FPSeconds(now-when_to_send_next_frame).count());
-      }
-
-      // now is before send_frame, so... last_frame_sent should always be > now...
-      if (last_frame_sent > now) {
-        FPSeconds elapsed = last_frame_sent - now;
-        //if (sleep_time > elapsed) {
-          Debug(2, "Adjusting sleep time by %f elapsed", elapsed.count());
-          sleep_time -= elapsed;
-        //}
-      } else {
-        Debug(2, "last_frame_send %" PRIi64 " >? now %" PRIi64,
-            static_cast<int64>(std::chrono::duration_cast<Seconds>(last_frame_sent.time_since_epoch()).count()),
-            static_cast<int64>(std::chrono::duration_cast<Seconds>(now.time_since_epoch()).count())
-            );
-      }
-      when_to_send_next_frame = now + std::chrono::duration_cast<Microseconds>(sleep_time);
+      // Pace from when this frame was due, not from when we finished sending
+      // it, and do not try to make up a missed slot. Subtracting how late we
+      // were from the interval drove the sleep negative whenever encoding
+      // overran, so the next frame went out immediately: measured on a 4K
+      // monitor the gaps between frames ran 14ms to 278ms with a median of
+      // 45ms, against the even 67ms a 15fps stream should give. The average
+      // rate looked right, which is why this did not show up as a slow
+      // stream.
+      sleep_time = scheduleNextFrame(now, when_to_send_next_frame,
+                                     FPSeconds(sleep_time_seconds),
+                                     when_to_send_next_frame);
+      Debug(2, "Next frame due in %.3fs", sleep_time.count());
     } else {
       sleep_time = when_to_send_next_frame - now;
     }
