@@ -25,10 +25,23 @@ class filter_worker {
     AVCodecContext *dec_ctx;
     AVRational time_base;
     bool initialised;
+    // The hardware frames context setup() was given, kept referenced so the
+    // pointer stays valid to compare against.
+    AVBufferRef *built_hw_frames_ctx;
+    // How many times this filter has been rebuilt for a different context.
+    // Rebuilding once as the graph settles is expected; rebuilding per frame
+    // would mean two callers alternating and wanting a filter each.
+    unsigned int rebuilds;
 
     filter_worker();
     ~filter_worker();
     bool setup(const std::string &filter_desc, const std::string &filter_of_interest, AVCodecContext *ctx, AVRational tbase, AVBufferRef *hw_frames_ctx, AVPixelFormat pix_fmt);
+    // True when this filter was built against the same hardware frames
+    // context the frame carries. A hwframe-aware filter only accepts frames
+    // from the context it was configured with, and one filter shared between
+    // callers whose frames come from different pools will reject whichever
+    // did not get there first.
+    bool built_for(const AVBufferRef *hw_frames_ctx) const;
     int execute(AVFrame *in_frame, AVFrame **out_frame);
 
     int opt_set(const std::string &opt, const std::string &value);

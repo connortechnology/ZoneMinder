@@ -632,7 +632,12 @@ int Quadra_Yolo::process_roi(AVFrame *in_frame, AVFrame **filt_frame) {
 #else
   if (!use_hwframe && in_frame->hw_frames_ctx) {
 #endif
-    if (!hwdl_filter.initialised) {
+    // Keyed on the context of the frame we are about to hand it, not on
+    // whether it has ever been set up. hwdownload only accepts frames from
+    // the context it was configured with, and this one filter is shared with
+    // the post-annotation downloads below, whose frames come from the drawbox
+    // and drawtext output pools rather than the decoder's.
+    if (!hwdl_filter.built_for(in_frame->hw_frames_ctx)) {
       if (!hwdl_filter.setup("hwdownload,format=yuv420p", "", dec_ctx, dec_stream->time_base, in_frame->hw_frames_ctx, dec_ctx->pix_fmt)) {
         Warning("No hwdl");
         return -1;
@@ -729,7 +734,8 @@ int Quadra_Yolo::process_roi(AVFrame *in_frame, AVFrame **filt_frame) {
 #else
   if (use_hwframe) {
 #endif
-    if (hwdl_filter.initialised or hwdl_filter.setup("hwdownload,format=yuv420p", "", dec_ctx, dec_stream->time_base, input->hw_frames_ctx, dec_ctx->pix_fmt)) {
+    if (hwdl_filter.built_for(input->hw_frames_ctx)
+        or hwdl_filter.setup("hwdownload,format=yuv420p", "", dec_ctx, dec_stream->time_base, input->hw_frames_ctx, dec_ctx->pix_fmt)) {
       zm_dump_video_frame(input, "Quadra: process_roi hwframe");
       Debug(1, "*** Start of hwdownload ***");
       int ret = hwdl_filter.execute(input, &output);
@@ -833,7 +839,7 @@ int Quadra_Yolo::annotate(
   if (annotate_count_ % 100 == 0) {
     Debug(1, "Annotation over %ju detections (%s): drawbox %.2fms each, "
              "drawtext %ju calls mean %.2fms max %.2fms, %ju blocked over %.0fms"
-             ", %ju reinits%s",
+             ", %ju reinits, %u hwdl rebuilds%s",
         static_cast<uintmax_t>(annotate_count_),
         SOFTWARE_DRAWBOX ? "software" : "hardware filters",
         annotate_box_us_ / 1000.0 / annotate_count_,
@@ -843,6 +849,9 @@ int Quadra_Yolo::annotate(
         static_cast<uintmax_t>(drawtext_slow_calls_),
         kDrawtextBlockedUs / 1000.0,
         static_cast<uintmax_t>(drawtext_reinits_),
+        // One or two as the graph settles is expected. Per frame would mean
+        // two callers alternating contexts and each wanting its own filter.
+        hwdl_filter.rebuilds,
         // A timing means nothing if the options were refused, so never print
         // one that looks respectable without saying the labels are missing.
         drawtext_opt_errors_
@@ -927,7 +936,7 @@ int Quadra_Yolo::draw_last_roi(std::shared_ptr<ZMPacket> packet) {
   }
 
 #if !SOFTWARE_DRAWBOX
-  if (!hwdl_filter.initialised) {
+  if (!hwdl_filter.built_for(input->hw_frames_ctx)) {
     if (!hwdl_filter.setup("hwdownload,format=yuv420p", "", dec_ctx, dec_stream->time_base, input->hw_frames_ctx, dec_ctx->pix_fmt)) {
       Warning("No hwdl");
       return -1;

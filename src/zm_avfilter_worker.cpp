@@ -11,7 +11,9 @@ filter_worker::filter_worker() :
   filter_ctx(nullptr),
   dec_ctx(nullptr),
   time_base(AV_TIME_BASE_Q),
-  initialised(false)
+  initialised(false),
+  built_hw_frames_ctx(nullptr),
+  rebuilds(0)
 {
 }
 
@@ -19,6 +21,14 @@ filter_worker::~filter_worker() {
   if (filter_graph) {
     avfilter_graph_free(&filter_graph);
   }
+  av_buffer_unref(&built_hw_frames_ctx);
+}
+
+bool filter_worker::built_for(const AVBufferRef *hw_frames_ctx) const {
+  if (!initialised) return false;
+  const void *want = hw_frames_ctx ? hw_frames_ctx->data : nullptr;
+  const void *have = built_hw_frames_ctx ? built_hw_frames_ctx->data : nullptr;
+  return want == have;
 }
 
 bool filter_worker::setup(const std::string &filter_desc, const std::string &filter_of_interest, AVCodecContext *p_dec_ctx, AVRational p_time_base, AVBufferRef *hw_frames_ctx, AVPixelFormat pix_fmt) {
@@ -26,11 +36,23 @@ bool filter_worker::setup(const std::string &filter_desc, const std::string &fil
   time_base = p_time_base;
 
   int ret;
+  // Rebuilding for a different context, so throw away what we had. Without
+  // this the graph leaks and the old buffersrc keeps rejecting the frame.
+  if (filter_graph) {
+    avfilter_graph_free(&filter_graph);
+    buffersrc_ctx = buffersink_ctx = filter_ctx = nullptr;
+    initialised = false;
+    rebuilds++;
+  }
+
   Debug(1, "Trying %s", filter_desc.c_str());
   if ((ret = init_filter(filter_desc.c_str(), hw_frames_ctx, pix_fmt)) < 0) {
     Error("cannot initialize %s filter", filter_desc.c_str());
     return false;
   }
+
+  av_buffer_unref(&built_hw_frames_ctx);
+  if (hw_frames_ctx) built_hw_frames_ctx = av_buffer_ref(hw_frames_ctx);
 
   if (!filter_of_interest.empty()) {
     for (unsigned int i = 0; i < filter_graph->nb_filters; i++) {
