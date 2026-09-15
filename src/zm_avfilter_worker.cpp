@@ -90,6 +90,12 @@ int filter_worker::opt_set(const std::string &opt, int value) {
   return av_opt_set(filter_ctx->priv, opt.c_str(), std::to_string(value).c_str(), 0);
 }
 
+bool filter_worker::set_extra_hw_frames(int frames) {
+  if (!filter_ctx) return false;
+  filter_ctx->extra_hw_frames = frames;
+  return true;
+}
+
 int filter_worker::send_command(const char *filter_name, const char *command, const char *option) {
   int ret = avfilter_graph_send_command(filter_graph, filter_name, command, option, nullptr, 0, 0);
   if (ret < 0) {

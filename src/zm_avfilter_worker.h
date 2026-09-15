@@ -35,6 +35,10 @@ class filter_worker {
     int opt_set(const std::string &opt, int value);
 
     int send_command(const char *filter_name, const char *command, const char *option);
+    // Extra hardware frames the filter should add to its output pool, on top
+    // of the four DEFAULT_NI_FILTER_POOL_SIZE gives it. Read when the filter
+    // opens its device session, so it must be set before the first frame.
+    bool set_extra_hw_frames(int frames);
     int init_filter(const char *filters_desc, AVBufferRef * 	hw_frames_ctx, AVPixelFormat in_ipxfmt);
 };
 
