@@ -194,6 +194,11 @@ class StreamBase {
   // is what prepareImage wants as pre_scaled_by, or 0 when the fast path does
   // not apply and the image must be produced at base_width x base_height.
   int preScaleDimensions(int base_width, int base_height, int &width, int &height) const;
+  // Clamps dimensions to what the MJPEG encoder will take: at least 144x128,
+  // and even, since YUV420 has no half chroma sample. Grows the other
+  // dimension with it rather than distorting the frame. Takes the size to
+  // encode -- the caller has already applied any scale.
+  static void jpegEncodeDimensions(int &width, int &height);
   void checkCommandQueue();
   virtual void processCommand(const CmdMsg *msg)=0;
   void reserveTempImgBuffer(size_t size);

@@ -283,6 +283,23 @@ int StreamBase::preScaleDimensions(int base_width, int base_height, int &width, 
   return cur_scale;
 }
 
+void StreamBase::jpegEncodeDimensions(int &width, int &height) {
+  if (width < 144) {
+    float factor = 144.0/width;
+    width = 144;
+    height = floor(height * factor);
+    Debug(1, "Adjust width to 144 using factor %.2f", factor);
+  }
+  width += (2-width)%2;
+  if (height < 128) {
+    float factor = 128.0/height;
+    height = 128;
+    width = floor(width * factor);
+    Debug(1, "Adjust height to min 128, width to %d using factor %.2f", width, factor);
+  }
+  width += (2-width)%2;
+}
+
 Image *StreamBase::prepareImage(Image *image, int pre_scaled_by) {
   if (pre_scaled_by) {
     // The caller produced the image at exactly the size to send, folding the

@@ -41,6 +41,9 @@ class TestStream : public StreamBase {
   int preScale(int base_width, int base_height, int &width, int &height) {
     return preScaleDimensions(base_width, base_height, width, height);
   }
+  static void jpegDims(int &width, int &height) {
+    jpegEncodeDimensions(width, height);
+  }
   void setView(int p_scale, int p_zoom) {
     scale = p_scale;
     zoom = p_zoom;
@@ -194,6 +197,52 @@ TEST_CASE("StreamBase::prepareImage pre-scaled frames") {
       REQUIRE(scaled.Width() == (kWidth * scale) / ZM_SCALE_BASE);
       REQUIRE(scaled.Height() == (kHeight * scale) / ZM_SCALE_BASE);
     }
+  }
+}
+
+TEST_CASE("StreamBase::jpegEncodeDimensions") {
+  int width = -1, height = -1;
+
+  SECTION("leaves a frame the encoder can already take alone") {
+    // The regression this guards: sendFrame used to multiply send_image's
+    // dimensions by scale again, although prepareImage had already scaled it,
+    // so a 50% view of a 3840x2160 monitor went out at 960x540 instead of
+    // 1920x1080. The dimensions handed in here are the ones to encode.
+    width = 1920; height = 1080;
+    TestStream::jpegDims(width, height);
+    CHECK(width == 1920);
+    CHECK(height == 1080);
+  }
+
+  SECTION("rounds an odd dimension down to even") {
+    // YUV420 has no half chroma sample.
+    width = 641; height = 481;
+    TestStream::jpegDims(width, height);
+    CHECK(width % 2 == 0);
+    CHECK(width == 640);
+  }
+
+  SECTION("grows a too-narrow frame and takes the height with it") {
+    width = 72; height = 540;
+    TestStream::jpegDims(width, height);
+    CHECK(width == 144);
+    // Proportional, not distorted: the aspect ratio survives the clamp.
+    CHECK(height == 1080);
+  }
+
+  SECTION("grows a too-short frame and takes the width with it") {
+    width = 400; height = 64;
+    TestStream::jpegDims(width, height);
+    CHECK(height == 128);
+    CHECK(width == 800);
+  }
+
+  SECTION("a frame under both minimums comes out at or above both") {
+    width = 100; height = 50;
+    TestStream::jpegDims(width, height);
+    CHECK(width >= 144);
+    CHECK(height >= 128);
+    CHECK(width % 2 == 0);
   }
 }
 

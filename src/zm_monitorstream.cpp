@@ -428,23 +428,14 @@ bool MonitorStream::sendFrame(Image *image, SystemTimePoint timestamp) {
 
     /* double pts = */ vid_stream->EncodeFrame(send_image->Buffer(), send_image->Size(), config.mpeg_timed_frames, delta_time.count());
   } else {
-    int l_width  = floor(send_image->Width()  * scale / ZM_SCALE_BASE);
-    int l_height = floor(send_image->Height() * scale / ZM_SCALE_BASE);
-
-    if (l_width < 144) {
-      float factor = 144.0/l_width;
-      l_width = 144;
-      l_height = floor(l_height * factor);
-      Debug(1, "Adjust width to 144 using factor %.2f", factor);
-    }
-    l_width += (2-l_width)%2;
-    if (l_height < 128) {
-      float factor = 128.0/l_height;
-      l_height = 128;
-      l_width = floor(l_width * factor);
-      Debug(1, "Adjust height to min 128, width to %d using factor %.2f", l_width, factor);
-    }
-    l_width += (2-l_width)%2;
+    // prepareImage has already applied scale and zoom, so send_image is
+    // already the size to send. Multiplying by scale a second time here sent
+    // a 50% view at 25%, which the browser then scaled back up. The snapshot
+    // path below does apply the scale, because its image comes straight from
+    // shared memory and has not been through prepareImage.
+    int l_width  = send_image->Width();
+    int l_height = send_image->Height();
+    jpegEncodeDimensions(l_width, l_height);
 
     reserveTempImgBuffer(av_image_get_buffer_size(AV_PIX_FMT_YUVJ420P, l_width, l_height, 32));
 
