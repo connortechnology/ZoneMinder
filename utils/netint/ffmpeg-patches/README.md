@@ -29,6 +29,16 @@ Same graph, same frames. 26% of drawtext calls stalled between 6.2s and
 17.5s, in two clusters: one exhausted retry loop, or two. `drawbox`
 builds its pool unconditionally and never stalled.
 
+After, on the same monitor and workload:
+
+    drawtext  99 calls  mean 6.85ms     max 15.86ms      0 blocked >250ms
+    drawbox   99 calls  mean 5.12ms
+
+Mean 2691.77ms to 6.85ms, worst case 17469.20ms to 15.86ms, no stalls.
+drawtext now costs about what drawbox costs. This is why we are not
+upstreaming a software character blitter: the filter was never slow at
+drawing, it was waiting for a frame.
+
 ## 0002 — mark the per-frame options as runtime parameters
 
 Every option in `ni_drawtext_options[]` carries plain `FLAGS`. Upstream

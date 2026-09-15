@@ -30,9 +30,23 @@ drawtext with drawbox ahead of it:
   blocked 6.21 - 6.45s            9
   blocked 11.46 - 17.47s         11
 
-26% of calls stalled. The two clusters are one and two exhausted retry
-loops, the crop session and the overlay session starving separately or
-together. Identical work in the fast and slow cases -- the same one or
+With the patch, same monitor, same workload:
+
+  Annotation over 100 detections (hardware filters): drawbox 5.12ms
+  each, drawtext 99 calls mean 6.85ms max 15.86ms, 0 blocked over
+  250ms
+
+  drawtext calls                 99
+  under 250ms                    99
+  blocked                         0
+
+Mean 2691.77ms to 6.85ms, worst case 17469.20ms to 15.86ms, and no
+stall at all. drawtext now costs about what drawbox costs, which is
+what it should: the filter was never slow, it was waiting.
+
+26% of calls stalled before. The two clusters are one and two exhausted
+retry loops, the crop session and the overlay session starving
+separately or together. Identical work in the fast and slow cases -- the same one or
 two short labels -- so this is a wait for a frame, not drawing cost.
 vf_drawbox_ni.c in the same graph, over the same frames, builds its
 pool unconditionally and never blocks once: 90 calls, 5.96ms mean,
