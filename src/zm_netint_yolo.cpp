@@ -1020,25 +1020,23 @@ void Quadra_Yolo::record_drawtext_time(uint64_t us, size_t labels) {
   }
 }
 
+// The reinit command carries an option string parsed on ':' and '=', so a
+// value containing either has to be escaped or it splits the command.
+static std::string escape_filter_value(const std::string &value) {
+  std::string out;
+  for (char c : value) {
+    if (c == '\\' or c == ':' or c == '=' or c == '\'') out += '\\';
+    out += c;
+  }
+  return out;
+}
+
 // Slot 0 is the unsuffixed x/y/w/h, the rest carry their index.
 int Quadra_Yolo::set_drawbox_opt(int slot, const char *name, int value) {
   std::string key = slot ? stringtf("%s%d", name, slot) : name;
   return drawbox_filter.opt_set(key, value);
 }
 
-int Quadra_Yolo::set_drawtext_opt(const std::string &key, const std::string &value) {
-  int ret = drawtext_filter.opt_set(key, value);
-  if (ret < 0) {
-    drawtext_opt_errors_++;
-    if (!drawtext_opt_reported_) {
-      drawtext_opt_reported_ = true;
-      Error("drawtext rejected %s='%s': %d %s. Labels will not be drawn; "
-            "further rejections are counted in the annotation report.",
-            key.c_str(), value.c_str(), ret, av_make_error_string(ret).c_str());
-    }
-  }
-  return ret;
-}
 
 int Quadra_Yolo::draw_texts(AVFrame *in_frame, AVFrame **output,
                             const std::vector<TextItem> &items) {
@@ -1069,36 +1067,51 @@ int Quadra_Yolo::draw_texts(AVFrame *in_frame, AVFrame **output,
     count = 32;
   }
 
-  // Set the slots directly rather than through avfilter_graph_send_command.
-  // NETINT never gave vf_drawtext_ni.c the runtime flag -- upstream's
-  // vf_drawtext.c defines TFLAGS with AV_OPT_FLAG_RUNTIME_PARAM and tags
-  // text/x/y/fontcolor/fontsize with it, the NI fork tags all 318 options
-  // plain FLAGS -- so from FFmpeg 7.x every option a command carries is
-  // refused with "not a runtime option" and the whole reinit returns EINVAL.
-  // opt_set writes to filter_ctx->priv, where that check does not apply,
-  // which is how this worked before and why drawbox still does.
+  // Set every slot through the filter's own reinit command rather than
+  // av_opt_set on filter_ctx->priv. opt_set reaches the option storage but
+  // not what init() derives from it, and this filter derives two things that
+  // matter: text_num is counted once in init() by walking text[] to the first
+  // null, so with a single text at graph construction only slot 0 is ever
+  // drawn however many we set; and x/y are evaluated from the pre-parsed
+  // x_pexpr/y_pexpr, not from the strings, so a new position is ignored.
+  // That is why the boxes moved with the detections and the labels did not
+  // appear at all.
   //
-  // Avoiding reinit is the point regardless: it ran uninit() and init() per
-  // call, reloading the font through fontconfig each time.
-  int failed = 0;
+  // reinit re-runs uninit() and init(), which recomputes both. It used to
+  // fail with EINVAL because NETINT never gave these options
+  // AV_OPT_FLAG_RUNTIME_PARAM, which FFmpeg 7.x requires on an initialised
+  // object; utils/netint/ffmpeg-patches/0002 adds it.
+  std::string command;
   for (size_t i = 0; i < count; i++) {
-    int ret;
-    if ((ret = set_drawtext_opt(stringtf("t%zu", i), items[i].text)) < 0) failed = ret;
-    if ((ret = set_drawtext_opt(stringtf("x%zu", i), std::to_string(items[i].x))) < 0) failed = ret;
-    if ((ret = set_drawtext_opt(stringtf("y%zu", i), std::to_string(items[i].y))) < 0) failed = ret;
-    if ((ret = set_drawtext_opt(stringtf("fc%zu", i), items[i].colour)) < 0) failed = ret;
+    if (!command.empty()) command += ":";
+    command += stringtf("t%zu=%s:x%zu=%d:y%zu=%d:fc%zu=%s",
+        i, escape_filter_value(items[i].text).c_str(),
+        i, items[i].x,
+        i, items[i].y,
+        i, items[i].colour.c_str());
   }
 
   // Slots a busier frame left behind would otherwise redraw its labels over
-  // this one, so blank the tail rather than only writing what we need.
+  // this one. A slot must stay non-empty for text_num to count past it, so
+  // blank it with a space rather than dropping it.
   for (size_t i = count; i < drawtext_slots_used_; i++) {
-    set_drawtext_opt(stringtf("t%zu", i), "");
+    command += stringtf(":t%zu=%s", i, " ");
   }
   drawtext_slots_used_ = count;
 
-  // A rejected option means the labels are simply not there. Say so rather
-  // than run the filter and report a time for drawing nothing.
-  if (failed < 0) return failed;
+  Debug(1, "Drawtext %zu label%s: %s", count, count == 1 ? "" : "s", command.c_str());
+  int ret = drawtext_filter.send_command("ni_quadra_drawtext", "reinit", command.c_str());
+  if (ret < 0) {
+    drawtext_opt_errors_++;
+    if (!drawtext_opt_reported_) {
+      drawtext_opt_reported_ = true;
+      Error("drawtext refused reinit: %d %s. Labels will not be drawn; the "
+            "per-frame options need AV_OPT_FLAG_RUNTIME_PARAM, which "
+            "utils/netint/ffmpeg-patches/0002 adds. Command was: %s",
+            ret, av_make_error_string(ret).c_str(), command.c_str());
+    }
+    return ret;
+  }
 
   return drawtext_filter.execute(in_frame, output);
 #endif

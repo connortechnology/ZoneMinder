@@ -112,8 +112,6 @@ class Quadra_Yolo {
     // formats. Count them, and report the first in full.
     uint64_t drawtext_opt_errors_ = 0;
     bool drawtext_opt_reported_ = false;
-    // Sets one filter option, counting and reporting a rejection.
-    int set_drawtext_opt(const std::string &key, const std::string &value);
     bool drawbox_opt_reported_ = false;
     bool drawbox_cmd_reported_ = false;
     bool drawbox_width_reported_ = false;
