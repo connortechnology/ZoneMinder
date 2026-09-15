@@ -463,7 +463,7 @@ int Quadra_Yolo::draw_roi_box_in_place(
   Image in_image(inframe);
 
   for (int i=0; i<line_width; i++) {
-    in_image.DrawBox(roi.left+i, roi.top+i, roi.right-2*i, roi.bottom-2*i, box_color);
+    in_image.DrawBox(roi.left+i, roi.top+i, roi.right-i, roi.bottom-i, box_color);
   }
   return 1;
 } // end draw_roi_box_in_place
@@ -488,24 +488,56 @@ int Quadra_Yolo::draw_roi_box(
     color = object_classes_.colorStringFor(roi_extra.cls);
   }
 
-  for (int i=0; i<line_width; i++) {
+  // The filter carries kDrawboxSlots rectangles and draws each as a one pixel
+  // outline, so a thick border is that many nested rectangles drawn in one
+  // pass. Writing them all to the unsuffixed x/y/w/h left only the last
+  // iteration set, which is why the borders came out a single pixel wide,
+  // inset by line_width-1.
+  int slots = line_width;
+  if (slots > kDrawboxSlots) {
+    if (!drawbox_width_reported_) {
+      drawbox_width_reported_ = true;
+      Warning("line width %d exceeds the %d boxes the filter carries; "
+              "drawing a %d pixel border", line_width, kDrawboxSlots, kDrawboxSlots);
+    }
+    slots = kDrawboxSlots;
+  }
+
+  int r = 0;
+  for (int i = 0; i < slots; i++) {
     int x = roi.left + i;
     int y = roi.top + i;
     int w = (roi.right - roi.left) - 2*i;
     int h = (roi.bottom - roi.top) - 2*i;
 
-    Debug(1, "draw_roi_box: x %d, y %d, w %d, h %d color %s line_width %d", x, y, w, h, color, line_width);
+    // A rectangle that has closed up contributes nothing, and a negative one
+    // is refused outright by the filter.
+    if (w <= 0 or h <= 0) {
+      slots = i;
+      break;
+    }
+
+    Debug(1, "draw_roi_box: slot %d x %d, y %d, w %d, h %d color %s line_width %d",
+        i, x, y, w, h, color, line_width);
     // Checked for the same reason as the drawtext slots: a refused option
     // leaves the filter drawing the previous box, or none, and says nothing.
-    int r = 0;
-    if (drawbox_filter.opt_set("x", x) < 0) r = -1;
-    if (drawbox_filter.opt_set("y", y) < 0) r = -1;
-    if (drawbox_filter.opt_set("w", w) < 0) r = -1;
-    if (drawbox_filter.opt_set("h", h) < 0) r = -1;
-    if (r < 0 and !drawbox_opt_reported_) {
-      drawbox_opt_reported_ = true;
-      Error("drawbox rejected a geometry option; boxes will not follow detections");
-    }
+    if (set_drawbox_opt(i, "x", x) < 0) r = -1;
+    if (set_drawbox_opt(i, "y", y) < 0) r = -1;
+    if (set_drawbox_opt(i, "w", w) < 0) r = -1;
+    if (set_drawbox_opt(i, "h", h) < 0) r = -1;
+  }
+
+  // A wider border left slots set that this one does not use, and the filter
+  // draws every slot whose width and height are positive. Zero the tail.
+  for (int i = slots; i < drawbox_slots_used_; i++) {
+    set_drawbox_opt(i, "w", 0);
+    set_drawbox_opt(i, "h", 0);
+  }
+  drawbox_slots_used_ = slots;
+
+  if (r < 0 and !drawbox_opt_reported_) {
+    drawbox_opt_reported_ = true;
+    Error("drawbox rejected a geometry option; boxes will not follow detections");
   }
   int cmd_ret = drawbox_filter.send_command("ni_quadra_drawbox", "color", color);
   if (cmd_ret < 0 and !drawbox_cmd_reported_) {
@@ -986,6 +1018,12 @@ void Quadra_Yolo::record_drawtext_time(uint64_t us, size_t labels) {
         static_cast<uintmax_t>(drawtext_slow_calls_),
         static_cast<uintmax_t>(drawtext_calls_));
   }
+}
+
+// Slot 0 is the unsuffixed x/y/w/h, the rest carry their index.
+int Quadra_Yolo::set_drawbox_opt(int slot, const char *name, int value) {
+  std::string key = slot ? stringtf("%s%d", name, slot) : name;
+  return drawbox_filter.opt_set(key, value);
 }
 
 int Quadra_Yolo::set_drawtext_opt(const std::string &key, const std::string &value) {

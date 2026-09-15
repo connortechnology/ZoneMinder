@@ -116,6 +116,12 @@ class Quadra_Yolo {
     int set_drawtext_opt(const std::string &key, const std::string &value);
     bool drawbox_opt_reported_ = false;
     bool drawbox_cmd_reported_ = false;
+    bool drawbox_width_reported_ = false;
+    // NI_MAX_SUPPORT_DRAWBOX_NUM: the rectangles ni_quadra_drawbox carries.
+    static constexpr int kDrawboxSlots = 5;
+    // As with drawtext, a narrower border must clear what a wider one set.
+    int drawbox_slots_used_ = 0;
+    int set_drawbox_opt(int slot, const char *name, int value);
 
     bool use_hwframe;
     nlohmann::json detections;
