@@ -1,0 +1,130 @@
+From: Isaac Connor <connortechnology@gmail.com>
+Subject: [PATCH 3/3] vf_drawtext_ni: add an update command that does not close
+ the scaler sessions
+
+Against Quadra V5.8.0 (libxcoder 5806tCr2).
+
+Changing the text on this filter costs two hardware session teardowns and
+two frame pool reallocations per frame, because "reinit" is the only way
+to do it.
+
+command() builds a fresh NetIntDrawTextContext, av_opt_copy()s the
+options across and uninit()s the old one. session_opened and
+crop_session_opened are plain fields rather than AVOptions, so they are
+not copied: they start at zero in the new context, while uninit() closes
+the two scaler sessions the old one held. The next filter_frame reopens
+both and rebuilds both pools.
+
+On a 3840x2160 h264 stream labelling detections, changing the label 6 to
+12 times a second, that churn starves the card:
+
+  drawtext blocked 6.37s on 2 labels (4 of 11 calls)
+  send_packet avg 96.3ms exceeds frame budget 66.5ms (capture 15fps)
+
+drawtext went back to spinning in ni_scaler_session_read_hwdesc for
+seconds at a time -- the same starvation patch 1 of this series fixes --
+and the decoder stopped making its frame budget, so frames were dropped
+and went out unannotated. Measured cost was 45ms a call against 7ms for
+the draw alone.
+
+None of what a caller changes per frame needs the session rebuilt.
+text_num is counted from which slots carry text, x and y are evaluated
+from x_pexpr/y_pexpr rather than the option strings, and a slot used for
+the first time needs its face, size and glyphs. fontsize already
+re-parses itself in update_fontsize() on every frame.
+
+Add an "update" command that applies the option string to the live
+context and re-derives exactly those, leaving the sessions and the pools
+alone. "reinit" keeps its meaning for callers that want a full rebuild.
+
+Depends on patch 2 of this series: without AV_OPT_FLAG_RUNTIME_PARAM the
+av_set_options_string() here is refused the same way reinit's was.
+
+--- a/libavfilter/vf_drawtext_ni.c
++++ b/libavfilter/vf_drawtext_ni.c
+@@ -1632,6 +1632,85 @@
+     NetIntDrawTextContext *new = NULL;
+     int ret;
+ 
++    /* Set the per-frame options on the live context and re-derive only what
++     * they feed. reinit cannot be used for this on a hardware filter: it
++     * builds a fresh context whose session_opened and crop_session_opened
++     * start at zero -- they are plain fields, not AVOptions, so av_opt_copy
++     * does not carry them -- and then uninit()s the old one, closing both
++     * scaler sessions. The next frame reopens them and rebuilds both frame
++     * pools. Per frame that is two session teardowns and two pool
++     * reallocations, which starves the card: measured on a 3840x2160 stream
++     * at 6 to 12 label changes a second, drawtext went back to blocking for
++     * seconds at a time in ni_scaler_session_read_hwdesc and the decoder
++     * stopped making its frame budget.
++     *
++     * Nothing a label needs touches the session. text_num is counted from
++     * which slots carry text, x and y are evaluated from parsed expressions
++     * rather than the option strings, and a slot used for the first time
++     * needs its face and glyphs. Do those and leave the hardware alone.
++     */
++    if (!strcmp(cmd, "update")) {
++        NetIntDrawTextContext *s = ctx->priv;
++        int old_text_num = s->text_num;
++        Glyph *glyph;
++        int i;
++
++        ret = av_set_options_string(ctx, arg, "=", ":");
++        if (ret < 0)
++            return ret;
++
++        s->text_num = 0;
++        for (i = 0; i < MAX_TEXT_NUM; i++) {
++            if (!s->text[i])
++                break;
++            s->text_num++;
++        }
++        if (!s->text_num) {
++            av_log(ctx, AV_LOG_ERROR, "update needs at least one text\n");
++            s->text_num = old_text_num;
++            return AVERROR(EINVAL);
++        }
++
++        for (i = old_text_num; i < s->text_num; i++) {
++            if ((ret = load_font(ctx, i)) < 0)
++                return ret;
++            if ((ret = update_fontsize(ctx, i)) < 0)
++                return ret;
++            s->use_kerning[i] = FT_HAS_KERNING(s->face[i]);
++            /* the fallback glyph, as init() does */
++            load_glyph(ctx, NULL, 0, i);
++            if ((ret = load_glyph(ctx, &glyph, ' ', i)) < 0) {
++                av_log(ctx, AV_LOG_ERROR, "Could not set tabsize.\n");
++                return ret;
++            }
++            /* tabsize[0] is already in pixels by the time init() is done with
++             * it, so take it as it stands rather than scaling it again.
++             */
++            s->tabsize[i] = s->tabsize[0];
++        }
++
++        for (i = 0; i < s->text_num; i++) {
++            const char *expr;
++
++            av_expr_free(s->x_pexpr[i]);
++            av_expr_free(s->y_pexpr[i]);
++            s->x_pexpr[i] = s->y_pexpr[i] = NULL;
++
++            if ((ret = av_expr_parse(&s->x_pexpr[i], expr = s->x_expr[i],
++                                     var_names, NULL, NULL, fun2_names, fun2,
++                                     0, ctx)) < 0 ||
++                (ret = av_expr_parse(&s->y_pexpr[i], expr = s->y_expr[i],
++                                     var_names, NULL, NULL, fun2_names, fun2,
++                                     0, ctx)) < 0) {
++                av_log(ctx, AV_LOG_ERROR, "Failed to parse expression: %s\n", expr);
++                return AVERROR(EINVAL);
++            }
++        }
++
++        /* fontsize is re-parsed by update_fontsize() on every frame already */
++        return 0;
++    }
++
+     if (!strcmp(cmd, "reinit")) {
+         new = av_mallocz(sizeof(NetIntDrawTextContext));
+         if (!new)

@@ -1128,11 +1128,19 @@ int Quadra_Yolo::draw_texts(AVFrame *in_frame, AVFrame **output,
   }
   drawtext_slots_used_ = count;
 
-  // reinit runs uninit() and init(): it reloads the font through fontconfig,
-  // re-parses every expression and rebuilds the glyph cache, which measured
-  // 45ms against 7ms for the draw alone. draw_last_roi redraws the last
-  // detection on every frame between inferences, so most of these commands
-  // set exactly what is already set. Send it only when something changed.
+  // update sets the options on the live filter and re-derives text_num, the
+  // position expressions and any newly used slot's glyphs. reinit was doing
+  // the same job by building a fresh context and uninit()ing the old one,
+  // which closed both Quadra scaler sessions and rebuilt both frame pools
+  // every time a label changed. At 6 to 12 changes a second that starved the
+  // card: drawtext went back to blocking for seconds in
+  // ni_scaler_session_read_hwdesc and the decoder stopped making its frame
+  // budget, so frames were dropped and went out with no box and no label.
+  // utils/netint/ffmpeg-patches/0003 adds the command.
+  //
+  // Still only sent when something changed: draw_last_roi redraws the last
+  // detection on every frame between inferences, so most commands would set
+  // what is already set.
   if (command == drawtext_last_command_) {
     Debug(2, "Drawtext unchanged, %zu label%s", count, count == 1 ? "" : "s");
     return drawtext_filter.execute(in_frame, output);
@@ -1140,14 +1148,14 @@ int Quadra_Yolo::draw_texts(AVFrame *in_frame, AVFrame **output,
 
   Debug(1, "Drawtext %zu label%s: %s", count, count == 1 ? "" : "s", command.c_str());
   drawtext_reinits_++;
-  int ret = drawtext_filter.send_command("ni_quadra_drawtext", "reinit", command.c_str());
+  int ret = drawtext_filter.send_command("ni_quadra_drawtext", "update", command.c_str());
   if (ret < 0) {
     drawtext_opt_errors_++;
     if (!drawtext_opt_reported_) {
       drawtext_opt_reported_ = true;
-      Error("drawtext refused reinit: %d %s. Labels will not be drawn; the "
-            "per-frame options need AV_OPT_FLAG_RUNTIME_PARAM, which "
-            "utils/netint/ffmpeg-patches/0002 adds. Command was: %s",
+      Error("drawtext refused update: %d %s. Labels will not be drawn; the "
+            "command comes from utils/netint/ffmpeg-patches/0003 and needs "
+            "0002's AV_OPT_FLAG_RUNTIME_PARAM. Command was: %s",
             ret, av_make_error_string(ret).c_str(), command.c_str());
     }
     return ret;
