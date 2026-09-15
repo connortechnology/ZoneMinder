@@ -96,6 +96,9 @@ class Quadra_Yolo {
     uint64_t annotate_box_us_ = 0;
     uint64_t annotate_text_us_ = 0;
     uint64_t annotate_count_ = 0;
+    // Highest drawtext slot written last frame, so a quieter frame can blank
+    // what a busier one left set.
+    size_t drawtext_slots_used_ = 0;
 
     bool use_hwframe;
     nlohmann::json detections;

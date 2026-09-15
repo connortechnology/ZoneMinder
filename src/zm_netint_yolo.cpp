@@ -944,22 +944,6 @@ int Quadra_Yolo::ni_read_roi(AVFrame *out, int frame_count) {
   return roi_num;
 }
 
-namespace {
-// Values go into a ":"-separated key=value string parsed by
-// av_set_options_string, so anything that would end the token has to be
-// escaped. A class name is operator-supplied, so this cannot assume it is
-// tame.
-std::string escape_filter_value(const std::string &in) {
-  std::string out;
-  out.reserve(in.size() + 8);
-  for (char c : in) {
-    if (c == '\\' or c == '\'' or c == ':') out.push_back('\\');
-    out.push_back(c);
-  }
-  return out;
-}
-}  // namespace
-
 int Quadra_Yolo::draw_texts(AVFrame *in_frame, AVFrame **output,
                             const std::vector<TextItem> &items) {
   if (items.empty()) {
@@ -989,29 +973,31 @@ int Quadra_Yolo::draw_texts(AVFrame *in_frame, AVFrame **output,
     count = 32;
   }
 
-  // Only runtime options may appear here. expansion is not one -- setting it
-  // fails av_set_options_string with "not a runtime option", which sends
-  // command() to its fail label and returns EINVAL for the whole reinit. It
-  // does not need restating anyway: command() runs av_opt_copy() from the old
-  // context first, so expansion=none from setup() is already carried over.
-  std::string opts;
+  // Set the slots directly rather than through avfilter_graph_send_command.
+  // NETINT never gave vf_drawtext_ni.c the runtime flag -- upstream's
+  // vf_drawtext.c defines TFLAGS with AV_OPT_FLAG_RUNTIME_PARAM and tags
+  // text/x/y/fontcolor/fontsize with it, the NI fork tags all 318 options
+  // plain FLAGS -- so from FFmpeg 7.x every option a command carries is
+  // refused with "not a runtime option" and the whole reinit returns EINVAL.
+  // opt_set writes to filter_ctx->priv, where that check does not apply,
+  // which is how this worked before and why drawbox still does.
+  //
+  // Avoiding reinit is the point regardless: it ran uninit() and init() per
+  // call, reloading the font through fontconfig each time.
   for (size_t i = 0; i < count; i++) {
-    if (!opts.empty()) opts += ":";
-    opts += stringtf("t%zu='%s':x%zu=%d:y%zu=%d:fc%zu=%s",
-        i, escape_filter_value(items[i].text).c_str(),
-        i, items[i].x,
-        i, items[i].y,
-        i, items[i].colour.c_str());
+    drawtext_filter.opt_set(stringtf("t%zu", i), items[i].text);
+    drawtext_filter.opt_set(stringtf("x%zu", i), items[i].x);
+    drawtext_filter.opt_set(stringtf("y%zu", i), items[i].y);
+    drawtext_filter.opt_set(stringtf("fc%zu", i), items[i].colour);
   }
 
-  Debug(1, "Drawtext: %zu labels in one pass: %s", count, opts.c_str());
-  int ret = avfilter_graph_send_command(drawtext_filter.filter_graph,
-      "ni_quadra_drawtext", "reinit", opts.c_str(), NULL, 0, 0);
-  if (ret < 0) {
-    Error("cannot send drawtext filter command %d %s: %s",
-        ret, av_make_error_string(ret).c_str(), opts.c_str());
-    return ret;
+  // Slots a busier frame left behind would otherwise redraw its labels over
+  // this one, so blank the tail rather than only writing what we need.
+  for (size_t i = count; i < drawtext_slots_used_; i++) {
+    drawtext_filter.opt_set(stringtf("t%zu", i), "");
   }
+  drawtext_slots_used_ = count;
+
   return drawtext_filter.execute(in_frame, output);
 #endif
 }
