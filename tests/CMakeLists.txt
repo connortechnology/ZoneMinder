@@ -31,6 +31,7 @@ set(TEST_SOURCES
   zm_netint_lpr.cpp
   zm_netint_yolo.cpp
   zm_object_classes.cpp
+  zm_packet.cpp
   zm_packetqueue.cpp
   zm_monitor_action.cpp
   zm_onvif_auth_error.cpp

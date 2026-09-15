@@ -381,11 +381,15 @@ int Quadra_Yolo::receive_detection(std::shared_ptr<ZMPacket> packet) {
       return 1;
     }
     aiframe_number++;
-    AVFrame *out_frame;
+    AVFrame *out_frame = nullptr;
     // Allocates out_frame
     ret = process_roi(avframe, &out_frame);
     if (ret < 0) {
       Error("Quadra: cannot draw roi");
+      return -1;
+    }
+    if (!out_frame) {
+      Error("Quadra: process_roi returned %d without a frame", ret);
       return -1;
     }
     packet->set_ai_frame(out_frame);
@@ -608,7 +612,13 @@ int Quadra_Yolo::process_roi(AVFrame *in_frame, AVFrame **filt_frame) {
   Debug(4, "Filt %d frame pts %3" PRId64, ++filt_cnt, in_frame->pts);
 	zm_dump_video_frame(in_frame, "Quadra: process_roi in_frame");
   if (!sd || !sd_roi_extra || sd->size == 0 || sd_roi_extra->size == 0) {
-    *filt_frame = in_frame;
+    // A reference, not the caller's own pointer. This returns into
+    // packet->set_ai_frame(), which takes ownership, and in_frame is
+    // packet->hw_frame or packet->in_frame -- already owned by that same
+    // packet. Handing it straight back left the packet owning one AVFrame
+    // twice, and ~ZMPacket freed it twice: SIGABRT out of _int_free, on
+    // every frame the model found nothing in.
+    *filt_frame = av_frame_clone(in_frame);
     if (*filt_frame == nullptr) {
       Error("cannot clone frame");
       return NIERROR(ENOMEM);

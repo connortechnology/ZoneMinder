@@ -369,6 +369,17 @@ AVPacket *ZMPacket::set_packet(AVPacket *p) {
 }
 
 void ZMPacket::set_ai_frame(AVFrame *frame) {
+  // This takes ownership, so a frame the packet already owns would be freed
+  // twice when the packet goes: an abort inside _int_free, a long way from
+  // whoever passed it. Take a reference to it instead and say so, rather
+  // than crashing the capture daemon.
+  if (frame and (frame == in_frame.get() or frame == out_frame.get()
+                 or frame == hw_frame.get())) {
+    Error("set_ai_frame given a frame this packet already owns; referencing it "
+          "instead. The caller should hand over a frame of its own.");
+    ai_frame = av_frame_ptr{av_frame_clone(frame)};
+    return;
+  }
   ai_frame = av_frame_ptr{frame};
 }
 
