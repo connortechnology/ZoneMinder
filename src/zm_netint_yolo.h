@@ -119,6 +119,11 @@ class Quadra_Yolo {
     static constexpr int kDrawboxSlots = 5;
     // MAX_TEXT_NUM: the text slots ni_quadra_drawtext carries.
     static constexpr size_t kDrawtextSlots = 32;
+    // The last reinit command sent. Between inferences draw_last_roi redraws
+    // the same detection on every frame, so this is usually unchanged, and a
+    // reinit that sets the values already set costs a full uninit/init.
+    std::string drawtext_last_command_;
+    uint64_t drawtext_reinits_ = 0;
     // As with drawtext, a narrower border must clear what a wider one set.
     int drawbox_slots_used_ = 0;
     int set_drawbox_opt(int slot, const char *name, int value);

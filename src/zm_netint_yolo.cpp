@@ -795,7 +795,7 @@ int Quadra_Yolo::annotate(
   if (annotate_count_ % 100 == 0) {
     Debug(1, "Annotation over %ju detections (%s): drawbox %.2fms each, "
              "drawtext %ju calls mean %.2fms max %.2fms, %ju blocked over %.0fms"
-             "%s",
+             ", %ju reinits%s",
         static_cast<uintmax_t>(annotate_count_),
         SOFTWARE_DRAWBOX ? "software" : "hardware filters",
         annotate_box_us_ / 1000.0 / annotate_count_,
@@ -804,6 +804,7 @@ int Quadra_Yolo::annotate(
         drawtext_max_us_ / 1000.0,
         static_cast<uintmax_t>(drawtext_slow_calls_),
         kDrawtextBlockedUs / 1000.0,
+        static_cast<uintmax_t>(drawtext_reinits_),
         // A timing means nothing if the options were refused, so never print
         // one that looks respectable without saying the labels are missing.
         drawtext_opt_errors_
@@ -1127,7 +1128,18 @@ int Quadra_Yolo::draw_texts(AVFrame *in_frame, AVFrame **output,
   }
   drawtext_slots_used_ = count;
 
+  // reinit runs uninit() and init(): it reloads the font through fontconfig,
+  // re-parses every expression and rebuilds the glyph cache, which measured
+  // 45ms against 7ms for the draw alone. draw_last_roi redraws the last
+  // detection on every frame between inferences, so most of these commands
+  // set exactly what is already set. Send it only when something changed.
+  if (command == drawtext_last_command_) {
+    Debug(2, "Drawtext unchanged, %zu label%s", count, count == 1 ? "" : "s");
+    return drawtext_filter.execute(in_frame, output);
+  }
+
   Debug(1, "Drawtext %zu label%s: %s", count, count == 1 ? "" : "s", command.c_str());
+  drawtext_reinits_++;
   int ret = drawtext_filter.send_command("ni_quadra_drawtext", "reinit", command.c_str());
   if (ret < 0) {
     drawtext_opt_errors_++;
@@ -1140,6 +1152,7 @@ int Quadra_Yolo::draw_texts(AVFrame *in_frame, AVFrame **output,
     }
     return ret;
   }
+  drawtext_last_command_ = command;
 
   return drawtext_filter.execute(in_frame, output);
 #endif
