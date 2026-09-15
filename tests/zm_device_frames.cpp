@@ -25,6 +25,43 @@ av_frame_ptr make_frame() {
 
 }  // namespace
 
+TEST_CASE("device_frames_worth_holding", "[device_frames]") {
+  // {encodes, detects}
+  const MonitorFrameUse kEncodes{true, false};
+  const MonitorFrameUse kDetects{false, true};
+  const MonitorFrameUse kBoth{true, true};
+  const MonitorFrameUse kNeither{false, false};
+
+  SECTION("an encoder can be handed the device frame directly") {
+    CHECK(device_frames_worth_holding({kEncodes}));
+    CHECK(device_frames_worth_holding({kNeither, kEncodes}));
+  }
+
+  SECTION("object detection reads the device frame, encoder or not") {
+    // m4: records by passthrough and runs AI. receive_detection and
+    // draw_last_roi both work from packet->hw_frame, so releasing frames on
+    // the grounds that nothing encodes would break detection outright.
+    CHECK(device_frames_worth_holding({kDetects}));
+    CHECK(device_frames_worth_holding({kNeither, kDetects}));
+  }
+
+  SECTION("both uses at once is still worth holding") {
+    CHECK(device_frames_worth_holding({kBoth}));
+  }
+
+  SECTION("neither use has nothing to hold them for") {
+    // m28: copies packets to disk and runs no AI, so a frame kept on the card
+    // is never read. Holding them to a budget and shedding at it logged a
+    // warning a minute for frames nothing was going to use.
+    CHECK_FALSE(device_frames_worth_holding({kNeither}));
+    CHECK_FALSE(device_frames_worth_holding({kNeither, kNeither, kNeither}));
+  }
+
+  SECTION("knowing nothing is not the same as knowing nothing uses them") {
+    CHECK(device_frames_worth_holding({}));
+  }
+}
+
 TEST_CASE("device frame gauge counts an adopted frame", "[device_frames]") {
   const unsigned int before = zm_device_frames_in_flight();
 

@@ -514,6 +514,25 @@ bool shed_report_due(int64_t now_us, int64_t last_report_us, int64_t interval_us
 unsigned int effective_device_frame_budget(const std::vector<int> &monitor_budgets,
                                            unsigned int global_budget);
 
+// What a monitor does with a decoded frame, for deciding whether keeping it on
+// the card can pay for itself.
+struct MonitorFrameUse {
+  bool encodes;   // hands a device frame straight to an encoder
+  bool detects;   // runs object detection, which reads the device frame
+};
+
+// Whether keeping decoded frames on the card can pay for itself here. Either
+// use is enough on its own: object detection reads packet->hw_frame for
+// inference and for the drawbox and drawtext filters, so a monitor that
+// records by passthrough and runs AI needs them just as much as one that
+// encodes. Releasing them under it would break detection outright.
+bool device_frames_worth_holding(const std::vector<MonitorFrameUse> &monitors);
+
+// Tells the gauge whether anything in this process will use a device frame.
+// When nothing will, frames are released as soon as they are decoded and that
+// is normal operation rather than a shortfall, so it is not reported.
+void zm_set_device_frames_used(bool used);
+
 // What one frame costs in card memory. The pool reserves this per slot, so it
 // is the unit a memory budget has to be written in -- a frame count means
 // different things at 720p and at 4K.

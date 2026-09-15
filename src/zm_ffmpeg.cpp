@@ -392,12 +392,20 @@ int xcoder_param_int(const std::string &xcoder_params, const std::string &key) {
   return -1;
 }
 
+// True until a daemon says otherwise, so a caller that never sets it keeps the
+// old behaviour of holding frames.
+static std::atomic<bool> device_frames_used{true};
+
 unsigned int zm_device_frame_budget() {
   return device_frame_budget.load(std::memory_order_relaxed);
 }
 
 void zm_set_device_frame_budget(unsigned int budget) {
   device_frame_budget.store(budget, std::memory_order_relaxed);
+}
+
+void zm_set_device_frames_used(bool used) {
+  device_frames_used.store(used, std::memory_order_relaxed);
 }
 
 uint64_t zm_device_frames_shed() {
@@ -409,6 +417,13 @@ bool zm_device_frames_shedding() {
 }
 
 bool zm_device_frame_should_shed() {
+  // Nothing in this process will hand a device frame to an encoder, so there
+  // is nothing to hold them for. Give every one back as soon as it is decoded,
+  // and say nothing: this is what we chose to do, not a budget we failed to
+  // keep within. A passthrough-only daemon used to log a shed warning a minute
+  // for frames it was never going to use.
+  if (!device_frames_used.load(std::memory_order_relaxed)) return true;
+
   const unsigned int budget = device_frame_budget.load(std::memory_order_relaxed);
   // A budget of zero disables the cap rather than shedding everything, so the
   // behaviour of an unset or cleared budget is "hold frames", not "hold none".
@@ -538,6 +553,16 @@ unsigned int effective_device_frame_budget(const std::vector<int> &monitor_budge
     have = true;
   }
   return smallest;
+}
+
+bool device_frames_worth_holding(const std::vector<MonitorFrameUse> &monitors) {
+  // Nothing known about the monitors is not the same as knowing none use the
+  // frames, so hold them rather than throwing them away on no evidence.
+  if (monitors.empty()) return true;
+  for (const MonitorFrameUse &use : monitors) {
+    if (use.encodes or use.detects) return true;
+  }
+  return false;
 }
 
 bool software_frames_expected(bool object_detection_enabled, unsigned int device_frame_budget) {
