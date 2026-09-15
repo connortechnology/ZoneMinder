@@ -400,6 +400,11 @@ unsigned int zm_device_frames_high_water();
 // continues until occupancy falls to the low-water mark, so the pipeline gets
 // real headroom back before it starts pinning frames again.
 unsigned int zm_device_frame_budget();
+// Reads one integer out of an xcoder-params string, as the decoder options
+// carry it: "out=hw:maxExtraHwFrameCnt=20:extendPoolSize=32", optionally
+// wrapped in quotes. Returns -1 when the key is absent or not an integer,
+// since every parameter it is used for is non-negative.
+int xcoder_param_int(const std::string &xcoder_params, const std::string &key);
 void zm_set_device_frame_budget(unsigned int budget);
 
 // Whether this frame should be handed back rather than held. Call once per

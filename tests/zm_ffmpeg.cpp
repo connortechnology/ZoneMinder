@@ -259,3 +259,47 @@ TEST_CASE("av_log_should_print", "[ffmpeg]") {
     REQUIRE(suppressed == 0);
   }
 }
+
+TEST_CASE("xcoder_param_int", "[ffmpeg]") {
+  // The shape the Options column actually holds.
+  const std::string m28 = "out=hw:maxExtraHwFrameCnt=20:extendPoolSize=32";
+
+  SECTION("reads a parameter from the middle and the end") {
+    CHECK(xcoder_param_int(m28, "maxExtraHwFrameCnt") == 20);
+    CHECK(xcoder_param_int(m28, "extendPoolSize") == 32);
+  }
+
+  SECTION("a key that is absent is not a zero") {
+    // -1 rather than 0, because 0 is a meaningful value for extendPoolSize
+    // and would read as "configured to nothing" rather than "not configured".
+    CHECK(xcoder_param_int(m28, "missing") == -1);
+    CHECK(xcoder_param_int("out=hw", "maxExtraHwFrameCnt") == -1);
+    CHECK(xcoder_param_int("", "maxExtraHwFrameCnt") == -1);
+  }
+
+  SECTION("keeps the quotes the Options column stores") {
+    CHECK(xcoder_param_int("'out=hw:extendPoolSize=32'", "extendPoolSize") == 32);
+    CHECK(xcoder_param_int("\"out=hw:extendPoolSize=32\"", "extendPoolSize") == 32);
+  }
+
+  SECTION("a key that is a prefix of another does not match it") {
+    // Searching for the name inside the string would return 32 for both.
+    CHECK(xcoder_param_int("out=hw:extendPoolSizeExtra=32", "extendPoolSize") == -1);
+    CHECK(xcoder_param_int("out=hw:xmaxExtraHwFrameCnt=9", "maxExtraHwFrameCnt") == -1);
+  }
+
+  SECTION("a value that is not a number is not half-read") {
+    CHECK(xcoder_param_int("out=hw:extendPoolSize=abc", "extendPoolSize") == -1);
+    CHECK(xcoder_param_int("out=hw:extendPoolSize=32x", "extendPoolSize") == -1);
+    CHECK(xcoder_param_int("out=hw:extendPoolSize=", "extendPoolSize") == -1);
+    CHECK(xcoder_param_int("out=hw:extendPoolSize=-4", "extendPoolSize") == -1);
+  }
+
+  SECTION("a flag with no value is skipped rather than confusing the scan") {
+    CHECK(xcoder_param_int("out=hw:someflag:extendPoolSize=8", "extendPoolSize") == 8);
+  }
+
+  SECTION("zero is a value, not an absence") {
+    CHECK(xcoder_param_int("out=hw:extendPoolSize=0", "extendPoolSize") == 0);
+  }
+}

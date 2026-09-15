@@ -360,6 +360,38 @@ bool shed_report_due(int64_t now_us, int64_t last_report_us, int64_t interval_us
   return now_us - last_report_us >= interval_us;
 }
 
+int xcoder_param_int(const std::string &xcoder_params, const std::string &key) {
+  if (xcoder_params.empty() or key.empty()) return -1;
+
+  // The value as stored often keeps the quotes from the Options column.
+  std::string params = xcoder_params;
+  if (params.size() >= 2 and (params.front() == '\'' or params.front() == '"')
+      and params.back() == params.front()) {
+    params = params.substr(1, params.size() - 2);
+  }
+
+  size_t pos = 0;
+  while (pos < params.size()) {
+    size_t sep = params.find(':', pos);
+    std::string pair = params.substr(pos, sep == std::string::npos ? std::string::npos : sep - pos);
+    size_t eq = pair.find('=');
+    // A key that is a prefix of another must not match, so compare the whole
+    // thing rather than searching for the name in the string.
+    if (eq != std::string::npos and pair.substr(0, eq) == key) {
+      const std::string value = pair.substr(eq + 1);
+      if (value.empty()) return -1;
+      for (char c : value) if (!isdigit(static_cast<unsigned char>(c))) return -1;
+      errno = 0;
+      long parsed = strtol(value.c_str(), nullptr, 10);
+      if (errno or parsed < 0 or parsed > INT_MAX) return -1;
+      return static_cast<int>(parsed);
+    }
+    if (sep == std::string::npos) break;
+    pos = sep + 1;
+  }
+  return -1;
+}
+
 unsigned int zm_device_frame_budget() {
   return device_frame_budget.load(std::memory_order_relaxed);
 }

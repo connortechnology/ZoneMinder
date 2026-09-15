@@ -4068,6 +4068,31 @@ int Monitor::OpenDecoder() {
         }
         av_dict_free(&opts_defaults);
       }
+      // The decoder can only hand out so many frames at once, and we are the
+      // ones holding them. maxExtraHwFrameCnt caps the session firmware-side
+      // (libxcoder defaults it to 255), so a budget at or above it leaves the
+      // decoder with nothing to decode into: ni_decoder_session_write blocks,
+      // send_packet runs over the frame budget and the packet queue fills.
+      // The existing decode-pool warning cannot catch this, because an
+      // on-demand pool reports a size of zero and the comparison is skipped.
+      {
+        const AVDictionaryEntry *xcoder = av_dict_get(opts, "xcoder-params", nullptr, AV_DICT_MATCH_CASE);
+        if (xcoder and xcoder->value) {
+          const int cap = xcoder_param_int(xcoder->value, "maxExtraHwFrameCnt");
+          const unsigned int budget = device_frame_budget > 0
+              ? static_cast<unsigned int>(device_frame_budget)
+              : zm_device_frame_budget();
+          if (cap >= 0 and budget >= static_cast<unsigned int>(cap)) {
+            Warning("Device frame budget %u is at or above maxExtraHwFrameCnt %d "
+                    "in this monitor's Options. The decoder cannot hold more than "
+                    "%d extra frames, so decoding will stall waiting for frames we "
+                    "are holding. Raise maxExtraHwFrameCnt (libxcoder's default is "
+                    "255) or lower the budget below it.",
+                    budget, cap, cap);
+          }
+        }
+      }
+
       av_opt_set(mVideoCodecContext->priv_data, "dec", (decoder_hwaccel_device != "" ? decoder_hwaccel_device.c_str() : "-1"), 0);
 
       // Hardware decoding. Ported from the camera-side setup on master, which
