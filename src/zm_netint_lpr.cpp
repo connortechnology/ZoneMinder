@@ -791,7 +791,7 @@ void Quadra_LPR::annotate(AVFrame *frame, const std::vector<RecognisedPlate> &pl
     const Rgb colour = kRGBRed;
     for (int i = 0; i < line_width; i++) {
       image.DrawBox(plate.box.left + i, plate.box.top + i,
-                    plate.box.right - 2 * i, plate.box.bottom - 2 * i, colour);
+                    plate.box.right - i, plate.box.bottom - i, colour);
     }
 
     /* Put the label above the box where there is room, otherwise just below the

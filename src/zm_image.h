@@ -325,7 +325,7 @@ SwsContext *sws_convert_context;
   void Deinterlace_4Field(const Image* next_image, unsigned int threshold);
   const std::string toString();
 
-  void DrawBox(unsigned int x, unsigned int y, unsigned int box_width, unsigned int box_height, Rgb colour);
+  void DrawBox(unsigned int left, unsigned int top, unsigned int right, unsigned int bottom, Rgb colour);
   int draw_boxes(const nlohmann::json &coco_object, int font_size, int line_width=2);
 };
 

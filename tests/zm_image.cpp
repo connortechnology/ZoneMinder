@@ -214,10 +214,76 @@ TEST_CASE("Image::DrawBox YUV420P inverted coordinates", "[image]") {
     memset(image.Buffer(), 0, image.Size());
     const int left = 30, top = 200, right = 40, bottom = 260, line_width = 5;
     for (int i = 0; i < line_width; i++) {
-      image.DrawBox(left + i, top + i, right - 2 * i, bottom - 2 * i, colour);
+      image.DrawBox(left + i, top + i, right - i, bottom - i, colour);
     }
     SUCCEED("no out-of-bounds access");
   }
+}
+
+TEST_CASE("Image::DrawBox draws an outline on the coordinates it is given", "[image]") {
+  bootstrap_image_config();
+  const int w = 64, h = 48;
+  const Rgb colour = 0x00ff8040;
+  const int left = 10, top = 6, right = 50, bottom = 40;
+
+  // The last two arguments are right and bottom, not width and height: the
+  // header once named them box_width/box_height, and callers insetting a
+  // border wrote right - 2*i, which shrinks the right and bottom edges at
+  // twice the rate of the left and top and leaves a lopsided border.
+  Image image(w, h, ZM_COLOUR_GRAY8, ZM_SUBPIX_ORDER_YUV420P);
+  Planes p = plane_view(image, AV_PIX_FMT_YUV420P, w, h);
+  memset(p.data[0], 0, static_cast<size_t>(p.stride[0]) * h);
+
+  image.DrawBox(left, top, right, bottom, colour);
+
+  auto lit = [&](int x, int y) { return p.data[0][y * p.stride[0] + x] != 0; };
+  const int mid_y = (top + bottom) / 2, mid_x = (left + right) / 2;
+
+  // Every named edge carries the line.
+  CHECK(lit(left, mid_y));
+  CHECK(lit(right, mid_y));
+  CHECK(lit(mid_x, top));
+  CHECK(lit(mid_x, bottom));
+  // And nothing lies beyond it. Were these width and height, the right edge
+  // would fall at left+right, well outside the box.
+  CHECK_FALSE(lit(right + 1, mid_y));
+  CHECK_FALSE(lit(left - 1, mid_y));
+  CHECK_FALSE(lit(mid_x, bottom + 1));
+  CHECK_FALSE(lit(mid_x, top - 1));
+  // It is an outline, so the interior is untouched.
+  CHECK_FALSE(lit(mid_x, mid_y));
+}
+
+TEST_CASE("Image::DrawBox nested insets give a border of even width", "[image]") {
+  bootstrap_image_config();
+  const int w = 64, h = 48;
+  const Rgb colour = 0x00ff8040;
+  const int left = 10, top = 6, right = 50, bottom = 40, line_width = 4;
+
+  Image image(w, h, ZM_COLOUR_GRAY8, ZM_SUBPIX_ORDER_YUV420P);
+  Planes p = plane_view(image, AV_PIX_FMT_YUV420P, w, h);
+  memset(p.data[0], 0, static_cast<size_t>(p.stride[0]) * h);
+
+  // How a caller draws a thick border: one rectangle per pixel of width, each
+  // inset by the same amount on all four sides.
+  for (int i = 0; i < line_width; i++)
+    image.DrawBox(left + i, top + i, right - i, bottom - i, colour);
+
+  auto lit = [&](int x, int y) { return p.data[0][y * p.stride[0] + x] != 0; };
+  const int mid_y = (top + bottom) / 2, mid_x = (left + right) / 2;
+
+  for (int i = 0; i < line_width; i++) {
+    INFO("inset " << i);
+    CHECK(lit(left + i, mid_y));
+    CHECK(lit(right - i, mid_y));
+    CHECK(lit(mid_x, top + i));
+    CHECK(lit(mid_x, bottom - i));
+  }
+  // Exactly line_width thick on each side, the same on all four.
+  CHECK_FALSE(lit(left + line_width, mid_y));
+  CHECK_FALSE(lit(right - line_width, mid_y));
+  CHECK_FALSE(lit(mid_x, top + line_width));
+  CHECK_FALSE(lit(mid_x, bottom - line_width));
 }
 
 TEST_CASE("Image::Flip YUV420P", "[image]") {
