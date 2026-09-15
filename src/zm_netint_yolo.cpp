@@ -1086,7 +1086,12 @@ void Quadra_Yolo::record_drawtext_time(uint64_t us, size_t labels) {
   if (us > drawtext_max_us_) drawtext_max_us_ = us;
   if (us > kDrawtextBlockedUs) {
     drawtext_slow_calls_++;
-    Warning("drawtext blocked %.2fs on %zu label%s (%ju of %ju calls so far)",
+    // Counted, and carried in the annotation report, rather than warned about
+    // one at a time. When the pool was undersized a quarter of all calls
+    // blocked for seconds and each was worth seeing; sized, it is two calls in
+    // ten thousand at a few hundred ms, and the rate is the only part that
+    // means anything. The report already carries it.
+    Debug(1, "drawtext blocked %.2fs on %zu label%s (%ju of %ju calls so far)",
         us / 1000000.0, labels, labels == 1 ? "" : "s",
         static_cast<uintmax_t>(drawtext_slow_calls_),
         static_cast<uintmax_t>(drawtext_calls_));
