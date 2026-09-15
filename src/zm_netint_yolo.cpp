@@ -989,12 +989,15 @@ int Quadra_Yolo::draw_texts(AVFrame *in_frame, AVFrame **output,
     count = 32;
   }
 
-  // expansion=none is re-asserted here, not just at setup: reinit builds a
-  // fresh context and runs init() over it, and the text carries a literal %
-  // from the confidence figure, which is a format specifier to the expander.
-  std::string opts = "expansion=none";
+  // Only runtime options may appear here. expansion is not one -- setting it
+  // fails av_set_options_string with "not a runtime option", which sends
+  // command() to its fail label and returns EINVAL for the whole reinit. It
+  // does not need restating anyway: command() runs av_opt_copy() from the old
+  // context first, so expansion=none from setup() is already carried over.
+  std::string opts;
   for (size_t i = 0; i < count; i++) {
-    opts += stringtf(":t%zu='%s':x%zu=%d:y%zu=%d:fc%zu=%s",
+    if (!opts.empty()) opts += ":";
+    opts += stringtf("t%zu='%s':x%zu=%d:y%zu=%d:fc%zu=%s",
         i, escape_filter_value(items[i].text).c_str(),
         i, items[i].x,
         i, items[i].y,
