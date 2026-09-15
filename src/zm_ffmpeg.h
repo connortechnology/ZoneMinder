@@ -528,6 +528,14 @@ struct MonitorFrameUse {
 // encodes. Releasing them under it would break detection outright.
 bool device_frames_worth_holding(const std::vector<MonitorFrameUse> &monitors);
 
+// Whether the frames we may hold would leave the decoder short.
+// maxExtraHwFrameCnt caps the frames a decoder session may hold *beyond* its
+// own working set, so holding exactly that many still leaves the session what
+// it needs; only holding more than that starves it. A cap below zero means the
+// monitor's Options do not set one, so libxcoder's default of 255 applies and
+// nothing here can exceed it.
+bool device_budget_starves_decoder(unsigned int budget, int max_extra_hw_frame_cnt);
+
 // Tells the gauge whether anything in this process will use a device frame.
 // When nothing will, frames are released as soon as they are decoded and that
 // is normal operation rather than a shortfall, so it is not reported.

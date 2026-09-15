@@ -25,6 +25,37 @@ av_frame_ptr make_frame() {
 
 }  // namespace
 
+TEST_CASE("device_budget_starves_decoder", "[device_frames]") {
+  // maxExtraHwFrameCnt caps the frames a decoder session may hold beyond its
+  // own working set, so the boundary is strict: holding exactly that many
+  // leaves the session what it needs.
+  SECTION("holding more than the cap starves it") {
+    // m4: cap 10, budget 16, and 18468 send_packet-over-budget events.
+    CHECK(device_budget_starves_decoder(16, 10));
+    CHECK(device_budget_starves_decoder(64, 20));
+    CHECK(device_budget_starves_decoder(11, 10));
+  }
+
+  SECTION("holding exactly the cap does not") {
+    // m34 and m73: cap 16, budget 16, and not one over-budget event between
+    // them. Warning at >= made both of them false positives.
+    CHECK_FALSE(device_budget_starves_decoder(16, 16));
+    CHECK_FALSE(device_budget_starves_decoder(10, 10));
+    CHECK_FALSE(device_budget_starves_decoder(255, 255));
+  }
+
+  SECTION("holding less than the cap does not") {
+    CHECK_FALSE(device_budget_starves_decoder(8, 16));
+    CHECK_FALSE(device_budget_starves_decoder(0, 16));
+  }
+
+  SECTION("no cap in Options means libxcoder's default, which nothing exceeds") {
+    // xcoder_param_int returns -1 when the key is absent.
+    CHECK_FALSE(device_budget_starves_decoder(16, -1));
+    CHECK_FALSE(device_budget_starves_decoder(1000, -1));
+  }
+}
+
 TEST_CASE("device_frames_worth_holding", "[device_frames]") {
   // {encodes, detects}
   const MonitorFrameUse kEncodes{true, false};

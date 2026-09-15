@@ -4082,13 +4082,14 @@ int Monitor::OpenDecoder() {
           const unsigned int budget = device_frame_budget > 0
               ? static_cast<unsigned int>(device_frame_budget)
               : zm_device_frame_budget();
-          if (cap >= 0 and budget >= static_cast<unsigned int>(cap)) {
-            Warning("Device frame budget %u is at or above maxExtraHwFrameCnt %d "
-                    "in this monitor's Options. The decoder cannot hold more than "
-                    "%d extra frames, so decoding will stall waiting for frames we "
-                    "are holding. Raise maxExtraHwFrameCnt (libxcoder's default is "
-                    "255) or lower the budget below it.",
-                    budget, cap, cap);
+          if (device_budget_starves_decoder(budget, cap)) {
+            Warning("Device frame budget %u is above maxExtraHwFrameCnt %d in "
+                    "this monitor's Options. The decoder session may hold %d "
+                    "frames beyond its own working set, so holding %u takes "
+                    "frames it needs and decoding stalls waiting for them. "
+                    "Raise maxExtraHwFrameCnt (libxcoder's default is 255) or "
+                    "lower the budget to %d or less.",
+                    budget, cap, cap, budget, cap);
           }
         }
       }

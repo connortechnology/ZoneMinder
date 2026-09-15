@@ -555,6 +555,11 @@ unsigned int effective_device_frame_budget(const std::vector<int> &monitor_budge
   return smallest;
 }
 
+bool device_budget_starves_decoder(unsigned int budget, int max_extra_hw_frame_cnt) {
+  if (max_extra_hw_frame_cnt < 0) return false;
+  return budget > static_cast<unsigned int>(max_extra_hw_frame_cnt);
+}
+
 bool device_frames_worth_holding(const std::vector<MonitorFrameUse> &monitors) {
   // Nothing known about the monitors is not the same as knowing none use the
   // frames, so hold them rather than throwing them away on no evidence.
