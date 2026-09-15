@@ -120,6 +120,18 @@ class Quadra_Yolo {
     int generate_ai_frame(ni_session_data_io_t *ai_frame, AVFrame *avframe, bool hwframe);
     int process_roi(AVFrame *frame, AVFrame **filt_frame);
     int check_movement( AVRegionOfInterest cur_roi, AVRegionOfInterestNetintExtra cur_roi_extra);
+    // One label to draw. Collected for a whole frame and drawn in a single
+    // pass: ni_quadra_drawtext takes up to 32 texts at once (t0-t31 and
+    // friends), and every separate call costs a filter reinit, which re-runs
+    // init() and reloads the font through fontconfig.
+    struct TextItem {
+      std::string text;
+      int x = 0;
+      int y = 0;
+      std::string colour;
+    };
+    int draw_texts(AVFrame *in_frame, AVFrame **output, const std::vector<TextItem> &items);
+
     int ni_read_roi(AVFrame *out, int frame_count);
     bool parse_model_file(const std::string &nbg_file);
 };

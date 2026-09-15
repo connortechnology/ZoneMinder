@@ -561,6 +561,7 @@ int Quadra_Yolo::process_roi(AVFrame *in_frame, AVFrame **filt_frame) {
   int num = sd->size / roi->self_size;
 
   detections = nlohmann::json::array();
+  std::vector<TextItem> text_items;
   Debug(1, "Num, detections %d from sd %ld size / roi size %d", num, sd->size, roi->self_size);
 
   for (int i = 0; i < num; i++) {
@@ -593,7 +594,29 @@ int Quadra_Yolo::process_roi(AVFrame *in_frame, AVFrame **filt_frame) {
       if (input != in_frame and input != output) av_frame_free(&input);
       input = output;
     }
+    if (drawtext) {
+      text_items.push_back({
+          stringtf("%s %.1f%%", class_name.c_str(), 100*roi_extra[i].prob),
+          roi[i].left + 1 + monitor->LabelSize(),
+          roi[i].top + 1 + monitor->LabelSize(),
+          "white"});
+    }
   } // end foreach roi
+
+  // Every label on this frame in one pass. See draw_texts().
+  if (!text_items.empty()) {
+    SystemTimePoint text_starttime = std::chrono::system_clock::now();
+    AVFrame *text_output = nullptr;
+    int ret = draw_texts(input, &text_output, text_items);
+    if (ret < 0) {
+      Error("cannot draw labels %d %s", ret, av_make_error_string(ret).c_str());
+    } else if (text_output) {
+      if (input != in_frame) av_frame_free(&input);
+      input = text_output;
+    }
+    annotate_text_us_ += std::chrono::duration_cast<Microseconds>(
+        std::chrono::system_clock::now() - text_starttime).count();
+  }
   
   AVFrame *output = nullptr;
   // Allocates the frame, gets the image from hw
@@ -689,34 +712,6 @@ int Quadra_Yolo::annotate(
         std::chrono::system_clock::now() - box_starttime).count();
   }  // end if drawbox
 
-  if (drawtext) {
-    SystemTimePoint starttime = std::chrono::system_clock::now();
-    std::string text = stringtf("%s %.1f%%", object_classes_.getClassName(roi_extra.cls).c_str(), 100*roi_extra.prob);
-#if SOFTWARE_DRAWBOX
-    Image img(input);
-    img.Annotate(text.c_str(), Vector2(roi.left, roi.top), monitor->LabelSize(), kRGBWhite, kRGBTransparent);
-#else
-    Debug(1, "Drawing text %s", text.c_str());
-    AVFrame *drawtext_output = nullptr;
-
-    zm_dump_video_frame(input, "Quadra: drawtext input");
-    int ret = draw_text(input, &drawtext_output, text,
-        roi.left+1+monitor->LabelSize(), roi.top+1+monitor->LabelSize(), "white");
-    if (ret < 0) {
-      Error("cannot drawtext %d %s", ret, av_make_error_string(ret).c_str());
-    } else {
-      if (drawtext_output) {
-        if (input != in_frame) av_frame_free(&input);
-        input = drawtext_output;
-      } else {
-        Error("drawtext_output is null");
-      }
-      zm_dump_video_frame(input, "Quadra: drawtext");
-    }
-#endif
-    annotate_text_us_ += std::chrono::duration_cast<Microseconds>(
-        std::chrono::system_clock::now() - starttime).count();
-  }  // end if drawtext
 
   // Report the means rather than each detection: at frame rate with several
   // detections a frame, a line per call is unreadable, and one sample of a
@@ -749,6 +744,7 @@ int Quadra_Yolo::draw_last_roi(std::shared_ptr<ZMPacket> packet) {
   AVFrame *in_frame = packet->hw_frame.get();
 #endif
   AVFrame *input = in_frame;
+  std::vector<TextItem> text_items;
 
   if (!input) return 1;
 
@@ -779,7 +775,29 @@ int Quadra_Yolo::draw_last_roi(std::shared_ptr<ZMPacket> packet) {
       if (input != in_frame) av_frame_free(&input);
       input = output;
     }
+    if (drawtext) {
+      text_items.push_back({
+          stringtf("%s %.1f%%", class_name.c_str(), 100*last_roi_extra[i].prob),
+          last_roi[i].left + 1 + monitor->LabelSize(),
+          last_roi[i].top + 1 + monitor->LabelSize(),
+          "white"});
+    }
   } // end foreach detection
+
+  // Every label in one pass, as in process_roi.
+  if (!text_items.empty()) {
+    SystemTimePoint text_starttime = std::chrono::system_clock::now();
+    AVFrame *text_output = nullptr;
+    int ret = draw_texts(input, &text_output, text_items);
+    if (ret < 0) {
+      Error("cannot draw labels %d %s", ret, av_make_error_string(ret).c_str());
+    } else if (text_output) {
+      if (input != in_frame) av_frame_free(&input);
+      input = text_output;
+    }
+    annotate_text_us_ += std::chrono::duration_cast<Microseconds>(
+        std::chrono::system_clock::now() - text_starttime).count();
+  }
 
 #if !SOFTWARE_DRAWBOX
   if (!hwdl_filter.initialised) {
@@ -924,6 +942,75 @@ int Quadra_Yolo::ni_read_roi(AVFrame *out, int frame_count) {
   }
   if (roi_box) free(roi_box);
   return roi_num;
+}
+
+namespace {
+// Values go into a ":"-separated key=value string parsed by
+// av_set_options_string, so anything that would end the token has to be
+// escaped. A class name is operator-supplied, so this cannot assume it is
+// tame.
+std::string escape_filter_value(const std::string &in) {
+  std::string out;
+  out.reserve(in.size() + 8);
+  for (char c : in) {
+    if (c == '\\' or c == '\'' or c == ':') out.push_back('\\');
+    out.push_back(c);
+  }
+  return out;
+}
+}  // namespace
+
+int Quadra_Yolo::draw_texts(AVFrame *in_frame, AVFrame **output,
+                            const std::vector<TextItem> &items) {
+  if (items.empty()) {
+    *output = nullptr;
+    return 1;
+  }
+
+#if SOFTWARE_DRAWBOX
+  Image img(in_frame);
+  for (const TextItem &item : items) {
+    img.Annotate(item.text.c_str(), Vector2(item.x, item.y),
+                 monitor->LabelSize(), kRGBWhite, kRGBTransparent);
+  }
+  *output = nullptr;   // drawn in place, caller keeps in_frame
+  return 1;
+#else
+  if (!drawtext_filter.filter_ctx) {
+    Error("drawtext filter not configured");
+    return -1;
+  }
+
+  // One command for every label on the frame. The filter carries 32 slots, so
+  // anything beyond that is dropped rather than silently overwriting slot 31.
+  size_t count = items.size();
+  if (count > 32) {
+    Warning("%zu labels on one frame, drawing the first 32", count);
+    count = 32;
+  }
+
+  // expansion=none is re-asserted here, not just at setup: reinit builds a
+  // fresh context and runs init() over it, and the text carries a literal %
+  // from the confidence figure, which is a format specifier to the expander.
+  std::string opts = "expansion=none";
+  for (size_t i = 0; i < count; i++) {
+    opts += stringtf(":t%zu='%s':x%zu=%d:y%zu=%d:fc%zu=%s",
+        i, escape_filter_value(items[i].text).c_str(),
+        i, items[i].x,
+        i, items[i].y,
+        i, items[i].colour.c_str());
+  }
+
+  Debug(1, "Drawtext: %zu labels in one pass: %s", count, opts.c_str());
+  int ret = avfilter_graph_send_command(drawtext_filter.filter_graph,
+      "ni_quadra_drawtext", "reinit", opts.c_str(), NULL, 0, 0);
+  if (ret < 0) {
+    Error("cannot send drawtext filter command %d %s: %s",
+        ret, av_make_error_string(ret).c_str(), opts.c_str());
+    return ret;
+  }
+  return drawtext_filter.execute(in_frame, output);
+#endif
 }
 
 int Quadra_Yolo::draw_text(AVFrame *input, AVFrame **output, const std::string &text, int x, int y, const std::string &colour) {
