@@ -117,6 +117,8 @@ class Quadra_Yolo {
     bool drawbox_width_reported_ = false;
     // NI_MAX_SUPPORT_DRAWBOX_NUM: the rectangles ni_quadra_drawbox carries.
     static constexpr int kDrawboxSlots = 5;
+    // MAX_TEXT_NUM: the text slots ni_quadra_drawtext carries.
+    static constexpr size_t kDrawtextSlots = 32;
     // As with drawtext, a narrower border must clear what a wider one set.
     int drawbox_slots_used_ = 0;
     int set_drawbox_opt(int slot, const char *name, int value);

@@ -20,6 +20,10 @@ constexpr size_t NB_MODEL_NAME_MAX_LEN = 64;
 
 #define SOFTWARE_DRAWBOX 0
 
+// Background drawn behind a label. Dark enough to carry white text over a
+// bright scene, transparent enough to keep what is behind it visible.
+static constexpr const char *kLabelBackground = "black@0.5";
+
 // A call over this is not a slow blit, it is a wait: the filter allocates its
 // output from the frame pool and blocks when the card has none to give.
 static constexpr uint64_t kDrawtextBlockedUs = 250000;
@@ -235,8 +239,29 @@ bool Quadra_Yolo::setup(
 #if !SOFTWARE_DRAWBOX
   if (drawbox) drawbox = drawbox_filter.setup("ni_quadra_drawbox=inplace=1", "ni_quadra_drawbox", dec_ctx, dec_stream->time_base, dec_ctx->hw_frames_ctx, dec_ctx->pix_fmt);
   //monitor->LabelSize() // 1234
-  if (drawtext) drawtext = drawtext_filter.setup(stringtf("ni_quadra_drawtext=text=init:expansion=none:fontsize=%d:font=Sans",10+monitor->LabelSize() * 4), "ni_quadra_drawtext",
-      dec_ctx, dec_stream->time_base, dec_ctx->hw_frames_ctx, dec_ctx->pix_fmt);
+  if (drawtext) {
+    const int fontsize = 10 + monitor->LabelSize() * 4;
+    // White on a bright scene is unreadable, which is why the software
+    // blitter drew onto black. box fills the glyph box before the text, and
+    // ff_blend_rectangle honours the alpha, so a part-transparent black still
+    // shows the scene through it.
+    //
+    // box is one flag for the filter, but the colour and the padding are per
+    // slot, so every slot we might use has to be set. They are set here
+    // rather than per frame because they never change, and because they are
+    // the options NETINT did not mark runtime -- a reinit command carrying
+    // them is refused. reinit runs av_opt_copy from the live context before
+    // applying its own string, so what is set here survives every reinit.
+    std::string options = stringtf(
+        "ni_quadra_drawtext=text=init:expansion=none:fontsize=%d:font=Sans:box=1",
+        fontsize);
+    const int padding = std::max(2, fontsize / 6);
+    for (size_t i = 0; i < kDrawtextSlots; i++)
+      options += stringtf(":bc%zu=%s:bb%zu=%d", i, kLabelBackground, i, padding);
+
+    drawtext = drawtext_filter.setup(options, "ni_quadra_drawtext",
+        dec_ctx, dec_stream->time_base, dec_ctx->hw_frames_ctx, dec_ctx->pix_fmt);
+  }
   //if (drawtext) drawtext = drawtext_filter.setup("ni_quadra_scale=iw:ih:format=rgba,ni_quadra_drawtext=text=init:fontsize=24:font=Sans", "ni_quadra_drawtext", true, dec_ctx->pix_fmt);
 #endif
 
@@ -1048,8 +1073,11 @@ int Quadra_Yolo::draw_texts(AVFrame *in_frame, AVFrame **output,
 #if SOFTWARE_DRAWBOX
   Image img(in_frame);
   for (const TextItem &item : items) {
+    // Black rather than transparent, for the same reason the hardware path
+    // draws a box: white on a bright scene cannot be read. Annotate has no
+    // alpha, so this is the opaque version of what the filter does.
     img.Annotate(item.text.c_str(), Vector2(item.x, item.y),
-                 monitor->LabelSize(), kRGBWhite, kRGBTransparent);
+                 monitor->LabelSize(), kRGBWhite, kRGBBlack);
   }
   *output = nullptr;   // drawn in place, caller keeps in_frame
   return 1;
@@ -1062,9 +1090,9 @@ int Quadra_Yolo::draw_texts(AVFrame *in_frame, AVFrame **output,
   // One command for every label on the frame. The filter carries 32 slots, so
   // anything beyond that is dropped rather than silently overwriting slot 31.
   size_t count = items.size();
-  if (count > 32) {
-    Warning("%zu labels on one frame, drawing the first 32", count);
-    count = 32;
+  if (count > kDrawtextSlots) {
+    Warning("%zu labels on one frame, drawing the first %zu", count, kDrawtextSlots);
+    count = kDrawtextSlots;
   }
 
   // Set every slot through the filter's own reinit command rather than
