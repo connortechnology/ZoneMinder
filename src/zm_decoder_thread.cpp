@@ -243,13 +243,16 @@ bool DecoderThread::Decode() {
       int ret = packet->send_packet(monitor_->mVideoCodecContext);
       SystemTimePoint endtime = std::chrono::system_clock::now();
 
+      // Track running average of send_packet duration. The window is named
+      // because how long the seed takes to decay is derived from it.
+      constexpr int kEmaWindow = 30;
       // Track running average of send_packet duration
       double send_us = std::chrono::duration_cast<Microseconds>(endtime - starttime).count();
       if (send_count_ == 0) {
         avg_send_us_ = send_us;
       } else {
         // EMA with alpha ~= 2/(N+1), N=30 gives alpha ~0.065
-        constexpr double alpha = 0.065;
+        constexpr double alpha = 2.0 / (kEmaWindow + 1);
         avg_send_us_ = alpha * send_us + (1.0 - alpha) * avg_send_us_;
       }
       send_count_++;
@@ -260,7 +263,16 @@ bool DecoderThread::Decode() {
       double fps_d = monitor_->get_capture_fps();
       int fps = static_cast<int>(fps_d);
       double budget_us = (fps_d > 0) ? 1e6 / fps_d : 0;
-      if ((fps > 0) && (send_count_ >= fps) && (avg_send_us_ > budget_us)) {
+      // Wait for the seed to wash out before believing the average. It is
+      // seeded with the first send_packet, which opens the decoder session on
+      // the card and allocates its frame pool, so it is far larger than any
+      // steady-state call. At alpha 0.065 the seed still carries 39% of its
+      // weight after 14 samples, which is all send_count_ >= fps required at
+      // 14fps: a one-off half-second first call warned for several seconds
+      // about a decoder that was keeping up perfectly well. Three time
+      // constants leaves it under 2%.
+      constexpr int kSeedSamples = 3 * kEmaWindow;
+      if ((fps > 0) && (send_count_ >= kSeedSamples) && (avg_send_us_ > budget_us)) {
         Warning("send_packet avg %.1fms exceeds frame budget %.1fms (capture %dfps). Queue %zu, keyframe interval %d",
             avg_send_us_ / 1000.0, budget_us / 1000.0, fps,
             monitor_->decoder_queue.size(), monitor_->packetqueue.get_max_keyframe_interval());
