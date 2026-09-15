@@ -388,12 +388,12 @@ int Quadra_Yolo::receive_detection(std::shared_ptr<ZMPacket> packet) {
       Error("Quadra: cannot draw roi");
       return -1;
     }
-    if (!out_frame) {
-      Error("Quadra: process_roi returned %d without a frame", ret);
-      return -1;
+    // No frame means nothing was detected and nothing was drawn, which is
+    // the common case. The analysis image falls back to the captured frame.
+    if (out_frame) {
+      packet->set_ai_frame(out_frame);
+      zm_dump_video_frame(out_frame, "ai");
     }
-    packet->set_ai_frame(out_frame);
-    zm_dump_video_frame(out_frame, "ai");
   } else {
     return 0;
   }
@@ -612,17 +612,16 @@ int Quadra_Yolo::process_roi(AVFrame *in_frame, AVFrame **filt_frame) {
   Debug(4, "Filt %d frame pts %3" PRId64, ++filt_cnt, in_frame->pts);
 	zm_dump_video_frame(in_frame, "Quadra: process_roi in_frame");
   if (!sd || !sd_roi_extra || sd->size == 0 || sd_roi_extra->size == 0) {
-    // A reference, not the caller's own pointer. This returns into
-    // packet->set_ai_frame(), which takes ownership, and in_frame is
-    // packet->hw_frame or packet->in_frame -- already owned by that same
-    // packet. Handing it straight back left the packet owning one AVFrame
-    // twice, and ~ZMPacket freed it twice: SIGABRT out of _int_free, on
-    // every frame the model found nothing in.
-    *filt_frame = av_frame_clone(in_frame);
-    if (*filt_frame == nullptr) {
-      Error("cannot clone frame");
-      return NIERROR(ENOMEM);
-    }
+    // Nothing was detected, so there is nothing annotated to hand back. Say
+    // so rather than returning a frame: this goes to set_ai_frame(), which
+    // takes ownership, and in_frame is packet->hw_frame or packet->in_frame,
+    // already owned by that packet. Returning it outright made the packet own
+    // one AVFrame twice and ~ZMPacket freed it twice. Returning a clone fixed
+    // the double free but kept a reference on the decoder's hardware frame
+    // for the life of the packet, and holding those is what starves the
+    // filters: hwdownload then failed on thousands of frames. The analysis
+    // image falls back to in_frame on its own.
+    *filt_frame = nullptr;
     Debug(1, "no roi area in frame %d", filt_cnt);
     return 0;
   }
@@ -736,8 +735,11 @@ int Quadra_Yolo::process_roi(AVFrame *in_frame, AVFrame **filt_frame) {
       int ret = hwdl_filter.execute(input, &output);
       Debug(1, "*** End   of hwdownload ***");
       if (ret < 0) {
+        // Not a frame anyone downstream can use: the analysis image cannot
+        // read a hardware frame, and handing back in_frame gives the packet
+        // a second claim on a frame it already owns.
         Error("cannot download hwframe");
-        output = input;
+        output = nullptr;
       } else {
         zm_dump_video_frame(output, "Quadra: process_roi output");
       }
@@ -748,7 +750,13 @@ int Quadra_Yolo::process_roi(AVFrame *in_frame, AVFrame **filt_frame) {
     output = input;
   }
 
-  *filt_frame = output;
+  // Only hand back a frame we actually produced. output is in_frame whenever
+  // nothing was drawn or the download did not happen, and in_frame belongs to
+  // the caller's packet: set_ai_frame would take a second ownership of it, and
+  // if it is still a hardware frame the analysis image cannot read it anyway.
+  // No frame means "nothing annotated", and the analysis image falls back to
+  // the captured one.
+  *filt_frame = (output == in_frame) ? nullptr : output;
   if (input != in_frame and input != output) av_frame_free(&input);
   
   // Technicall we should have a lock around this, but since we only access from the Analysis thread, we won't worry about it.
