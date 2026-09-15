@@ -995,10 +995,10 @@ function isJSON(str) {
 }
 
 // Cookies holding an absolute date range. They are shared between the events
-// list and montage review (refs #4976), but do not age well: kept until 2038, a
-// window picked months ago is restored on a bare page load and the view opens on
-// a range with no events. Session scope keeps the sharing and lets a new session
-// fall back to the last hour.
+// list and montage review (refs #4976), but do not age well: kept for decades by
+// the default below, a window picked months ago is restored on a bare page load
+// and the view opens on a range with no events. Session scope keeps the sharing
+// and lets a new session fall back to the last hour.
 const sessionCookies = ['zmFilter_StartDateTime', 'zmFilter_EndDateTime'];
 
 function setCookie(name, value, seconds) {
@@ -1011,7 +1011,10 @@ function setCookie(name, value, seconds) {
   } else if (sessionCookies.includes(name)) {
     expires = "";
   } else {
-    // 2147483647 is 2^31 - 1 which is January of 2038 to avoid the 32bit integer overflow bug.
+    // Max-Age is a duration in seconds counted from now, not an absolute date
+    // (RFC 6265 section 5.2.2), so this is roughly 68 years out rather than the
+    // January 2038 this comment used to claim. 2^31 - 1 is the largest value
+    // that cannot overflow a signed 32bit int in a client that converts it.
     expires = "; max-age=2147483647";
   }
   document.cookie = name + "=" + (newValue || "") + expires + "; path=/; samesite=strict";

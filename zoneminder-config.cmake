@@ -8,7 +8,6 @@
 #cmakedefine SOLARIS 1
 #cmakedefine HAVE_LINUX_VIDEODEV2_H 1
 #cmakedefine HAVE_EXECINFO_H 1
-#cmakedefine HAVE_UNTETHER_H 1
 #cmakedefine HAVE_MEMX_H 1
 #cmakedefine HAVE_MX_ACCL_H 1
 #cmakedefine HAVE_QUADRA 1

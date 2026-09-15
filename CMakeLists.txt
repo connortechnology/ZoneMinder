@@ -153,22 +153,53 @@ if(ASAN AND TSAN)
   message(FATAL_ERROR "ASAN and TSAN options are mutually exclusive")
 endif()
 
-set(ZM_RUNDIR "/var/run/zm" CACHE PATH
-  "Location of transient process files, default: /var/run/zm")
-set(ZM_SOCKDIR "/var/run/zm" CACHE PATH
-  "Location of Unix domain socket files, default /var/run/zm")
-set(ZM_TMPDIR "/var/cache/zoneminder/temp" CACHE PATH
-  "Location of regenerable temporary files, default: /var/cache/zoneminder/temp")
-set(ZM_LOGDIR "/var/log/zm" CACHE PATH
-  "Location of generated log files, default: /var/log/zm")
+# Runtime directory defaults.
+#
+# The Linux values are FHS paths that do not fit macOS: there is no /dev/shm,
+# and /var belongs to the operating system rather than to locally installed
+# software. Derive from CMAKE_INSTALL_FULL_LOCALSTATEDIR (<prefix>/var) there,
+# which is also where Homebrew keeps state.
+#
+# These feed the cache entries below as defaults rather than overwriting them
+# the way the ZM_TARGET_DISTRO ladder does, so an explicit -DZM_RUNDIR=... still
+# wins. A Homebrew formula depends on that: its install prefix is a versioned
+# cellar directory, and etc and var have to sit outside it to survive an upgrade.
+if(APPLE)
+  set(_zm_var "${CMAKE_INSTALL_FULL_LOCALSTATEDIR}")
+  set(_zm_default_rundir "${_zm_var}/run/zm")
+  set(_zm_default_tmpdir "${_zm_var}/cache/zoneminder/temp")
+  set(_zm_default_logdir "${_zm_var}/log/zm")
+  set(_zm_default_cachedir "${_zm_var}/cache/zoneminder")
+  set(_zm_default_contentdir "${_zm_var}/lib/zoneminder")
+  # macOS mounts no tmpfs to put these on. Being cleared at boot is the
+  # property that actually matters for mapped memory files, and var/run is.
+  set(_zm_default_pathmap "${_zm_var}/run/zm")
+  unset(_zm_var)
+else()
+  set(_zm_default_rundir "/var/run/zm")
+  set(_zm_default_tmpdir "/var/cache/zoneminder/temp")
+  set(_zm_default_logdir "/var/log/zm")
+  set(_zm_default_cachedir "/var/cache/zoneminder")
+  set(_zm_default_contentdir "/var/lib/zoneminder")
+  set(_zm_default_pathmap "/dev/shm")
+endif()
+
+set(ZM_RUNDIR "${_zm_default_rundir}" CACHE PATH
+  "Location of transient process files, default: ${_zm_default_rundir}")
+set(ZM_SOCKDIR "${_zm_default_rundir}" CACHE PATH
+  "Location of Unix domain socket files, default ${_zm_default_rundir}")
+set(ZM_TMPDIR "${_zm_default_tmpdir}" CACHE PATH
+  "Location of regenerable temporary files, default: ${_zm_default_tmpdir}")
+set(ZM_LOGDIR "${_zm_default_logdir}" CACHE PATH
+  "Location of generated log files, default: ${_zm_default_logdir}")
 set(ZM_WEBDIR "${CMAKE_INSTALL_FULL_DATADIR}/zoneminder/www" CACHE PATH
   "Location of the web files, default: <prefix>/${CMAKE_INSTALL_DATADIR}/zoneminder/www")
 set(ZM_CGIDIR "${CMAKE_INSTALL_FULL_LIBEXECDIR}/zoneminder/cgi-bin" CACHE PATH
   "Location of the cgi-bin files, default: <prefix>/${CMAKE_INSTALL_LIBEXECDIR}/zoneminder/cgi-bin")
-set(ZM_CACHEDIR "/var/cache/zoneminder" CACHE PATH
-  "Location of the web server cache busting files, default: /var/cache/zoneminder")
-set(ZM_CONTENTDIR "/var/lib/zoneminder" CACHE PATH
-  "Location of dynamic content (events and images), default: /var/lib/zoneminder")
+set(ZM_CACHEDIR "${_zm_default_cachedir}" CACHE PATH
+  "Location of the web server cache busting files, default: ${_zm_default_cachedir}")
+set(ZM_CONTENTDIR "${_zm_default_contentdir}" CACHE PATH
+  "Location of dynamic content (events and images), default: ${_zm_default_contentdir}")
 set(ZM_FONTDIR "${CMAKE_INSTALL_FULL_DATADIR}/zoneminder/fonts" CACHE PATH
   "Location of the font files used for timestamping, default: <prefix>/${CMAKE_INSTALL_DATADIR}/zoneminder/fonts")
 
@@ -205,8 +236,8 @@ set(ZM_PATH_SHUTDOWN "/sbin/shutdown" CACHE PATH
   "Path to shutdown binary, default: /sbin/shutdown")
 
 # Advanced
-set(ZM_PATH_MAP "/dev/shm" CACHE PATH
-  "Location to save mapped memory files, default: /dev/shm")
+set(ZM_PATH_MAP "${_zm_default_pathmap}" CACHE PATH
+  "Location to save mapped memory files, default: ${_zm_default_pathmap}")
 set(ZM_PATH_ARP "" CACHE PATH
   "Full path to compatible arp binary. Leave empty for automatic detection.")
 set(ZM_PATH_ARP_SCAN "" CACHE PATH
@@ -500,6 +531,54 @@ endif()
 # CxxUrl_BUILD_STATIC_LIBS and it defaults to ON, independently of
 # BUILD_SHARED_LIBS. There is nothing to force here.
 list(APPEND ZM_BIN_LIBS chmike::CxxUrl)
+
+# 64-bit atomics are not always inline instructions. On 32-bit targets without
+# an 8-byte atomic instruction -- armv7/armhf, which is what a 32-bit Raspberry
+# Pi OS runs, and likewise mips and ppc32 -- gcc emits calls to __atomic_load_8
+# and friends instead, and those live in libatomic. The failure is at link time
+# and names the symbol rather than the cause:
+#
+#   undefined reference to symbol '__atomic_load_8@@LIBATOMIC_1.0'
+#   libatomic.so.1: error adding symbols: DSO missing from command line
+#
+# Test rather than guess at the architecture: whether the libcall is needed
+# depends on the target and the -march the compiler was given, not on the name
+# of the platform. check_cxx_source_compiles links, so it sees the same failure
+# the real build would.
+include(CheckCXXSourceCompiles)
+set(_zm_atomic64_src "
+#include <atomic>
+#include <cstdint>
+int main() {
+  std::atomic<uint64_t> counter(0);
+  counter.fetch_add(1);
+  return static_cast<int>(counter.load());
+}
+")
+check_cxx_source_compiles("${_zm_atomic64_src}" ZM_HAVE_BUILTIN_ATOMIC64)
+if(NOT ZM_HAVE_BUILTIN_ATOMIC64)
+  # Ask for -latomic rather than hunting for the file. libatomic.so.1 is the
+  # runtime and often the only copy under /usr/lib/<triple>, with the linker
+  # name libatomic.so living in gcc's own directory, so find_library() misses it
+  # on a perfectly working toolchain. The compiler driver knows where its own
+  # runtime libraries are; let it resolve the name.
+  set(_zm_atomic_required_save "${CMAKE_REQUIRED_LIBRARIES}")
+  set(CMAKE_REQUIRED_LIBRARIES atomic)
+  check_cxx_source_compiles("${_zm_atomic64_src}" ZM_ATOMIC64_NEEDS_LIBATOMIC)
+  set(CMAKE_REQUIRED_LIBRARIES "${_zm_atomic_required_save}")
+  unset(_zm_atomic_required_save)
+  if(NOT ZM_ATOMIC64_NEEDS_LIBATOMIC)
+    message(FATAL_ERROR
+      "64-bit atomics do not link on this target, with or without libatomic. "
+      "Install libatomic (libatomic1 on Debian, libatomic on Fedora) or add the "
+      "right library to ZM_EXTRA_LIBS.")
+  endif()
+  list(APPEND ZM_BIN_LIBS atomic)
+  message(STATUS "64-bit atomics need libatomic on this target: linking -latomic")
+else()
+  message(STATUS "64-bit atomics are inline on this target, libatomic not needed")
+endif()
+unset(_zm_atomic64_src)
 
 # libjwt
 if (${ZM_JWT_BACKEND} STREQUAL "libjwt")
@@ -796,8 +875,47 @@ endif()
 # Detect Perl module installation path
 # Prefer vendorlib (standard for distro packages), fall back to sitelib
 # (used on FreeBSD and systems without vendorlib configured)
+#
+# macOS needs a second look. The Perl Apple ships reports a vendorlib of
+# /Network/Library/Perl/<version>, a remnant of NetInfo-era network homes.
+# Nothing along that path exists, and the root volume is a sealed read-only APFS
+# snapshot, so it cannot be created even by root and installing there fails.
+#
+# Merely testing for the directory is not enough, because a Homebrew Perl has no
+# vendorlib either - but its would sit under the Homebrew prefix, where it can
+# simply be created, and it is the better target of the two: Homebrew's sitelib
+# resolves into the versioned Cellar directory and is erased every time Perl is
+# upgraded. So ask whether the path is creatable, by walking up to the nearest
+# ancestor that exists. Reaching / means nothing on the way there exists, which
+# on macOS means it never can.
+set(_perl_lib_config "vendorlib")
+if(APPLE)
+  execute_process(
+    COMMAND ${PERL_EXECUTABLE} -MConfig -e "print \$Config{vendorlib}"
+    OUTPUT_VARIABLE _perl_vendorlib
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE _perl_vendorlib_result)
+  if(_perl_vendorlib_result EQUAL 0 AND NOT _perl_vendorlib STREQUAL "")
+    set(_perl_probe "${_perl_vendorlib}")
+    while(NOT EXISTS "${_perl_probe}")
+      get_filename_component(_perl_parent "${_perl_probe}" DIRECTORY)
+      if(_perl_parent STREQUAL _perl_probe)
+        break()
+      endif()
+      set(_perl_probe "${_perl_parent}")
+    endwhile()
+    if(_perl_probe STREQUAL "/")
+      message(STATUS
+        "Perl vendorlib (${_perl_vendorlib}) cannot be created on a sealed "
+        "system volume, using sitelib")
+      set(_perl_lib_config "sitelib")
+    endif()
+    unset(_perl_probe)
+    unset(_perl_parent)
+  endif()
+endif()
 execute_process(
-  COMMAND ${PERL_EXECUTABLE} -MConfig -e "print \$Config{vendorlib}"
+  COMMAND ${PERL_EXECUTABLE} -MConfig -e "print \$Config{${_perl_lib_config}}"
   OUTPUT_VARIABLE _perl_lib_default
   OUTPUT_STRIP_TRAILING_WHITESPACE
   RESULT_VARIABLE _perl_result)
@@ -859,6 +977,9 @@ if(ZM_WEB_USER STREQUAL "")
   # userline in the first match
   file(STRINGS "/etc/passwd" userline_apache REGEX "^apache")
   file(STRINGS "/etc/passwd" userline_www REGEX "^www")
+  # macOS names its service accounts with a leading underscore, so neither of
+  # the patterns above matches the _www that ships with the system Apache.
+  file(STRINGS "/etc/passwd" userline_uwww REGEX "^_www")
   if(NOT (userline_apache STREQUAL ""))
     execute_process(
       COMMAND echo ${userline_apache}
@@ -867,6 +988,11 @@ if(ZM_WEB_USER STREQUAL "")
   elseif(NOT (userline_www STREQUAL ""))
     execute_process(
       COMMAND echo ${userline_www}
+      COMMAND cut -d: -f1 OUTPUT_VARIABLE ZM_WEB_USER
+      OUTPUT_STRIP_TRAILING_WHITESPACE)
+  elseif(NOT (userline_uwww STREQUAL ""))
+    execute_process(
+      COMMAND echo ${userline_uwww}
       COMMAND cut -d: -f1 OUTPUT_VARIABLE ZM_WEB_USER
       OUTPUT_STRIP_TRAILING_WHITESPACE)
   endif()
@@ -886,6 +1012,62 @@ if(WITH_SYSTEMD)
     message(WARNING "Running ZoneMinder requires polkit. Building ZoneMinder requires the polkit development package.")
   endif()
 endif()
+
+# The taint-safe PATH the Perl scripts run external commands with.
+#
+# They run under -T, so they cannot trust the caller's PATH and set their own.
+# That was hardcoded to the FHS locations, which assumes everything they shell
+# out to lives under /usr or /usr/local. ZoneMinder::General::findDbCommand
+# looks for a database client that way, and zmupdate.pl and zmcamtool.pl run it,
+# so an install whose client sits elsewhere - Homebrew on Apple Silicon puts it
+# in /opt/homebrew/bin, and a --prefix=/opt build is the same shape - fails with
+# "sh: mysql: command not found" even though the client is on the caller's PATH.
+#
+# Default to the FHS locations plus wherever a client was actually found, and
+# let a packager override the lot. Every directory named here has to be one only
+# root can write to, or perl's taint checks will refuse to run anything at all.
+set(_zm_script_path "/bin:/usr/bin:/usr/local/bin")
+find_program(ZM_DB_CLIENT_EXECUTABLE NAMES mariadb mysql)
+if(ZM_DB_CLIENT_EXECUTABLE)
+  get_filename_component(_zm_db_client_dir "${ZM_DB_CLIENT_EXECUTABLE}" DIRECTORY)
+  string(FIND ":${_zm_script_path}:" ":${_zm_db_client_dir}:" _zm_db_client_found)
+
+  # Only add a directory nobody but its owner can write to. Perl's own taint
+  # check refuses a world writable directory here, but it permits a group
+  # writable one, and adding one automatically would quietly widen who can
+  # decide what the daemons execute. Homebrew's bin is group writable, so this
+  # is not a theoretical case.
+  execute_process(
+    COMMAND "${PERL_EXECUTABLE}" -e "exit(((stat(\$ARGV[0]))[2] & 022) ? 1 : 0)" "${_zm_db_client_dir}"
+    RESULT_VARIABLE _zm_db_client_dir_unsafe
+    OUTPUT_QUIET ERROR_QUIET)
+
+  if(NOT _zm_db_client_found EQUAL -1)
+    # Already covered by the defaults.
+  elseif(_zm_db_client_dir_unsafe)
+    message(WARNING
+      "Found a database client at ${ZM_DB_CLIENT_EXECUTABLE}, but "
+      "${_zm_db_client_dir} is writable by group or world and has not been "
+      "added to ZM_SCRIPT_PATH: anyone who can write there would choose what "
+      "the Perl daemons run. Tighten its permissions, or set ZM_SCRIPT_PATH "
+      "explicitly if you accept that.")
+  else()
+    set(_zm_script_path "${_zm_script_path}:${_zm_db_client_dir}")
+  endif()
+
+  mark_as_advanced(ZM_DB_CLIENT_EXECUTABLE)
+  unset(_zm_db_client_dir)
+  unset(_zm_db_client_found)
+  unset(_zm_db_client_dir_unsafe)
+else()
+  message(WARNING
+    "No mariadb or mysql client found. zmupdate.pl applies schema changes by "
+    "running one, so database upgrades will fail until one is on ZM_SCRIPT_PATH.")
+endif()
+set(ZM_SCRIPT_PATH "${_zm_script_path}" CACHE STRING
+  "PATH the Perl scripts use for external commands, default: ${_zm_script_path}")
+unset(_zm_script_path)
+message(STATUS "Perl script PATH: ${ZM_SCRIPT_PATH}")
 
 # Find the path to an arp compatible executable
 if(ZM_PATH_ARP STREQUAL "")
@@ -1005,7 +1187,10 @@ add_subdirectory(onvif)
 
 if(BUILD_TEST_SUITE)
   message("Building unit tests: Yes")
-  find_package(Catch2 REQUIRED)
+  # The tests use v3 spellings throughout: catch2/catch_all.hpp, Catch::Approx and
+  # the Catch2WithMain target, none of which exist in v2. Ask for 3 so a v2
+  # install fails here with a clear message instead of a wall of compile errors.
+  find_package(Catch2 3 REQUIRED)
 
   include(CTest)
   add_subdirectory(tests)

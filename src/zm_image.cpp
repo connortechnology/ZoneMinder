@@ -6414,7 +6414,6 @@ int Image::draw_boxes(
     ) {
 
   try {
-    //Debug(1, "SpeedAI coco: %s", coco_object.dump().c_str());
     if (coco_object.size()) {
       for (auto it = coco_object.begin(); it != coco_object.end(); ++it) {
         nlohmann::json detection = *it;

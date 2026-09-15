@@ -323,15 +323,18 @@ int main(int argc, char *argv[], char **envp) {
           Debug(1, "Last view %jd= %" PRId64 " seconds since last view", static_cast<intmax_t>(last_viewed), since_last_view);
           if (((!last_viewed) or (since_last_view > 10)) and (monitors[i]->GetLastWriteIndex() != -1)) {
             // Nobody is watching — pause if running, otherwise stay paused.
-            // The previous GetLastWriteIndex() != -1 guard caused a
-            // Pause/Play cycle because Pause() resets the write index,
-            // making the guard false and falling through to Play().
-            if (monitors[i]->getCamera()->isPrimed()) {
-              monitors[i]->Pause();
+            // Keep capturing until we have written at least one image so that
+            // the console thumbnail and mode=single have something to show.
+            // Pause() no longer resets last_write_index, so once we have an
+            // image this stays true and we don't Pause/Play cycle.
+            if (monitors[i]->GetLastWriteIndex() != -1) {
+              if (monitors[i]->getCamera()->isPrimed()) {
+                monitors[i]->Pause();
+              }
+              std::this_thread::sleep_for(Microseconds(100000));
+              result = 0;
+              continue;
             }
-            std::this_thread::sleep_for(Microseconds(100000));
-            result = 0;
-            continue;
           } else if (!monitors[i]->getCamera()->isPrimed()) {
             if (1 > (result = monitors[i]->Play())) {
               Debug(1, "Failed to play");
