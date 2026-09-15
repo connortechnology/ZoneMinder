@@ -555,6 +555,15 @@ unsigned int effective_device_frame_budget(const std::vector<int> &monitor_budge
   return smallest;
 }
 
+// How far over the budget the average has to be before it means anything.
+// Below this the two figures are simply not precise enough to compare.
+constexpr double kDecodeBudgetMargin = 1.10;
+
+bool decode_rate_worth_reporting(double avg_send_us, double budget_us) {
+  if (budget_us <= 0) return false;
+  return avg_send_us > budget_us * kDecodeBudgetMargin;
+}
+
 bool device_budget_starves_decoder(unsigned int budget, int max_extra_hw_frame_cnt) {
   if (max_extra_hw_frame_cnt < 0) return false;
   return budget > static_cast<unsigned int>(max_extra_hw_frame_cnt);

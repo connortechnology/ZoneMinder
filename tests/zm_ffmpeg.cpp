@@ -303,3 +303,36 @@ TEST_CASE("xcoder_param_int", "[ffmpeg]") {
     CHECK(xcoder_param_int("out=hw:extendPoolSize=0", "extendPoolSize") == 0);
   }
 }
+
+TEST_CASE("decode_rate_worth_reporting", "[ffmpeg]") {
+  const double budget = 66900;   // 66.9ms, a 14.95fps capture
+
+  SECTION("a hair over budget is not worth saying") {
+    // 67.2ms against 67.0ms, three parts in a thousand. The average is an EMA
+    // and the budget comes from a smoothed capture rate; they do not agree to
+    // that precision. 29% of a day's warnings on one monitor were under a
+    // tenth over, and their decoder queue averaged 3.7 frames.
+    CHECK_FALSE(decode_rate_worth_reporting(67200, 67000));
+    CHECK_FALSE(decode_rate_worth_reporting(budget * 1.02, budget));
+    CHECK_FALSE(decode_rate_worth_reporting(budget * 1.09, budget));
+  }
+
+  SECTION("a tenth over is where the queue starts to build") {
+    CHECK(decode_rate_worth_reporting(budget * 1.11, budget));
+    CHECK(decode_rate_worth_reporting(budget * 1.5, budget));
+    // 96.3ms against 66.5ms, the case that really was starving the decoder.
+    CHECK(decode_rate_worth_reporting(96300, 66500));
+  }
+
+  SECTION("under budget is never worth saying") {
+    CHECK_FALSE(decode_rate_worth_reporting(budget * 0.5, budget));
+    CHECK_FALSE(decode_rate_worth_reporting(budget, budget));
+  }
+
+  SECTION("no capture rate means no budget to compare against") {
+    // get_capture_fps() returns 0 before the rate is known, and dividing by it
+    // would make the budget infinite or zero rather than absent.
+    CHECK_FALSE(decode_rate_worth_reporting(100000, 0));
+    CHECK_FALSE(decode_rate_worth_reporting(100000, -1));
+  }
+}

@@ -536,6 +536,15 @@ bool device_frames_worth_holding(const std::vector<MonitorFrameUse> &monitors);
 // nothing here can exceed it.
 bool device_budget_starves_decoder(unsigned int budget, int max_extra_hw_frame_cnt);
 
+// Whether a decode average is far enough over its frame budget to be worth
+// saying so. The average is an EMA and the budget comes from a smoothed
+// capture rate, so the two agree only to within a few percent and a bare
+// comparison fires on noise: of 19286 of these on one monitor in a day, 29%
+// were under a tenth over budget, and their decoder queue averaged 3.7 frames
+// -- nothing was accumulating. Past a tenth the queue does start to build,
+// averaging 8.4 frames, and past half it averages 16.
+bool decode_rate_worth_reporting(double avg_send_us, double budget_us);
+
 // Tells the gauge whether anything in this process will use a device frame.
 // When nothing will, frames are released as soon as they are decoded and that
 // is normal operation rather than a shortfall, so it is not reported.

@@ -260,6 +260,8 @@ bool DecoderThread::Decode() {
       // Warn when average decode rate can't keep up with the camera's
       // capture rate. capture_fps is smoothed at the source in UpdateFPS
       // so transient backlog-drain bursts don't trigger false positives.
+      const int64_t now_us = std::chrono::duration_cast<Microseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count();
       double fps_d = monitor_->get_capture_fps();
       int fps = static_cast<int>(fps_d);
       double budget_us = (fps_d > 0) ? 1e6 / fps_d : 0;
@@ -272,7 +274,13 @@ bool DecoderThread::Decode() {
       // about a decoder that was keeping up perfectly well. Three time
       // constants leaves it under 2%.
       constexpr int kSeedSamples = 3 * kEmaWindow;
-      if ((fps > 0) && (send_count_ >= kSeedSamples) && (avg_send_us_ > budget_us)) {
+      // Once a minute while it lasts, not once a packet. A decoder that
+      // cannot keep up says so fifteen times a second otherwise: one monitor
+      // logged 19286 of these in a day, all saying the same thing.
+      if ((fps > 0) && (send_count_ >= kSeedSamples)
+          && decode_rate_worth_reporting(avg_send_us_, budget_us)
+          && shed_report_due(now_us, last_slow_report_us_, kSlowReportIntervalUs)) {
+        last_slow_report_us_ = now_us;
         Warning("send_packet avg %.1fms exceeds frame budget %.1fms (capture %dfps). Queue %zu, keyframe interval %d",
             avg_send_us_ / 1000.0, budget_us / 1000.0, fps,
             monitor_->decoder_queue.size(), monitor_->packetqueue.get_max_keyframe_interval());
