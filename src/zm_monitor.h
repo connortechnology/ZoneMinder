@@ -923,6 +923,11 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   // to fit inside. The lag is made of frames that did not.
   // The reference image blend, which runs per frame while the motion
   // detection that reads it runs one frame in motion_frame_skip+1.
+  // Time spent in get_packet waiting for a packet to exist and be decoded,
+  // as distinct from time spent analysing one.
+  uint64_t analyse_wait_us_ = 0;
+  uint64_t analyse_wait_max_us_ = 0;
+  uint64_t analyse_wait_count_ = 0;
   uint64_t ref_blend_us_ = 0;
   uint64_t ref_blend_max_us_ = 0;
   uint64_t ref_blend_count_ = 0;
@@ -1309,6 +1314,9 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   void closeEvent();
 
   int DeviceFrameBudget() const { return device_frame_budget; };
+  // Read and reset the accumulated get_packet wait, for the loop report.
+  uint64_t TakeAnalyseWaitUs() { uint64_t v = analyse_wait_us_; analyse_wait_us_ = 0; return v; }
+  uint64_t TakeAnalyseWaitMaxUs() { uint64_t v = analyse_wait_max_us_; analyse_wait_max_us_ = 0; return v; }
   // Age of the packet last analysed, in microseconds.
   int64_t AnalysisLagUs() const { return analysis_lag_us_.load(std::memory_order_relaxed); }
   ObjectDetectionOption ObjectDetection() const { return objectdetection; };

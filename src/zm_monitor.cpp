@@ -2297,7 +2297,20 @@ int Monitor::Analyse() {
   // if have event, send frames until we find a video packet, at which point do analysis. Adaptive skip should only affect which frames we do analysis on.
 
   // get_analysis_packet will lock the packet and may wait if analysis_it is at the end
+  //
+  // Timed apart from the rest, because timing Analyse() as a whole could not
+  // tell waiting from working: the loop showed 61% of the thread and never an
+  // idle pass, which is equally what a thread mostly blocked in here looks
+  // like. This wait is for a packet to exist and for the decoder to have
+  // finished with it, so if it dominates, the analysis lag is decode latency
+  // arriving here rather than anything analysis does.
+  SystemTimePoint wait_start = std::chrono::system_clock::now();
   ZMPacketLock packet_lock = packetqueue.get_packet(analysis_it);
+  const uint64_t wait_us = std::chrono::duration_cast<Microseconds>(
+      std::chrono::system_clock::now() - wait_start).count();
+  analyse_wait_us_ += wait_us;
+  if (wait_us > analyse_wait_max_us_) analyse_wait_max_us_ = wait_us;
+  analyse_wait_count_++;
 
   if (!packet_lock.packet_) {
     Debug(4, "No packet lock, returning false");

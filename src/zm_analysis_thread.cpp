@@ -61,13 +61,24 @@ void AnalysisThread::Run() {
       }
       if (FPSeconds(now - loop_reported).count() >= 60.0) {
         const double secs = FPSeconds(now - loop_reported).count();
-        Info("Analyse loop: %ju frames in %.0fs (%.1f/s), mean %.1fms, max %.1fms, "
-             "using %.0f%% of the thread; %ju passes had nothing to do",
+        // Split the wait out of the total. Waiting is the decoder not having
+        // finished; the remainder is what analysis actually costs.
+        const uint64_t wait_us = monitor_->TakeAnalyseWaitUs();
+        const uint64_t wait_max_us = monitor_->TakeAnalyseWaitMaxUs();
+        const uint64_t work_us = analyse_us > wait_us ? analyse_us - wait_us : 0;
+        Info("Analyse loop: %ju frames in %.0fs (%.1f/s), mean %.1fms of which "
+             "%.1fms waiting for a decoded packet and %.1fms analysing; max "
+             "%.1fms, longest wait %.1fms; work is %.0f%% of the thread, wait "
+             "%.0f%%; %ju passes had nothing to do",
              static_cast<uintmax_t>(analysed), secs,
              analysed / secs,
              analysed ? analyse_us / 1000.0 / analysed : 0.0,
+             analysed ? wait_us / 1000.0 / analysed : 0.0,
+             analysed ? work_us / 1000.0 / analysed : 0.0,
              analyse_max_us / 1000.0,
-             analyse_us / 10000.0 / secs,
+             wait_max_us / 1000.0,
+             work_us / 10000.0 / secs,
+             wait_us / 10000.0 / secs,
              static_cast<uintmax_t>(idle));
         analyse_us = analyse_max_us = analysed = idle = 0;
         loop_reported = now;
