@@ -468,6 +468,21 @@ int ni_get_network_output(NiNetworkContext *network_ctx, bool hwframe,
     int retval;
     ni_session_context_t *npu_api_ctx = &network_ctx->npu_api_ctx;
 
+    // Each empty read is an NVMe admin query to the card. Spinning on them
+    // with no wait issued about 270 a second on this session while inference
+    // takes around 10ms -- some 135 queries per result, every one of them on
+    // the analysis thread and competing with the decoder's own queries on the
+    // same card. Wait between asks instead: at 500us that is roughly 20
+    // queries per result for at most half a millisecond of added latency,
+    // against an inference that takes twenty times that.
+    constexpr auto kAiPollInterval = std::chrono::microseconds(500);
+    // An unbounded spin is a hung analysis thread if the result never comes,
+    // and this card can be wedged by a bad frame. Give up rather than block
+    // capture forever.
+    constexpr auto kAiPollTimeout = std::chrono::seconds(5);
+    const auto ai_poll_started = std::chrono::steady_clock::now();
+    unsigned int ai_polls = 0;
+
 redo:
     retval = ni_device_session_read(npu_api_ctx, &out_frame->api_packet, NI_DEVICE_TYPE_AI);
     if (retval < 0) {
@@ -476,6 +491,15 @@ redo:
         goto out;
     } else if (retval == 0) {
         if (blockable) {
+            if (std::chrono::steady_clock::now() - ai_poll_started > kAiPollTimeout) {
+                Error("no inference result after %lds and %u polls; giving up on this frame",
+                      static_cast<long>(std::chrono::duration_cast<std::chrono::seconds>(
+                          kAiPollTimeout).count()), ai_polls);
+                ret = NIERROR(EIO);
+                goto out;
+            }
+            ai_polls++;
+            std::this_thread::sleep_for(kAiPollInterval);
             goto redo;
         } else {
           Debug(1, "EAGAIN");
@@ -483,6 +507,7 @@ redo:
             goto out;
         }
     } else {
+        Debug(3, "inference ready after %u polls", ai_polls);
       Debug(4, "ret from ni_device_session_read, %d", ret);
     }
 
