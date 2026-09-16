@@ -148,29 +148,97 @@ __global__ void LabelInitKernel(const uint8_t *__restrict__ mask, size_t mask_pi
   labels[idx] = mask[y * mask_pitch + x] ? idx : kNoSlot;
 }
 
-// Each round every pixel takes the smallest label among itself and its alarmed
-// neighbours, so a component converges on the lowest index it contains.
-__global__ void LabelPropagateKernel(uint32_t *__restrict__ labels,
-                                     int width, int lo_y, int hi_y,
-                                     int *__restrict__ changed) {
-  const int x = blockIdx.x * blockDim.x + threadIdx.x;
-  const int y = lo_y + blockIdx.y * blockDim.y + threadIdx.y;
-  if (x >= width || y > hi_y) return;
+// A component converges on the lowest pixel index it contains. Doing that a
+// neighbour at a time costs one round per pixel of a blob's diameter -- a 60
+// pixel wide rectangle needed 60 rounds, each one a launch and a readback. A
+// sweep carries the running minimum along a whole run instead, so a run settles
+// in a single pass and a blob in a handful of them regardless of its size.
+//
+// Rows first, then columns; alternating the two is what lets an L or a diagonal
+// staircase converge. Connectivity is unchanged: a sweep only ever carries a
+// label across pixels that are adjacent and labelled, which is the same 4-way
+// rule the CPU pass applies.
+__global__ void LabelRowSweepKernel(uint32_t *__restrict__ labels,
+                                    int width, int lo_y, int hi_y,
+                                    int *__restrict__ changed) {
+  const int y = lo_y + blockIdx.x * blockDim.x + threadIdx.x;
+  if (y > hi_y) return;
 
-  const uint32_t idx = static_cast<uint32_t>(y) * width + x;
-  uint32_t label = labels[idx];
-  if (label == kNoSlot) return;
+  const uint32_t row = static_cast<uint32_t>(y) * width;
+  bool wrote = false;
 
-  uint32_t best = label;
-  if (x > 0) best = min(best, labels[idx - 1]);
-  if (x < width - 1) best = min(best, labels[idx + 1]);
-  if (y > lo_y) best = min(best, labels[idx - width]);
-  if (y < hi_y) best = min(best, labels[idx + width]);
-
-  if (best < label) {
-    labels[idx] = best;
-    *changed = 1;
+  // Left to right, then back, so a minimum found at either end of a run reaches
+  // the whole run within this launch.
+  uint32_t running = kNoSlot;
+  for (int x = 0; x < width; x++) {
+    const uint32_t label = labels[row + x];
+    if (label == kNoSlot) {
+      running = kNoSlot;
+      continue;
+    }
+    running = min(running, label);
+    if (running < label) {
+      labels[row + x] = running;
+      wrote = true;
+    }
   }
+
+  running = kNoSlot;
+  for (int x = width - 1; x >= 0; x--) {
+    const uint32_t label = labels[row + x];
+    if (label == kNoSlot) {
+      running = kNoSlot;
+      continue;
+    }
+    running = min(running, label);
+    if (running < label) {
+      labels[row + x] = running;
+      wrote = true;
+    }
+  }
+
+  if (wrote) *changed = 1;
+}
+
+__global__ void LabelColSweepKernel(uint32_t *__restrict__ labels,
+                                    int width, int lo_y, int hi_y,
+                                    int *__restrict__ changed) {
+  const int x = blockIdx.x * blockDim.x + threadIdx.x;
+  if (x >= width) return;
+
+  bool wrote = false;
+
+  uint32_t running = kNoSlot;
+  for (int y = lo_y; y <= hi_y; y++) {
+    const uint32_t idx = static_cast<uint32_t>(y) * width + x;
+    const uint32_t label = labels[idx];
+    if (label == kNoSlot) {
+      running = kNoSlot;
+      continue;
+    }
+    running = min(running, label);
+    if (running < label) {
+      labels[idx] = running;
+      wrote = true;
+    }
+  }
+
+  running = kNoSlot;
+  for (int y = hi_y; y >= lo_y; y--) {
+    const uint32_t idx = static_cast<uint32_t>(y) * width + x;
+    const uint32_t label = labels[idx];
+    if (label == kNoSlot) {
+      running = kNoSlot;
+      continue;
+    }
+    running = min(running, label);
+    if (running < label) {
+      labels[idx] = running;
+      wrote = true;
+    }
+  }
+
+  if (wrote) *changed = 1;
 }
 
 __global__ void BlobSlotKernel(const uint32_t *__restrict__ labels,
@@ -310,12 +378,20 @@ class MotionDetector::Impl {
     cudaFree(labels);
     cudaFree(slot_map);
     cudaFree(scratch);
+    if (stream) {
+      cudaStreamDestroy(stream);
+      stream = nullptr;
+    }
     ref = delta = nullptr;
     labels = slot_map = nullptr;
     scratch = nullptr;
   }
 
   CUcontext context = nullptr;
+  // One stream for the whole pipeline: the kernels are a chain of dependencies
+  // anyway, and keeping them off the default stream means the readbacks can be
+  // async and a frame costs a handful of syncs rather than one per copy.
+  cudaStream_t stream = nullptr;
   uint8_t *ref = nullptr;
   size_t ref_pitch = 0;
   uint8_t *delta = nullptr;
@@ -380,8 +456,14 @@ bool MotionDetector::Init(int width, int height, void *cuda_context) {
 
   ContextGuard guard(impl_->context);
 
-  cudaError_t err = cudaMallocPitch(reinterpret_cast<void **>(&impl_->ref),
-                                    &impl_->ref_pitch, width, height);
+  cudaError_t err = cudaStreamCreate(&impl_->stream);
+  if (err != cudaSuccess) {
+    impl_->last_error = std::string("Failed to create a CUDA stream: ") + cudaGetErrorString(err);
+    return false;
+  }
+
+  err = cudaMallocPitch(reinterpret_cast<void **>(&impl_->ref),
+                        &impl_->ref_pitch, width, height);
   if (err == cudaSuccess)
     err = cudaMallocPitch(reinterpret_cast<void **>(&impl_->delta),
                           &impl_->delta_pitch, width, height);
@@ -505,7 +587,8 @@ bool MotionDetector::Detect(const uint8_t *y_plane, size_t pitch, std::vector<Zo
   ContextGuard guard(impl_->context);
 
   const dim3 block(32, 8);
-  DeltaKernel<<<Grid2D(width_, height_, block), block>>>(
+  cudaStream_t stream = impl_->stream;
+  DeltaKernel<<<Grid2D(width_, height_, block), block, 0, stream>>>(
       y_plane, pitch, impl_->ref, impl_->ref_pitch,
       impl_->delta, impl_->delta_pitch, width_, height_);
 
@@ -516,7 +599,7 @@ bool MotionDetector::Detect(const uint8_t *y_plane, size_t pitch, std::vector<Zo
   for (const Impl::Zone &zone : impl_->zones) {
     if (!zone.inactive || zone.hi_y < zone.lo_y) continue;
     const dim3 zone_grid = Grid2D(width_, zone.hi_y - zone.lo_y + 1, block);
-    MaskOutKernel<<<zone_grid, block>>>(impl_->delta, impl_->delta_pitch,
+    MaskOutKernel<<<zone_grid, block, 0, stream>>>(impl_->delta, impl_->delta_pitch,
                                         zone.mask, zone.mask_pitch,
                                         width_, zone.lo_y, zone.hi_y);
   }
@@ -545,8 +628,8 @@ bool MotionDetector::Detect(const uint8_t *y_plane, size_t pitch, std::vector<Zo
     const int rows = zone.hi_y - zone.lo_y + 1;
     const dim3 zone_grid = Grid2D(width_, rows, block);
 
-    cudaMemset(counters, 0, sizeof(unsigned long long) * 8);
-    ThresholdKernel<<<zone_grid, block>>>(
+    cudaMemsetAsync(counters, 0, sizeof(unsigned long long) * 8, stream);
+    ThresholdKernel<<<zone_grid, block, 0, stream>>>(
         impl_->delta, impl_->delta_pitch, zone.mask, zone.mask_pitch,
         zone.alarm, zone.alarm_pitch, width_, zone.lo_y, zone.hi_y,
         zone.min_threshold, zone.max_threshold, alarm_count, diff_sum);
@@ -555,7 +638,7 @@ bool MotionDetector::Detect(const uint8_t *y_plane, size_t pitch, std::vector<Zo
     size_t stage_pitch = zone.alarm_pitch;
 
     if (zone.want_filter) {
-      FilterKernel<<<zone_grid, block>>>(
+      FilterKernel<<<zone_grid, block, 0, stream>>>(
           zone.alarm, zone.alarm_pitch, zone.filtered, zone.filtered_pitch,
           zone.row_lo_x, zone.row_hi_x, width_, zone.lo_y, zone.hi_y,
           zone.filter_box_x, zone.filter_box_y, filter_count);
@@ -565,48 +648,64 @@ bool MotionDetector::Detect(const uint8_t *y_plane, size_t pitch, std::vector<Zo
 
     uint32_t host_blob_count = 0;
     if (zone.want_blobs) {
-      LabelInitKernel<<<zone_grid, block>>>(stage, stage_pitch, impl_->labels,
+      LabelInitKernel<<<zone_grid, block, 0, stream>>>(stage, stage_pitch, impl_->labels,
                                             width_, zone.lo_y, zone.hi_y);
+      // One thread per row, then one per column, alternating until nothing
+      // moves. Each sweep is a launch and one 4-byte readback; a sweep settles
+      // a whole run at once, so this is a few rounds rather than one per pixel
+      // of the widest blob.
+      const dim3 line_block(64);
+      const dim3 row_grid((rows + line_block.x - 1) / line_block.x);
+      const dim3 col_grid((width_ + line_block.x - 1) / line_block.x);
       int iterations = 0;
       for (; iterations < kMaxLabelIterations; iterations++) {
-        cudaMemset(changed, 0, sizeof(int));
-        LabelPropagateKernel<<<zone_grid, block>>>(impl_->labels, width_, zone.lo_y, zone.hi_y, changed);
+        cudaMemsetAsync(changed, 0, sizeof(int), stream);
+        LabelRowSweepKernel<<<row_grid, line_block, 0, stream>>>(
+            impl_->labels, width_, zone.lo_y, zone.hi_y, changed);
+        LabelColSweepKernel<<<col_grid, line_block, 0, stream>>>(
+            impl_->labels, width_, zone.lo_y, zone.hi_y, changed);
         int host_changed = 0;
-        cudaMemcpy(&host_changed, changed, sizeof(int), cudaMemcpyDeviceToHost);
+        cudaMemcpyAsync(&host_changed, changed, sizeof(int), cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
         if (!host_changed) break;
       }
       if (iterations >= kMaxLabelIterations) result.blobs_truncated = true;
 
-      const size_t pixels = static_cast<size_t>(width_) * height_;
-      cudaMemset(impl_->slot_map, 0xFF, pixels * sizeof(uint32_t));
-      cudaMemset(blob_counts, 0, kMaxBlobs * sizeof(uint32_t));
+      // slot_map is indexed by label, and labels only exist in this zone's
+      // rows, so clearing the whole plane was 33MB of writes per zone per frame
+      // at 4K for a zone that may cover a tenth of it.
+      cudaMemsetAsync(impl_->slot_map + static_cast<size_t>(zone.lo_y) * width_, 0xFF,
+                      static_cast<size_t>(rows) * width_ * sizeof(uint32_t), stream);
+      cudaMemsetAsync(blob_counts, 0, kMaxBlobs * sizeof(uint32_t), stream);
       // Bounding boxes start inverted so atomicMin/atomicMax build them up.
-      cudaMemset(blob_lo_x, 0x7F, kMaxBlobs * sizeof(int));
-      cudaMemset(blob_lo_y, 0x7F, kMaxBlobs * sizeof(int));
-      cudaMemset(blob_hi_x, 0x80, kMaxBlobs * sizeof(int));
-      cudaMemset(blob_hi_y, 0x80, kMaxBlobs * sizeof(int));
-      cudaMemset(blob_x_sum, 0, kMaxBlobs * sizeof(unsigned long long));
-      cudaMemset(blob_y_sum, 0, kMaxBlobs * sizeof(unsigned long long));
+      cudaMemsetAsync(blob_lo_x, 0x7F, kMaxBlobs * sizeof(int), stream);
+      cudaMemsetAsync(blob_lo_y, 0x7F, kMaxBlobs * sizeof(int), stream);
+      cudaMemsetAsync(blob_hi_x, 0x80, kMaxBlobs * sizeof(int), stream);
+      cudaMemsetAsync(blob_hi_y, 0x80, kMaxBlobs * sizeof(int), stream);
+      cudaMemsetAsync(blob_x_sum, 0, kMaxBlobs * sizeof(unsigned long long), stream);
+      cudaMemsetAsync(blob_y_sum, 0, kMaxBlobs * sizeof(unsigned long long), stream);
 
-      BlobSlotKernel<<<zone_grid, block>>>(impl_->labels, impl_->slot_map,
+      BlobSlotKernel<<<zone_grid, block, 0, stream>>>(impl_->labels, impl_->slot_map,
                                            width_, zone.lo_y, zone.hi_y, blob_count);
-      BlobStatsKernel<<<zone_grid, block>>>(impl_->labels, impl_->slot_map,
+      BlobStatsKernel<<<zone_grid, block, 0, stream>>>(impl_->labels, impl_->slot_map,
                                             width_, zone.lo_y, zone.hi_y,
                                             blob_counts, blob_lo_x, blob_hi_x,
                                             blob_lo_y, blob_hi_y,
                                             blob_x_sum, blob_y_sum);
-      cudaMemcpy(&host_blob_count, blob_count, sizeof(uint32_t), cudaMemcpyDeviceToHost);
+      cudaMemcpyAsync(&host_blob_count, blob_count, sizeof(uint32_t), cudaMemcpyDeviceToHost, stream);
+      cudaStreamSynchronize(stream);
     }
 
-    uint32_t host_counters[4] = {0, 0, 0, 0};
-    unsigned long long host_sum = 0;
-    cudaMemcpy(host_counters, alarm_count, sizeof(uint32_t), cudaMemcpyDeviceToHost);
-    cudaMemcpy(&host_sum, diff_sum, sizeof(unsigned long long), cudaMemcpyDeviceToHost);
-    cudaMemcpy(&host_counters[2], filter_count, sizeof(uint32_t), cudaMemcpyDeviceToHost);
+    // alarm count, diff sum, filter count and blob count are consecutive in the
+    // scratch allocation, so they come back in one transfer rather than three.
+    unsigned long long host_counters[4] = {0, 0, 0, 0};
+    cudaMemcpyAsync(host_counters, counters, sizeof(host_counters), cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
 
-    result.alarm_pixels = host_counters[0];
-    result.pixel_diff_sum = host_sum;
-    result.filter_pixels = zone.want_filter ? host_counters[2] : host_counters[0];
+    result.alarm_pixels = static_cast<uint32_t>(host_counters[0]);
+    result.pixel_diff_sum = host_counters[1];
+    result.filter_pixels = zone.want_filter ? static_cast<uint32_t>(host_counters[2])
+                                            : result.alarm_pixels;
 
     if (zone.want_blobs && host_blob_count) {
       if (host_blob_count > kMaxBlobs) {
@@ -617,13 +716,14 @@ bool MotionDetector::Detect(const uint8_t *y_plane, size_t pitch, std::vector<Zo
       std::vector<int> lo_x(host_blob_count), hi_x(host_blob_count);
       std::vector<int> lo_y(host_blob_count), hi_y(host_blob_count);
       std::vector<unsigned long long> x_sum(host_blob_count), y_sum(host_blob_count);
-      cudaMemcpy(counts.data(), blob_counts, host_blob_count * sizeof(uint32_t), cudaMemcpyDeviceToHost);
-      cudaMemcpy(lo_x.data(), blob_lo_x, host_blob_count * sizeof(int), cudaMemcpyDeviceToHost);
-      cudaMemcpy(hi_x.data(), blob_hi_x, host_blob_count * sizeof(int), cudaMemcpyDeviceToHost);
-      cudaMemcpy(lo_y.data(), blob_lo_y, host_blob_count * sizeof(int), cudaMemcpyDeviceToHost);
-      cudaMemcpy(hi_y.data(), blob_hi_y, host_blob_count * sizeof(int), cudaMemcpyDeviceToHost);
-      cudaMemcpy(x_sum.data(), blob_x_sum, host_blob_count * sizeof(unsigned long long), cudaMemcpyDeviceToHost);
-      cudaMemcpy(y_sum.data(), blob_y_sum, host_blob_count * sizeof(unsigned long long), cudaMemcpyDeviceToHost);
+      cudaMemcpyAsync(counts.data(), blob_counts, host_blob_count * sizeof(uint32_t), cudaMemcpyDeviceToHost, stream);
+      cudaMemcpyAsync(lo_x.data(), blob_lo_x, host_blob_count * sizeof(int), cudaMemcpyDeviceToHost, stream);
+      cudaMemcpyAsync(hi_x.data(), blob_hi_x, host_blob_count * sizeof(int), cudaMemcpyDeviceToHost, stream);
+      cudaMemcpyAsync(lo_y.data(), blob_lo_y, host_blob_count * sizeof(int), cudaMemcpyDeviceToHost, stream);
+      cudaMemcpyAsync(hi_y.data(), blob_hi_y, host_blob_count * sizeof(int), cudaMemcpyDeviceToHost, stream);
+      cudaMemcpyAsync(x_sum.data(), blob_x_sum, host_blob_count * sizeof(unsigned long long), cudaMemcpyDeviceToHost, stream);
+      cudaMemcpyAsync(y_sum.data(), blob_y_sum, host_blob_count * sizeof(unsigned long long), cudaMemcpyDeviceToHost, stream);
+      cudaStreamSynchronize(stream);
 
       result.blobs.reserve(host_blob_count);
       for (uint32_t b = 0; b < host_blob_count; b++) {
@@ -641,7 +741,7 @@ bool MotionDetector::Detect(const uint8_t *y_plane, size_t pitch, std::vector<Zo
     }
   }
 
-  cudaError_t err = cudaDeviceSynchronize();
+  cudaError_t err = cudaStreamSynchronize(stream);
   if (err != cudaSuccess) {
     impl_->last_error = std::string("CUDA motion detection failed: ") + cudaGetErrorString(err);
     return false;

@@ -23,6 +23,7 @@
 
 #include <cuda_runtime.h>
 
+#include <chrono>
 #include <cstring>
 #include <random>
 #include <vector>
@@ -379,6 +380,133 @@ TEST_CASE("CUDA motion: the fast blend matches std_fastblend", "[cuda]") {
     }
   }
   SUCCEED();
+}
+
+TEST_CASE("CUDA motion: a serpentine stays one component", "[cuda]") {
+  if (!zm::cuda::MotionDetector::Available()) {
+    WARN("No CUDA device present, skipping");
+    return;
+  }
+
+  // The shape the sweeps have to work hardest on: a snake whose ends are far
+  // apart along the path but close in the plane. Each sweep carries a label
+  // along one leg, so this needs several rounds where a solid blob needs one.
+  std::vector<uint8_t> reference(kWidth * kHeight, 0);
+  std::vector<uint8_t> current(kWidth * kHeight, 0);
+
+  int expected = 0;
+  const int rows = 8;
+  for (int leg = 0; leg < rows; leg++) {
+    const int y = 20 + leg * 20;
+    const int from = (leg % 2 == 0) ? 20 : kWidth - 40;
+    const int to = (leg % 2 == 0) ? kWidth - 40 : 20;
+    const int step = (from < to) ? 1 : -1;
+    for (int x = from; x != to + step; x += step) {
+      current[y * kWidth + x] = 255;
+      expected++;
+    }
+    // The riser joining this leg to the next.
+    if (leg + 1 < rows) {
+      for (int yy = y + 1; yy < y + 20; yy++) {
+        current[yy * kWidth + to] = 255;
+        expected++;
+      }
+    }
+  }
+
+  const HostZone zone(0, 0, kWidth - 1, kHeight - 1);
+  zm::cuda::ZoneSpec spec = zone.Spec(20, 0);
+  spec.want_blobs = true;
+
+  zm::cuda::MotionDetector detector;
+  REQUIRE(detector.Init(kWidth, kHeight));
+  REQUIRE(detector.SetZones({spec}));
+
+  DevicePlane device_reference(kWidth, kHeight);
+  DevicePlane device_current(kWidth, kHeight);
+  device_reference.Upload(reference, kWidth, kHeight);
+  device_current.Upload(current, kWidth, kHeight);
+  REQUIRE(detector.AssignReference(device_reference.data, device_reference.pitch));
+
+  std::vector<zm::cuda::ZoneResult> results;
+  REQUIRE(detector.Detect(device_current.data, device_current.pitch, results));
+  REQUIRE_FALSE(results[0].blobs_truncated);
+  REQUIRE(results[0].blobs.size() == 1);
+  REQUIRE(results[0].blobs[0].count == static_cast<uint32_t>(expected));
+}
+
+// Hidden by default (the leading dot); run with ./tests "[.cudabench]". This is
+// the workload the component pass is sensitive to: wide solid blobs, where a
+// labelling scheme that moves one pixel per round pays for every pixel of the
+// widest one.
+TEST_CASE("CUDA motion: component pass throughput", "[.cudabench]") {
+  if (!zm::cuda::MotionDetector::Available()) {
+    WARN("No CUDA device present, skipping");
+    return;
+  }
+
+  constexpr int kBenchWidth = 1920;
+  constexpr int kBenchHeight = 1080;
+  constexpr int kFrames = 50;
+
+  std::vector<uint8_t> reference(kBenchWidth * kBenchHeight, 20);
+  std::vector<uint8_t> current = reference;
+  // Forty 90x60 rectangles: wide enough that per-pixel propagation needs ~90
+  // rounds to settle each one.
+  for (int row = 0; row < 5; row++) {
+    for (int col = 0; col < 8; col++) {
+      const int x0 = 60 + col * 220;
+      const int y0 = 60 + row * 200;
+      for (int y = y0; y < y0 + 60; y++)
+        for (int x = x0; x < x0 + 90; x++) current[y * kBenchWidth + x] = 200;
+    }
+  }
+
+  std::vector<uint8_t> mask(kBenchWidth * kBenchHeight, 0xFF);
+  std::vector<int> row_lo(kBenchHeight, 0), row_hi(kBenchHeight, kBenchWidth - 1);
+
+  zm::cuda::ZoneSpec spec;
+  spec.mask = mask.data();
+  spec.row_lo_x = row_lo.data();
+  spec.row_hi_x = row_hi.data();
+  spec.lo_y = 0;
+  spec.hi_y = kBenchHeight - 1;
+  spec.min_pixel_threshold = 20;
+  spec.want_filter = true;
+  spec.filter_box_x = 3;
+  spec.filter_box_y = 3;
+  spec.want_blobs = true;
+
+  zm::cuda::MotionDetector detector;
+  REQUIRE(detector.Init(kBenchWidth, kBenchHeight));
+  REQUIRE(detector.SetZones({spec}));
+
+  uint8_t *device_reference = nullptr, *device_current = nullptr;
+  size_t reference_pitch = 0, current_pitch = 0;
+  cudaMallocPitch(reinterpret_cast<void **>(&device_reference), &reference_pitch, kBenchWidth, kBenchHeight);
+  cudaMallocPitch(reinterpret_cast<void **>(&device_current), &current_pitch, kBenchWidth, kBenchHeight);
+  cudaMemcpy2D(device_reference, reference_pitch, reference.data(), kBenchWidth,
+               kBenchWidth, kBenchHeight, cudaMemcpyHostToDevice);
+  cudaMemcpy2D(device_current, current_pitch, current.data(), kBenchWidth,
+               kBenchWidth, kBenchHeight, cudaMemcpyHostToDevice);
+  REQUIRE(detector.AssignReference(device_reference, reference_pitch));
+
+  std::vector<zm::cuda::ZoneResult> results;
+  REQUIRE(detector.Detect(device_current, current_pitch, results));
+  REQUIRE(results[0].blobs.size() == 40);
+
+  const auto start = std::chrono::steady_clock::now();
+  for (int i = 0; i < kFrames; i++) {
+    REQUIRE(detector.Detect(device_current, current_pitch, results));
+  }
+  const auto end = std::chrono::steady_clock::now();
+  const double ms = std::chrono::duration<double, std::milli>(end - start).count() / kFrames;
+
+  WARN("Detect() with 40 blobs at " << kBenchWidth << "x" << kBenchHeight
+       << ": " << ms << " ms/frame");
+
+  cudaFree(device_reference);
+  cudaFree(device_current);
 }
 
 #endif  // HAVE_CUDA
