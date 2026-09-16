@@ -495,15 +495,33 @@ TEST_CASE("CUDA motion: component pass throughput", "[.cudabench]") {
   REQUIRE(detector.Detect(device_current, current_pitch, results));
   REQUIRE(results[0].blobs.size() == 40);
 
-  const auto start = std::chrono::steady_clock::now();
-  for (int i = 0; i < kFrames; i++) {
+  // Timed in stages so the cost lands on a stage rather than on a guess:
+  // threshold only, then with the filter, then with components as well.
+  auto time_config = [&](const char *what, bool filter, bool blobs) {
+    zm::cuda::ZoneSpec staged = spec;
+    staged.want_filter = filter;
+    staged.want_blobs = blobs;
+    REQUIRE(detector.SetZones({staged}));
+    REQUIRE(detector.AssignReference(device_reference, reference_pitch));
     REQUIRE(detector.Detect(device_current, current_pitch, results));
-  }
-  const auto end = std::chrono::steady_clock::now();
-  const double ms = std::chrono::duration<double, std::milli>(end - start).count() / kFrames;
 
-  WARN("Detect() with 40 blobs at " << kBenchWidth << "x" << kBenchHeight
-       << ": " << ms << " ms/frame");
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < kFrames; i++) {
+      REQUIRE(detector.Detect(device_current, current_pitch, results));
+    }
+    const auto end = std::chrono::steady_clock::now();
+    const double ms = std::chrono::duration<double, std::milli>(end - start).count() / kFrames;
+    WARN(what << ": " << ms << " ms/frame");
+    return ms;
+  };
+
+  const double threshold_ms = time_config("delta + threshold", false, false);
+  const double filter_ms = time_config("+ 3x3 filter", true, false);
+  const double blobs_ms = time_config("+ components", true, true);
+
+  WARN("stage costs: threshold " << threshold_ms
+       << ", filter " << (filter_ms - threshold_ms)
+       << ", components " << (blobs_ms - filter_ms) << " ms");
 
   cudaFree(device_reference);
   cudaFree(device_current);

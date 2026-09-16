@@ -15,6 +15,7 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <climits>
 #include <string>
 
 // This file deliberately includes no ZoneMinder headers beyond its own: nvcc
@@ -154,62 +155,114 @@ __global__ void LabelInitKernel(const uint8_t *__restrict__ mask, size_t mask_pi
 // sweep carries the running minimum along a whole run instead, so a run settles
 // in a single pass and a blob in a handful of them regardless of its size.
 //
+// A sweep is split into fixed length chunks rather than given a thread per
+// line: a thread per line is 1080 threads for a 1080 row frame, which leaves a
+// GPU almost idle and made these kernels 60% of the frame's device time. Each
+// chunk is independent, so the work scales with pixels instead of lines; a
+// label crossing a chunk boundary is picked up by the next round.
+//
 // Rows first, then columns; alternating the two is what lets an L or a diagonal
 // staircase converge. Connectivity is unchanged: a sweep only ever carries a
 // label across pixels that are adjacent and labelled, which is the same 4-way
 // rule the CPU pass applies.
+// The row direction wants a warp per row, not a thread per chunk: lanes read
+// consecutive pixels, so a window of 32 is one memory transaction instead of
+// 32 scattered ones. Chunking this kernel the way the column one is chunked
+// made it slower for exactly that reason -- more threads, each its own
+// transaction.
+//
+// Within a window the running minimum comes from a segmented scan: a segment
+// breaks at every unlabelled pixel, so a label is only ever carried between
+// pixels that are adjacent and labelled.
+__device__ __forceinline__ uint32_t SegmentedMinScan(uint32_t value, bool valid,
+                                                     unsigned int valid_mask,
+                                                     int lane, uint32_t carry_in) {
+  // The last unlabelled lane at or before this one ends the previous segment.
+  const unsigned int upto = (lane == 31) ? 0xFFFFFFFFu : ((1u << (lane + 1)) - 1u);
+  const unsigned int breaks = (~valid_mask) & upto;
+  const int last_break = breaks ? (31 - __clz(breaks)) : -1;
+
+  uint32_t running = valid ? value : kNoSlot;
+  for (int d = 1; d < 32; d <<= 1) {
+    const uint32_t other = __shfl_up_sync(0xFFFFFFFFu, running, d);
+    if (lane >= d && (lane - d) > last_break) running = min(running, other);
+  }
+  // A segment reaching lane 0 continues the run the previous window ended on.
+  if (valid && last_break < 0) running = min(running, carry_in);
+  return running;
+}
+
 __global__ void LabelRowSweepKernel(uint32_t *__restrict__ labels,
                                     int width, int lo_y, int hi_y,
                                     int *__restrict__ changed) {
-  const int y = lo_y + blockIdx.x * blockDim.x + threadIdx.x;
+  const int lane = threadIdx.x & 31;
+  const int warp_in_block = threadIdx.x >> 5;
+  const int y = lo_y + blockIdx.x * (blockDim.x >> 5) + warp_in_block;
   if (y > hi_y) return;
 
   const uint32_t row = static_cast<uint32_t>(y) * width;
   bool wrote = false;
 
-  // Left to right, then back, so a minimum found at either end of a run reaches
-  // the whole run within this launch.
-  uint32_t running = kNoSlot;
-  for (int x = 0; x < width; x++) {
-    const uint32_t label = labels[row + x];
-    if (label == kNoSlot) {
-      running = kNoSlot;
-      continue;
-    }
-    running = min(running, label);
-    if (running < label) {
+  uint32_t carry = kNoSlot;
+  for (int base = 0; base < width; base += 32) {
+    const int x = base + lane;
+    const bool inside = x < width;
+    const uint32_t label = inside ? labels[row + x] : kNoSlot;
+    const bool valid = inside && label != kNoSlot;
+    const unsigned int valid_mask = __ballot_sync(0xFFFFFFFFu, valid);
+
+    const uint32_t running = SegmentedMinScan(label, valid, valid_mask, lane, carry);
+    if (valid && running < label) {
       labels[row + x] = running;
       wrote = true;
     }
+    // What the next window inherits: the last lane's value, if its run reaches
+    // the window edge unbroken.
+    const uint32_t edge = __shfl_sync(0xFFFFFFFFu, running, 31);
+    carry = (valid_mask & 0x80000000u) ? edge : kNoSlot;
   }
 
-  running = kNoSlot;
-  for (int x = width - 1; x >= 0; x--) {
-    const uint32_t label = labels[row + x];
-    if (label == kNoSlot) {
-      running = kNoSlot;
-      continue;
-    }
-    running = min(running, label);
-    if (running < label) {
+  // Right to left, so a minimum sitting at the right of a run reaches the rest
+  // of it without waiting for another round.
+  carry = kNoSlot;
+  for (int base = ((width + 31) / 32) * 32 - 32; base >= 0; base -= 32) {
+    const int x = base + (31 - lane);
+    const bool inside = x < width;
+    const uint32_t label = inside ? labels[row + x] : kNoSlot;
+    const bool valid = inside && label != kNoSlot;
+    const unsigned int valid_mask = __ballot_sync(0xFFFFFFFFu, valid);
+
+    const uint32_t running = SegmentedMinScan(label, valid, valid_mask, lane, carry);
+    if (valid && running < label) {
       labels[row + x] = running;
       wrote = true;
     }
+    const uint32_t edge = __shfl_sync(0xFFFFFFFFu, running, 31);
+    carry = (valid_mask & 0x80000000u) ? edge : kNoSlot;
   }
 
-  if (wrote) *changed = 1;
+  if (__any_sync(0xFFFFFFFFu, wrote) && lane == 0) *changed = 1;
 }
 
 __global__ void LabelColSweepKernel(uint32_t *__restrict__ labels,
                                     int width, int lo_y, int hi_y,
-                                    int *__restrict__ changed) {
-  const int x = blockIdx.x * blockDim.x + threadIdx.x;
+                                    int chunk, int *__restrict__ changed) {
+  const int rows = hi_y - lo_y + 1;
+  const int chunks_per_col = (rows + chunk - 1) / chunk;
+  const int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  const int x = tid / chunks_per_col;
+  const int chunk_index = tid % chunks_per_col;
   if (x >= width) return;
+
+  const int from = lo_y + chunk_index * chunk;
+  const int to = min(from + chunk, hi_y + 1);
+  if (from >= to) return;
 
   bool wrote = false;
 
-  uint32_t running = kNoSlot;
-  for (int y = lo_y; y <= hi_y; y++) {
+  uint32_t running = (from > lo_y)
+      ? labels[static_cast<uint32_t>(from - 1) * width + x] : kNoSlot;
+  for (int y = from; y < to; y++) {
     const uint32_t idx = static_cast<uint32_t>(y) * width + x;
     const uint32_t label = labels[idx];
     if (label == kNoSlot) {
@@ -223,8 +276,8 @@ __global__ void LabelColSweepKernel(uint32_t *__restrict__ labels,
     }
   }
 
-  running = kNoSlot;
-  for (int y = hi_y; y >= lo_y; y--) {
+  running = (to <= hi_y) ? labels[static_cast<uint32_t>(to) * width + x] : kNoSlot;
+  for (int y = to - 1; y >= from; y--) {
     const uint32_t idx = static_cast<uint32_t>(y) * width + x;
     const uint32_t label = labels[idx];
     if (label == kNoSlot) {
@@ -268,22 +321,64 @@ __global__ void BlobStatsKernel(const uint32_t *__restrict__ labels,
                                 unsigned long long *__restrict__ y_sums) {
   const int x = blockIdx.x * blockDim.x + threadIdx.x;
   const int y = lo_y + blockIdx.y * blockDim.y + threadIdx.y;
-  if (x >= width || y > hi_y) return;
 
-  const uint32_t idx = static_cast<uint32_t>(y) * width + x;
-  const uint32_t label = labels[idx];
-  if (label == kNoSlot) return;
+  uint32_t slot = kMaxBlobs;
+  if (x < width && y <= hi_y) {
+    const uint32_t idx = static_cast<uint32_t>(y) * width + x;
+    const uint32_t label = labels[idx];
+    if (label != kNoSlot) slot = slot_map[label];
+  }
+  const bool work = slot < kMaxBlobs;
 
-  const uint32_t slot = slot_map[label];
-  if (slot >= kMaxBlobs) return;
+  const unsigned int active = __ballot_sync(0xFFFFFFFFu, work);
+  if (!active) return;
 
+  // Seven atomics per alarmed pixel onto a handful of slots is most of this
+  // kernel's time. A warp walks pixels along a row, so its lanes nearly always
+  // sit in the same blob: when they do, reduce within the warp and let one lane
+  // post the result. Mixed warps, at blob edges, fall back to per-lane atomics.
+  const int leader = __ffs(active) - 1;
+  const uint32_t leader_slot = __shfl_sync(0xFFFFFFFFu, slot, leader);
+  const bool uniform =
+      __ballot_sync(0xFFFFFFFFu, work && slot == leader_slot) == active;
+
+  if (uniform) {
+    unsigned int count = work ? 1u : 0u;
+    int min_x = work ? x : INT_MAX;
+    int max_x = work ? x : INT_MIN;
+    int min_y = work ? y : INT_MAX;
+    int max_y = work ? y : INT_MIN;
+    unsigned long long x_total = work ? static_cast<unsigned long long>(x) : 0ull;
+    unsigned long long y_total = work ? static_cast<unsigned long long>(y) : 0ull;
+
+    for (int offset = 16; offset > 0; offset >>= 1) {
+      count += __shfl_down_sync(0xFFFFFFFFu, count, offset);
+      min_x = min(min_x, __shfl_down_sync(0xFFFFFFFFu, min_x, offset));
+      max_x = max(max_x, __shfl_down_sync(0xFFFFFFFFu, max_x, offset));
+      min_y = min(min_y, __shfl_down_sync(0xFFFFFFFFu, min_y, offset));
+      max_y = max(max_y, __shfl_down_sync(0xFFFFFFFFu, max_y, offset));
+      x_total += __shfl_down_sync(0xFFFFFFFFu, x_total, offset);
+      y_total += __shfl_down_sync(0xFFFFFFFFu, y_total, offset);
+    }
+
+    if ((threadIdx.x & 31u) == 0) {
+      atomicAdd(&counts[leader_slot], count);
+      atomicMin(&lo_xs[leader_slot], min_x);
+      atomicMax(&hi_xs[leader_slot], max_x);
+      atomicMin(&lo_ys[leader_slot], min_y);
+      atomicMax(&hi_ys[leader_slot], max_y);
+      atomicAdd(&x_sums[leader_slot], x_total);
+      atomicAdd(&y_sums[leader_slot], y_total);
+    }
+    return;
+  }
+
+  if (!work) return;
   atomicAdd(&counts[slot], 1u);
   atomicMin(&lo_xs[slot], x);
   atomicMax(&hi_xs[slot], x);
   atomicMin(&lo_ys[slot], y);
   atomicMax(&hi_ys[slot], y);
-  // Coordinate totals so a weighted alarm centre (ZM_WEIGHTED_ALARM_CENTRES)
-  // can be worked out without bringing the mask back to the host.
   atomicAdd(&x_sums[slot], static_cast<unsigned long long>(x));
   atomicAdd(&y_sums[slot], static_cast<unsigned long long>(y));
 }
@@ -654,16 +749,24 @@ bool MotionDetector::Detect(const uint8_t *y_plane, size_t pitch, std::vector<Zo
       // moves. Each sweep is a launch and one 4-byte readback; a sweep settles
       // a whole run at once, so this is a few rounds rather than one per pixel
       // of the widest blob.
-      const dim3 line_block(64);
-      const dim3 row_grid((rows + line_block.x - 1) / line_block.x);
-      const dim3 col_grid((width_ + line_block.x - 1) / line_block.x);
+      // Chunk length trades rounds against parallelism: shorter chunks mean
+      // more threads but more rounds for a blob that spans several. 128 keeps
+      // a 1080p frame in the tens of thousands of threads while most blobs
+      // still fit inside one chunk.
+      constexpr int kSweepChunk = 128;
+      const dim3 line_block(128);
+      const int col_chunks = (rows + kSweepChunk - 1) / kSweepChunk;
+      // One warp per row, so a block of 128 threads covers four rows.
+      const int rows_per_block = line_block.x / 32;
+      const dim3 row_grid((rows + rows_per_block - 1) / rows_per_block);
+      const dim3 col_grid((width_ * col_chunks + line_block.x - 1) / line_block.x);
       int iterations = 0;
       for (; iterations < kMaxLabelIterations; iterations++) {
         cudaMemsetAsync(changed, 0, sizeof(int), stream);
         LabelRowSweepKernel<<<row_grid, line_block, 0, stream>>>(
             impl_->labels, width_, zone.lo_y, zone.hi_y, changed);
         LabelColSweepKernel<<<col_grid, line_block, 0, stream>>>(
-            impl_->labels, width_, zone.lo_y, zone.hi_y, changed);
+            impl_->labels, width_, zone.lo_y, zone.hi_y, kSweepChunk, changed);
         int host_changed = 0;
         cudaMemcpyAsync(&host_changed, changed, sizeof(int), cudaMemcpyDeviceToHost, stream);
         cudaStreamSynchronize(stream);
