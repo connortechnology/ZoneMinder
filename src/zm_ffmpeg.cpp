@@ -436,31 +436,14 @@ bool zm_device_frame_should_shed() {
   if (!shedding) {
     if (in_flight < budget) return false;
     device_frames_shedding_now.store(true, std::memory_order_relaxed);
-    const int64_t now_us = steady_now_us();
-    if (shed_report_due(now_us, device_frames_shed_reported_at.load(std::memory_order_relaxed),
-                        kShedReportIntervalUs)) {
-      device_frames_shed_reported_at.store(now_us, std::memory_order_relaxed);
-      const uint64_t total = device_frames_shed_total.load(std::memory_order_relaxed);
-      const uint64_t since = total - device_frames_shed_at_last_report.exchange(
-          total, std::memory_order_relaxed);
-      const int card = device_frame_card.load(std::memory_order_relaxed);
-      const std::string where =
-          (card >= 0) ? stringtf(" on card %d", card) : std::string();
-      // What shedding actually costs depends on the monitor, and this gauge
-      // cannot see which kind it is serving, so say both rather than assert the
-      // wrong one. The previous wording claimed the frames get re-uploaded for
-      // encoding; on a monitor that records by passthrough nothing encodes at
-      // all, and one such monitor shed 99971 frames for exactly zero uploads.
-      Warning("Holding %u hardware frames%s, at the budget of %u; "
-              "releasing frames back to the card until occupancy falls to %u "
-              "(%ju given back since the last report). The software copy is "
-              "already downloaded so recording is unaffected; what is given up "
-              "is handing the device frame straight to the encoder, which costs "
-              "an upload per frame on a monitor that encodes and nothing at all "
-              "on one that records by passthrough.",
-              in_flight, where.c_str(), budget, budget / 2,
-              static_cast<uintmax_t>(since));
-    }
+    // Crossing the line gives nothing back, so there is nothing to report yet.
+    // Reporting here said "releasing frames back to the card ... (0 given back
+    // since the last report)": an intention, with its own cost measured at
+    // zero. Start the clock instead and let the report below say what it
+    // actually came to.
+    device_frames_shed_reported_at.store(steady_now_us(), std::memory_order_relaxed);
+    device_frames_shed_at_last_report.store(
+        device_frames_shed_total.load(std::memory_order_relaxed), std::memory_order_relaxed);
   } else if (in_flight <= budget / 2) {
     // Low-water reached: stop shedding and let occupancy build again. At Debug
     // because it is the other half of the same flip, and just as frequent.
@@ -469,7 +452,34 @@ bool zm_device_frame_should_shed() {
     return false;
   }
 
-  device_frames_shed_total.fetch_add(1, std::memory_order_relaxed);
+  const uint64_t total = device_frames_shed_total.fetch_add(1, std::memory_order_relaxed) + 1;
+
+  // Report what was given back, once there is a figure worth reporting.
+  const int64_t now_us = steady_now_us();
+  if (shed_report_due(now_us, device_frames_shed_reported_at.load(std::memory_order_relaxed),
+                      kShedReportIntervalUs)) {
+    const uint64_t since =
+        total - device_frames_shed_at_last_report.load(std::memory_order_relaxed);
+    if (since > 0) {
+      device_frames_shed_reported_at.store(now_us, std::memory_order_relaxed);
+      device_frames_shed_at_last_report.store(total, std::memory_order_relaxed);
+      const int card = device_frame_card.load(std::memory_order_relaxed);
+      const std::string where =
+          (card >= 0) ? stringtf(" on card %d", card) : std::string();
+      // What shedding actually costs depends on the monitor, and this gauge
+      // cannot see which kind it is serving, so say both rather than assert the
+      // wrong one. The previous wording claimed the frames get re-uploaded for
+      // encoding; on a monitor that records by passthrough nothing encodes at
+      // all, and one such monitor shed 99971 frames for exactly zero uploads.
+      Warning("Gave %ju hardware frames%s back to the card in the last minute, "
+              "holding at the budget of %u. The software copy is already "
+              "downloaded so recording is unaffected; what is given up is "
+              "handing the device frame straight to the encoder, which costs an "
+              "upload per frame on a monitor that encodes and nothing at all on "
+              "one that records by passthrough.",
+              static_cast<uintmax_t>(since), where.c_str(), budget);
+    }
+  }
   return true;
 }
 
