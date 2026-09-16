@@ -337,6 +337,41 @@ TEST_CASE("decode_rate_worth_reporting", "[ffmpeg]") {
   }
 }
 
+TEST_CASE("analysis_should_pace at a few frames of slack", "[ffmpeg]") {
+  // The threshold is now taken from the frame rate rather than a flat two
+  // seconds, because pacing sleeps to the capture rate and so preserves
+  // whatever lag it already has. At 15fps four frames is about 267ms.
+  const int64_t stale = (1000000 / 15) * 4;
+  const int burst = 8;
+
+  SECTION("a lag inside the slack still paces") {
+    CHECK(analysis_should_pace(0, burst, 100000, stale, false));
+  }
+
+  SECTION("a lag past the slack catches up instead of holding it") {
+    // This is the case that used to pace: a third of a second behind is well
+    // inside two seconds, so analysis slept and stayed a third of a second
+    // behind indefinitely.
+    CHECK_FALSE(analysis_should_pace(0, burst, 330000, stale, false));
+  }
+
+  SECTION("a second behind is nowhere near acceptable now") {
+    CHECK_FALSE(analysis_should_pace(0, burst, 1000000, stale, false));
+    CHECK_FALSE(analysis_should_pace(0, burst, 2000000, stale, false));
+  }
+
+  SECTION("hysteresis still applies, at half the new threshold") {
+    // Catching up continues until well inside the slack, so a lag sitting on
+    // the line does not flip every frame.
+    CHECK_FALSE(analysis_should_pace(0, burst, stale * 3 / 4, stale, true));
+    CHECK(analysis_should_pace(0, burst, stale / 4, stale, true));
+  }
+
+  SECTION("frames queued still burst regardless of age") {
+    CHECK_FALSE(analysis_should_pace(burst + 1, burst, 0, stale, false));
+  }
+}
+
 TEST_CASE("analysis_should_pace", "[ffmpeg]") {
   const int burst = 7;                       // image_buffer_count/4 on a 30-slot ring
   const int64_t stale = 2 * 1000 * 1000;     // 2s, as Monitor::Analyse uses

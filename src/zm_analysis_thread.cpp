@@ -33,6 +33,11 @@ void AnalysisThread::Join() {
   if (thread_.joinable()) thread_.join();
 }
 
+// Frames of slack before analysis stops pacing and catches up. Enough to ride
+// out ordinary jitter, far short of the two seconds that used to be allowed to
+// become permanent.
+static constexpr int kAnalysisSlackFrames = 4;
+
 void AnalysisThread::Run() {
   SystemTimePoint last_analysis_time = std::chrono::system_clock::now();
 
@@ -132,7 +137,22 @@ void AnalysisThread::Run() {
     // Stale by more than this and we stop pacing and work through it. Matches
     // the threshold Monitor::Analyse uses to decide the AI has fallen behind,
     // so the two agree about what "behind" means.
-    constexpr int64_t kStaleAfterUs = 2 * 1000 * 1000;
+    // How far behind real time analysis may sit before it stops pacing and
+    // catches up. Pacing sleeps until a frame interval has passed, so it holds
+    // whatever lag it already has: a hiccup that puts analysis a second behind
+    // keeps it a second behind for as long as it paces. A flat two seconds
+    // meant m4 sat between 1.0 and 2.1s indefinitely, skipping a quarter of
+    // its inferences to stay there, on a thread that was sleeping 38% of the
+    // time.
+    //
+    // Take it from the frame rate instead. A few frames of slack absorbs
+    // jitter without pacing a standing lag into place, and detection then runs
+    // as close to real time as the pipeline allows, which is the point of
+    // doing it at all.
+    const double pace_fps = monitor_->get_capture_fps();
+    const int64_t frame_interval_us =
+        (pace_fps > 0) ? static_cast<int64_t>(1e6 / pace_fps) : 66'666;
+    const int64_t kStaleAfterUs = frame_interval_us * kAnalysisSlackFrames;
     const bool pace = analysis_should_pace(decoder_lag, burst_lag,
                                           monitor_->AnalysisLagUs(),
                                           kStaleAfterUs, catching_up_);
