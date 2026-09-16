@@ -105,6 +105,22 @@ TEST_CASE("device frame gauge counts an adopted frame", "[device_frames]") {
   REQUIRE(zm_device_frames_in_flight() == before);
 }
 
+TEST_CASE("a pointer built directly is not counted either way", "[device_frames]") {
+  // device_frame_ptr{frame} gets the right deleter but skips the increment.
+  // The deleter must therefore not decrement for it: doing so underflows an
+  // unsigned gauge, and the wrong readings land on whatever runs next rather
+  // than here. Prefer adopt_device_frame(); this only has to be harmless.
+  const unsigned int before = zm_device_frames_in_flight();
+
+  {
+    device_frame_ptr raw{av_frame_alloc()};
+    REQUIRE(raw);
+    REQUIRE(zm_device_frames_in_flight() == before);
+  }
+
+  REQUIRE(zm_device_frames_in_flight() == before);
+}
+
 TEST_CASE("adopting a null frame counts nothing", "[device_frames]") {
   const unsigned int before = zm_device_frames_in_flight();
   device_frame_ptr held = adopt_device_frame(av_frame_ptr{});

@@ -416,9 +416,20 @@ uint64_t zm_device_frames_shed();
 bool zm_device_frames_shedding();
 
 struct zm_free_device_av_frame {
+  // Whether this pointer's frame was counted into the gauge. A pointer built
+  // directly -- device_frame_ptr{frame} -- leaves this false and so neither
+  // counts nor discounts; only adopt_device_frame() sets it.
+  //
+  // The deleter used to decrement unconditionally, which made the direct form
+  // silently destructive: it skipped the increment but still decremented, and
+  // one such pointer underflowed the unsigned gauge and left every later
+  // reading wrong. tests/zm_packet.cpp did exactly that, and the damage landed
+  // on an unrelated test rather than on the one that caused it.
+  bool counted = false;
+
   void operator()(AVFrame *frame) const {
     if (!frame) return;
-    zm_device_frame_released();
+    if (counted) zm_device_frame_released();
     zm_free_av_frame{}(frame);
   }
 };
@@ -430,8 +441,9 @@ using device_frame_ptr = std::unique_ptr<AVFrame, zm_free_device_av_frame>;
 // out of an av_frame_ptr rather than accepting a raw pointer keeps the transfer
 // of ownership explicit at the call site.
 inline device_frame_ptr adopt_device_frame(av_frame_ptr frame) {
-  if (frame) zm_device_frame_acquired();
-  return device_frame_ptr{frame.release()};
+  if (!frame) return device_frame_ptr{};
+  zm_device_frame_acquired();
+  return device_frame_ptr{frame.release(), zm_free_device_av_frame{true}};
 }
 
 struct CodecData {
