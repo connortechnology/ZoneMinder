@@ -3132,12 +3132,58 @@ std::pair<int, std::string> Monitor::Analyse_Quadra(std::shared_ptr<ZMPacket> pa
       const FPSeconds enter = Seconds(kAiCatchupSeconds);
       const FPSeconds leave = FPSeconds(Seconds(kAiCatchupSeconds)) / 2;
       bool ai_behind = ai_behind_ ? (ai_lag > leave) : (ai_lag > enter);
-      if (ai_behind and !ai_behind_) {
-        Warning("AI is %.2fs behind real time; skipping inference to catch up", ai_lag.count());
-      } else if (!ai_behind and ai_behind_) {
-        Info("AI has caught up (%.2fs behind); resuming inference", ai_lag.count());
-      }
+      if (ai_behind and !ai_behind_) ai_catchup_cycles_++;
+      if (ai_behind) ai_inferences_skipped_++;
+      if (ai_lag.count() > ai_lag_worst_) ai_lag_worst_ = ai_lag.count();
       ai_behind_ = ai_behind;
+
+      // Entering and leaving is the mechanism doing its job, so it is not
+      // itself news: a lag that settles inside the band crosses it every few
+      // seconds, and m4 logged a pair of lines 7 times a minute for eleven
+      // hours while the lag stayed bounded between 1.0 and 2.1s and always
+      // recovered. What is worth knowing is how much inference that costs,
+      // and whether the lag is staying bounded, so say that at an interval
+      // instead of announcing every crossing.
+      constexpr int64_t kAiCatchupReportIntervalUs = 300 * 1000000LL;  // 5 minutes
+      // Giving frames away is supposed to bring the lag back down. A lag that
+      // climbs well past the threshold anyway means it is not, and no amount
+      // of skipping will fix it -- that is worth a warning where the ordinary
+      // cycle is not. Rate limited to the same interval so a failure does not
+      // flood either.
+      const FPSeconds runaway = Seconds(kAiCatchupSeconds) * 3;
+      if (ai_behind and ai_lag > runaway) {
+        const int64_t now_us = std::chrono::duration_cast<Microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (shed_report_due(now_us, ai_catchup_reported_at_, kAiCatchupReportIntervalUs)) {
+          ai_catchup_reported_at_ = now_us;
+          Warning("AI is %.2fs behind real time and not catching up, past the "
+                  "%.0fs that skipping inference is meant to recover from. "
+                  "Inference cannot keep up with this monitor even drawing "
+                  "every frame from the previous detection.",
+                  ai_lag.count(), runaway.count());
+          ai_catchup_cycles_ = 0;
+          ai_inferences_skipped_ = 0;
+          ai_lag_worst_ = 0.0;
+        }
+      } else if (ai_catchup_cycles_) {
+        const int64_t now_us = std::chrono::duration_cast<Microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (shed_report_due(now_us, ai_catchup_reported_at_, kAiCatchupReportIntervalUs)) {
+          ai_catchup_reported_at_ = now_us;
+          // Worst lag is what says whether catch-up is holding. Bounded near
+          // the threshold means it is; climbing means inference cannot keep
+          // up even with the frames it is giving away, which is actionable.
+          Info("AI catch-up: %ju spells, %ju frames drawn from the previous "
+               "detection instead of a fresh one, worst lag %.2fs (skipping "
+               "above %ds, resuming below %.0fs)",
+               static_cast<uintmax_t>(ai_catchup_cycles_),
+               static_cast<uintmax_t>(ai_inferences_skipped_),
+               ai_lag_worst_, kAiCatchupSeconds, leave.count());
+          ai_catchup_cycles_ = 0;
+          ai_inferences_skipped_ = 0;
+          ai_lag_worst_ = 0.0;
+        }
+      }
 
       if (!ai_behind and !(shared_data->analysis_image_count % (motion_frame_skip+1))) {
       //TODO if (packet->hw_frame or packet->in_frame) {

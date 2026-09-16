@@ -916,6 +916,13 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   nlohmann::json last_detections;
   int last_detection_count;
   bool ai_behind_ = false;  // true while skipping AI inference to catch up
+  // A lag that sits inside the hysteresis band crosses it over and over, and
+  // each crossing is the mechanism working rather than anything to act on.
+  // Count the cycles and the frames given up, and report at an interval.
+  uint64_t ai_catchup_cycles_ = 0;
+  uint64_t ai_inferences_skipped_ = 0;
+  double ai_lag_worst_ = 0.0;
+  int64_t ai_catchup_reported_at_ = 0;
   // How stale the packet last analysed was. The analysis thread paces itself
   // against the decoder by frame count, which says nothing about whether
   // either of them is keeping up with real time.
