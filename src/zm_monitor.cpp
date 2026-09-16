@@ -2309,6 +2309,14 @@ int Monitor::Analyse() {
 
   std::shared_ptr<ZMPacket> packet = packet_lock.packet_;
 
+  // Recorded for the analysis thread's pacing, which otherwise only knows how
+  // far the decoder is ahead in frames and cannot tell a queue that is keeping
+  // up from one that is seconds stale.
+  analysis_lag_us_.store(
+      std::chrono::duration_cast<Microseconds>(
+          std::chrono::system_clock::now() - packet->timestamp).count(),
+      std::memory_order_relaxed);
+
   // The capture thread requested that we drop the pre-suspend reference image.
   // Do it here, on the thread that owns ref_image, so the buffer is never freed
   // out from under an in-flight Delta/Blend (refs #4983). The subsequent
@@ -3117,7 +3125,13 @@ std::pair<int, std::string> Monitor::Analyse_Quadra(std::shared_ptr<ZMPacket> pa
       // filling.
       FPSeconds ai_lag = std::chrono::system_clock::now() - packet->timestamp;
       constexpr int kAiCatchupSeconds = 2;
-      bool ai_behind = ai_lag > Seconds(kAiCatchupSeconds);
+      // Two thresholds. A lag that settles on a single one crosses it
+      // constantly: m4 sat between 2.00 and 2.10s and logged this 2.4 times a
+      // second. Fall behind at two seconds, and count as caught up only under
+      // one, so the state reflects the condition rather than the noise.
+      const FPSeconds enter = Seconds(kAiCatchupSeconds);
+      const FPSeconds leave = FPSeconds(Seconds(kAiCatchupSeconds)) / 2;
+      bool ai_behind = ai_behind_ ? (ai_lag > leave) : (ai_lag > enter);
       if (ai_behind and !ai_behind_) {
         Warning("AI is %.2fs behind real time; skipping inference to catch up", ai_lag.count());
       } else if (!ai_behind and ai_behind_) {

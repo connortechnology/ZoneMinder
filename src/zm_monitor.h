@@ -916,6 +916,10 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   nlohmann::json last_detections;
   int last_detection_count;
   bool ai_behind_ = false;  // true while skipping AI inference to catch up
+  // How stale the packet last analysed was. The analysis thread paces itself
+  // against the decoder by frame count, which says nothing about whether
+  // either of them is keeping up with real time.
+  std::atomic<int64_t> analysis_lag_us_{0};
 
   // Per-class AI detection settings (keyed by class name for quick lookup)
   std::unordered_map<std::string, AIDetectionSetting> ai_detection_settings;
@@ -1287,6 +1291,8 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   void closeEvent();
 
   int DeviceFrameBudget() const { return device_frame_budget; };
+  // Age of the packet last analysed, in microseconds.
+  int64_t AnalysisLagUs() const { return analysis_lag_us_.load(std::memory_order_relaxed); }
   ObjectDetectionOption ObjectDetection() const { return objectdetection; };
   const std::string &ObjectDetection_Model() const { return objectdetection_model; };
   float ObjectDetection_Object_Threshold() const { return objectdetection_object_threshold; };

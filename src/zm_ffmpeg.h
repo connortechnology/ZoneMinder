@@ -545,6 +545,26 @@ bool device_budget_starves_decoder(unsigned int budget, int max_extra_hw_frame_c
 // averaging 8.4 frames, and past half it averages 16.
 bool decode_rate_worth_reporting(double avg_send_us, double budget_us);
 
+// Whether the analysis thread should pace itself to the capture rate rather
+// than running flat out. Pacing stops the analyser lapping the streamers
+// reading its ring buffer, so it is the normal state; it is given up only to
+// work through a real backlog.
+//
+// The decoder being frames ahead is one kind of backlog. Packets arriving
+// seconds stale is another, and the frame counts cannot see it: when the
+// decoder is itself behind real time both counters advance together, the gap
+// stays small, and pacing holds the lag open indefinitely. Measured on a 4K
+// monitor, analysis ran at 11.8/s against 15fps capture for 75 seconds after
+// an alarm, filling a 300-packet queue and dropping three GOPs.
+bool analysis_should_pace(int decoder_lag, int burst_lag, int64_t packet_age_us,
+                          int64_t stale_after_us, bool catching_up);
+
+// Two thresholds rather than one, because a lag that settles on the threshold
+// crosses it constantly: m4 sat at 2.00 to 2.10s and flipped state 2.4 times a
+// second. Start catching up when the lag passes stale_after_us, and keep going
+// until it is back under half of that.
+inline int64_t analysis_caught_up_us(int64_t stale_after_us) { return stale_after_us / 2; }
+
 // Tells the gauge whether anything in this process will use a device frame.
 // When nothing will, frames are released as soon as they are decoded and that
 // is normal operation rather than a shortfall, so it is not reported.

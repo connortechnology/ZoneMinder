@@ -336,3 +336,47 @@ TEST_CASE("decode_rate_worth_reporting", "[ffmpeg]") {
     CHECK_FALSE(decode_rate_worth_reporting(100000, -1));
   }
 }
+
+TEST_CASE("analysis_should_pace", "[ffmpeg]") {
+  const int burst = 7;                       // image_buffer_count/4 on a 30-slot ring
+  const int64_t stale = 2 * 1000 * 1000;     // 2s, as Monitor::Analyse uses
+  const bool paced = false, catching = true;
+
+  SECTION("keeping up: pace, so the analyser does not lap the streamers") {
+    CHECK(analysis_should_pace(0, burst, 0, stale, paced));
+    CHECK(analysis_should_pace(3, burst, 100000, stale, paced));
+    CHECK(analysis_should_pace(burst, burst, 0, stale, paced));
+  }
+
+  SECTION("frames behind the decoder: burst") {
+    CHECK_FALSE(analysis_should_pace(burst + 1, burst, 0, stale, paced));
+    CHECK_FALSE(analysis_should_pace(100, burst, 0, stale, paced));
+  }
+
+  SECTION("seconds behind real time: burst, even with the decoder alongside") {
+    // The case the frame counts cannot see. When the decoder is itself late
+    // both counters advance together and decoder_lag stays small, so pacing
+    // held the lag open until the queue overflowed.
+    CHECK_FALSE(analysis_should_pace(0, burst, 2'100'000, stale, paced));
+    CHECK_FALSE(analysis_should_pace(2, burst, 5'000'000, stale, paced));
+  }
+
+  SECTION("entering takes the full threshold") {
+    CHECK(analysis_should_pace(0, burst, 1'900'000, stale, paced));
+    CHECK(analysis_should_pace(0, burst, stale, stale, paced));
+  }
+
+  SECTION("leaving takes half, so a lag on the line does not flip every frame") {
+    // m4 settled between 2.00 and 2.10s. With one threshold it crossed 2.4
+    // times a second; with two it keeps catching up until it is under 1s.
+    CHECK_FALSE(analysis_should_pace(0, burst, 1'900'000, stale, catching));
+    CHECK_FALSE(analysis_should_pace(0, burst, 1'100'000, stale, catching));
+    CHECK(analysis_should_pace(0, burst, 900'000, stale, catching));
+  }
+
+  SECTION("no staleness threshold leaves the frame-count behaviour alone") {
+    CHECK(analysis_should_pace(0, burst, 10'000'000, 0, paced));
+    CHECK(analysis_should_pace(0, burst, 10'000'000, 0, catching));
+    CHECK_FALSE(analysis_should_pace(burst + 1, burst, 10'000'000, 0, paced));
+  }
+}

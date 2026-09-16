@@ -564,6 +564,19 @@ bool decode_rate_worth_reporting(double avg_send_us, double budget_us) {
   return avg_send_us > budget_us * kDecodeBudgetMargin;
 }
 
+bool analysis_should_pace(int decoder_lag, int burst_lag, int64_t packet_age_us,
+                          int64_t stale_after_us, bool catching_up) {
+  if (decoder_lag > burst_lag) return false;      // frames behind: burst
+  if (stale_after_us > 0) {
+    // Entering takes the full threshold, leaving takes half, so a lag that
+    // settles near the line does not flip on every frame.
+    const int64_t leave_at = analysis_caught_up_us(stale_after_us);
+    if (catching_up ? (packet_age_us > leave_at) : (packet_age_us > stale_after_us))
+      return false;
+  }
+  return true;
+}
+
 bool device_budget_starves_decoder(unsigned int budget, int max_extra_hw_frame_cnt) {
   if (max_extra_hw_frame_cnt < 0) return false;
   return budget > static_cast<unsigned int>(max_extra_hw_frame_cnt);

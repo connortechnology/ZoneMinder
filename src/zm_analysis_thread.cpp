@@ -65,7 +65,15 @@ void AnalysisThread::Run() {
     const int decoder_lag =
         monitor_->shared_data->decoder_image_count -
         monitor_->shared_data->analysis_image_count;
-    if (decoder_lag <= burst_lag) {
+    // Stale by more than this and we stop pacing and work through it. Matches
+    // the threshold Monitor::Analyse uses to decide the AI has fallen behind,
+    // so the two agree about what "behind" means.
+    constexpr int64_t kStaleAfterUs = 2 * 1000 * 1000;
+    const bool pace = analysis_should_pace(decoder_lag, burst_lag,
+                                          monitor_->AnalysisLagUs(),
+                                          kStaleAfterUs, catching_up_);
+    catching_up_ = !pace;
+    if (pace) {
       const double fps = monitor_->get_capture_fps();
       if (fps > 0) {
         const Microseconds target_interval(static_cast<int64_t>(1e6 / fps));
