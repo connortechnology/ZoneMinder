@@ -921,6 +921,11 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   // Count the cycles and the frames given up, and report at an interval.
   // How long Analyse_Quadra actually takes, against the frame interval it has
   // to fit inside. The lag is made of frames that did not.
+  // The reference image blend, which runs per frame while the motion
+  // detection that reads it runs one frame in motion_frame_skip+1.
+  uint64_t ref_blend_us_ = 0;
+  uint64_t ref_blend_max_us_ = 0;
+  uint64_t ref_blend_count_ = 0;
   uint64_t quadra_analyse_us_ = 0;
   uint64_t quadra_analyse_max_us_ = 0;
   uint64_t quadra_analyse_count_ = 0;

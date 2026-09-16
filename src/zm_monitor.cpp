@@ -3539,6 +3539,13 @@ std::pair<int, std::string> Monitor::Analyse_MotionDetection(std::shared_ptr<ZMP
       Debug(1, "Skipped motion detection last motion score was %d", last_motion_score);
     }
 
+    // The reference image is only read by motion detection, which runs one
+    // frame in motion_frame_skip+1, but this blend runs on every one. At
+    // 3840x2160 that is a pass over 8.3M pixels 13 times a second where 1.7
+    // would do. Measured rather than assumed: Analyse_Quadra was the obvious
+    // suspect for this thread falling behind and turned out to use 23% of the
+    // frame interval, so this gets the same treatment before anything changes.
+    SystemTimePoint blend_start = std::chrono::system_clock::now();
     if (analysis_image == ANALYSISIMAGE_YCHANNEL) {
       Debug(1, "Blending from y-channel");
       if (packet->y_image)
@@ -3553,6 +3560,21 @@ std::pair<int, std::string> Monitor::Analyse_MotionDetection(std::shared_ptr<ZMP
       ref_image.Blend(*(packet->image), ( state==ALARM ? alarm_ref_blend_perc : ref_blend_perc ));
     } else {
       Debug(1, "Not able to blend");
+    }
+    {
+      const uint64_t blend_us = std::chrono::duration_cast<Microseconds>(
+          std::chrono::system_clock::now() - blend_start).count();
+      ref_blend_us_ += blend_us;
+      if (blend_us > ref_blend_max_us_) ref_blend_max_us_ = blend_us;
+      if (++ref_blend_count_ % 500 == 0) {
+        const double fps = get_capture_fps();
+        const double mean_ms = ref_blend_us_ / 1000.0 / ref_blend_count_;
+        Info("Reference blend over %ju frames: mean %.1fms, max %.1fms, "
+             "about %.0fms a second at %.1ffps, and motion detection reads it "
+             "one frame in %d",
+             static_cast<uintmax_t>(ref_blend_count_), mean_ms,
+             ref_blend_max_us_ / 1000.0, mean_ms * fps, fps, motion_frame_skip + 1);
+      }
     }
   } // end if had ref_image_buffer or not
   return std::make_pair(motion_score, std::move(cause));
