@@ -33,6 +33,7 @@ extern "C" {
 #include <libavutil/pixdesc.h>
 #ifdef HAVE_QUADRA
 #include <libavutil/hwcontext_ni_quad.h>
+#include <ni_log.h>
 #endif
 }
 
@@ -763,6 +764,61 @@ void log_libav_callback(void *ptr, int level, const char *fmt, va_list vargs) {
   }
 }
 
+#ifdef HAVE_QUADRA
+// libxcoder writes its own diagnostics straight to stderr, which for a daemon
+// means they are lost: everything the card has to say about sessions, frame
+// pools and read/write retries never reaches the log the rest of the capture
+// is written to. It offers a callback instead, so take it and put that output
+// where the surrounding lines are.
+void log_ni_callback(int level, const char *fmt, va_list vargs) {
+  Logger *log = Logger::fetch();
+  if (!log) return;
+
+  // libxcoder's INFO carries warnings too, and its DEBUG and TRACE are per
+  // call and per NVMe transaction, so they belong well down the debug levels
+  // rather than in the log by default.
+  int log_level;
+  switch (level) {
+    case NI_LOG_FATAL: log_level = Logger::FATAL; break;
+    case NI_LOG_ERROR: log_level = Logger::WARNING; break;
+    case NI_LOG_INFO:  log_level = Logger::DEBUG1; break;
+    case NI_LOG_DEBUG: log_level = Logger::DEBUG3; break;
+    case NI_LOG_TRACE: log_level = Logger::DEBUG8; break;
+    default: return;  // NONE and INVALID have nothing to say
+  }
+  if (log->level() < log_level) return;
+
+  char logString[8192];
+  int length = vsnprintf(logString, sizeof(logString)-1, fmt, vargs);
+  if (length <= 0) return;
+  if (static_cast<size_t>(length) > sizeof(logString)-1) length = sizeof(logString)-1;
+  // These carry a trailing newline, as the libav ones do.
+  if (length > 0 and logString[length-1] == '\n') logString[length-1] = 0;
+
+  // Same rule as the libav callback: rate limit only what reaches the
+  // database. The retry loops this is being read for repeat by design, and
+  // suppressing them in the file would hide the very sequence being chased.
+  if (log_level <= Logger::WARNING) {
+    static std::mutex repeat_mutex;
+    static AvLogRepeat repeat;
+    uint64_t suppressed = 0;
+    bool print;
+    {
+      std::lock_guard<std::mutex> lock(repeat_mutex);
+      print = av_log_should_print(repeat, logString, steady_now_us(),
+                                  kAvLogRepeatIntervalUs, &suppressed);
+    }
+    if (!print) return;
+    if (suppressed > 0) {
+      log->logPrint(false, __FILE__, __LINE__, log_level, "NI: %s (%ju repeats suppressed)",
+                    logString, static_cast<uintmax_t>(suppressed));
+      return;
+    }
+  }
+  log->logPrint(false, __FILE__, __LINE__, log_level, "NI: %s", logString);
+}
+#endif
+
 static bool bInit = false;
 
 void FFMPEGInit() {
@@ -772,6 +828,14 @@ void FFMPEGInit() {
       av_log_set_level(AV_LOG_DEBUG);
       av_log_set_callback(log_libav_callback);
       Info("Enabling ffmpeg logs, as LOG_DEBUG+LOG_FFMPEG are enabled in options");
+#ifdef HAVE_QUADRA
+      // The decoder and encoder each set libxcoder's level from
+      // av_log_get_level() when they open, so raising ffmpeg's level above is
+      // what turns this on. Without the callback it would go to stderr and be
+      // lost; with it, how the card is really behaving lands beside the
+      // capture it belongs to.
+      ni_log_set_callback(log_ni_callback);
+#endif
     } else {
       Debug(1,"Not enabling ffmpeg logs, as LOG_FFMPEG and/or LOG_DEBUG is disabled in options, or this monitor is not part of your debug targets");
       av_log_set_level(AV_LOG_QUIET);
