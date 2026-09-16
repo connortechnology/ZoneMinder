@@ -43,14 +43,28 @@ void AnalysisThread::Run() {
   // is where it reads from rather than how fast it reads. Time the whole call
   // and count the times there was nothing to do, which tells those apart.
   uint64_t analyse_us = 0, analyse_max_us = 0, analysed = 0, idle = 0;
+  // Work plus wait came to 56% of the thread while the lag persisted, so a
+  // third of each second is going somewhere neither timer sees. Measure the
+  // gap between one Analyse() returning and the next starting: a tight loop
+  // leaves nothing here, and anything large means the thread is held up
+  // outside the call, which no amount of making Analyse() cheaper would fix.
+  uint64_t between_us = 0, between_max_us = 0;
+  SystemTimePoint last_analyse_end{};
   SystemTimePoint loop_reported = std::chrono::system_clock::now();
 
   while (!(terminate_ or zm_terminate)) {
     // Some periodic updates are required for variable capturing framerate
     SystemTimePoint analyse_start = std::chrono::system_clock::now();
+    if (last_analyse_end.time_since_epoch().count()) {
+      const uint64_t gap = std::chrono::duration_cast<Microseconds>(
+          analyse_start - last_analyse_end).count();
+      between_us += gap;
+      if (gap > between_max_us) between_max_us = gap;
+    }
     int ret = monitor_->Analyse();
     {
       const SystemTimePoint now = std::chrono::system_clock::now();
+      last_analyse_end = now;
       const uint64_t us = std::chrono::duration_cast<Microseconds>(now - analyse_start).count();
       if (ret < 0) {
         idle++;
@@ -69,7 +83,8 @@ void AnalysisThread::Run() {
         Info("Analyse loop: %ju frames in %.0fs (%.1f/s), mean %.1fms of which "
              "%.1fms waiting for a decoded packet and %.1fms analysing; max "
              "%.1fms, longest wait %.1fms; work is %.0f%% of the thread, wait "
-             "%.0f%%; %ju passes had nothing to do",
+             "%.0f%%, and %.0f%% is between calls (mean %.1fms, max %.1fms); "
+             "%ju passes had nothing to do",
              static_cast<uintmax_t>(analysed), secs,
              analysed / secs,
              analysed ? analyse_us / 1000.0 / analysed : 0.0,
@@ -79,8 +94,12 @@ void AnalysisThread::Run() {
              wait_max_us / 1000.0,
              work_us / 10000.0 / secs,
              wait_us / 10000.0 / secs,
+             between_us / 10000.0 / secs,
+             analysed ? between_us / 1000.0 / analysed : 0.0,
+             between_max_us / 1000.0,
              static_cast<uintmax_t>(idle));
         analyse_us = analyse_max_us = analysed = idle = 0;
+        between_us = between_max_us = 0;
         loop_reported = now;
       }
     }
