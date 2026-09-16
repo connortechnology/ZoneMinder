@@ -54,6 +54,11 @@ void AnalysisThread::Run() {
   // leaves nothing here, and anything large means the thread is held up
   // outside the call, which no amount of making Analyse() cheaper would fix.
   uint64_t between_us = 0, between_max_us = 0;
+  // The lag itself, which is the thing being managed. Reading it from the AI
+  // catch-up counters only works when there are detections to run, and a
+  // quiet scene reports nothing either way -- twice now that has looked like
+  // an improvement when it was only an empty field of view.
+  uint64_t lag_us_total = 0, lag_max_us = 0, lag_samples = 0;
   SystemTimePoint last_analyse_end{};
   SystemTimePoint loop_reported = std::chrono::system_clock::now();
 
@@ -78,6 +83,14 @@ void AnalysisThread::Run() {
         if (us > analyse_max_us) analyse_max_us = us;
         analysed++;
       }
+      {
+        const int64_t lag = monitor_->AnalysisLagUs();
+        if (lag > 0) {
+          lag_us_total += lag;
+          if (static_cast<uint64_t>(lag) > lag_max_us) lag_max_us = lag;
+          lag_samples++;
+        }
+      }
       if (FPSeconds(now - loop_reported).count() >= 60.0) {
         const double secs = FPSeconds(now - loop_reported).count();
         // Split the wait out of the total. Waiting is the decoder not having
@@ -89,7 +102,7 @@ void AnalysisThread::Run() {
              "%.1fms waiting for a decoded packet and %.1fms analysing; max "
              "%.1fms, longest wait %.1fms; work is %.0f%% of the thread, wait "
              "%.0f%%, and %.0f%% is between calls (mean %.1fms, max %.1fms); "
-             "%ju passes had nothing to do",
+             "%ju passes had nothing to do; analysis lag mean %.0fms max %.0fms",
              static_cast<uintmax_t>(analysed), secs,
              analysed / secs,
              analysed ? analyse_us / 1000.0 / analysed : 0.0,
@@ -102,9 +115,12 @@ void AnalysisThread::Run() {
              between_us / 10000.0 / secs,
              analysed ? between_us / 1000.0 / analysed : 0.0,
              between_max_us / 1000.0,
-             static_cast<uintmax_t>(idle));
+             static_cast<uintmax_t>(idle),
+             lag_samples ? lag_us_total / 1000.0 / lag_samples : 0.0,
+             lag_max_us / 1000.0);
         analyse_us = analyse_max_us = analysed = idle = 0;
         between_us = between_max_us = 0;
+        lag_us_total = lag_max_us = lag_samples = 0;
         loop_reported = now;
       }
     }
