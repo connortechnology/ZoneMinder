@@ -481,6 +481,60 @@ TEST_CASE("CUDA motion: an unaligned zone counts exactly", "[cuda]") {
   REQUIRE(results[0].blobs[0].hi_y == 19);
 }
 
+TEST_CASE("CUDA motion: an inactive zone blanks its area for the others", "[cuda]") {
+  if (!zm::cuda::MotionDetector::Available()) {
+    WARN("No CUDA device present, skipping");
+    return;
+  }
+
+  // An inactive zone is not scored itself; what it does is stop every other
+  // zone seeing motion inside it. Two patches of motion here, one of them under
+  // the inactive zone, and only the other may be counted.
+  std::vector<uint8_t> reference(kWidth * kHeight, 30);
+  std::vector<uint8_t> current(kWidth * kHeight, 30);
+
+  uint32_t expected = 0;
+  for (int y = 30; y < 50; y++)
+    for (int x = 30; x < 60; x++) { current[y * kWidth + x] = 210; expected++; }
+  // Under the inactive zone, must not count.
+  for (int y = 120; y < 160; y++)
+    for (int x = 150; x < 220; x++) current[y * kWidth + x] = 210;
+
+  const HostZone active(0, 0, kWidth - 1, kHeight - 1);
+  const HostZone inactive(140, 110, 240, 180);
+
+  zm::cuda::ZoneSpec active_spec = active.Spec(20, 0);
+  zm::cuda::ZoneSpec inactive_spec = inactive.Spec(20, 0);
+  inactive_spec.inactive = true;
+
+  zm::cuda::MotionDetector detector;
+  REQUIRE(detector.Init(kWidth, kHeight));
+  REQUIRE(detector.SetZones({active_spec, inactive_spec}));
+
+  DevicePlane device_reference(kWidth, kHeight);
+  DevicePlane device_current(kWidth, kHeight);
+  device_reference.Upload(reference, kWidth, kHeight);
+  device_current.Upload(current, kWidth, kHeight);
+  REQUIRE(detector.AssignReference(device_reference.data, device_reference.pitch));
+
+  std::vector<zm::cuda::ZoneResult> results;
+  REQUIRE(detector.Detect(device_current.data, device_current.pitch, results));
+  REQUIRE(results.size() == 2);
+
+  // Only the patch outside the inactive zone.
+  REQUIRE(results[0].alarm_pixels == expected);
+  // The inactive zone is never scored.
+  REQUIRE(results[1].alarm_pixels == 0);
+
+  // And with that zone active instead, both patches count: the difference is
+  // the blanking, not the mask.
+  inactive_spec.inactive = false;
+  REQUIRE(detector.SetZones({active_spec, inactive_spec}));
+  REQUIRE(detector.AssignReference(device_reference.data, device_reference.pitch));
+  REQUIRE(detector.Detect(device_current.data, device_current.pitch, results));
+  REQUIRE(results[0].alarm_pixels == expected + 40 * 70);
+}
+
 // Hidden by default (the leading dot); run with ./tests "[.cudabench]". This is
 // the workload the component pass is sensitive to: wide solid blobs, where a
 // labelling scheme that moves one pixel per round pays for every pixel of the

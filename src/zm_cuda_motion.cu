@@ -73,22 +73,14 @@ __device__ __forceinline__ void AccumulateBox(bool keep, int x, int y,
   }
 }
 
-__global__ void DeltaKernel(const uint8_t *__restrict__ cur, size_t cur_pitch,
-                            const uint8_t *__restrict__ ref, size_t ref_pitch,
-                            uint8_t *__restrict__ delta, size_t delta_pitch,
-                            int width, int height) {
-  const int x = blockIdx.x * blockDim.x + threadIdx.x;
-  const int y = blockIdx.y * blockDim.y + threadIdx.y;
-  if (x >= width || y >= height) return;
-
-  const int c = cur[y * cur_pitch + x];
-  const int r = ref[y * ref_pitch + x];
-  delta[y * delta_pitch + x] = static_cast<uint8_t>(abs(c - r));
-}
-
-// The alarmed test from alarmedpixels_row, pixel for pixel: inside the polygon,
-// strictly above the minimum, at or below the maximum.
-__global__ void ThresholdKernel(const uint8_t *__restrict__ delta, size_t delta_pitch,
+// The difference is computed here rather than written to a plane of its own and
+// read straight back: at 1080p that plane was 2MB written and 2MB re-read every
+// frame for a value used exactly once. A zone marked inactive still has to
+// blank its area for everyone else, which is what the blanked mask carries --
+// null when no zone is inactive, which is the usual case.
+__global__ void ThresholdKernel(const uint8_t *__restrict__ cur, size_t cur_pitch,
+                                const uint8_t *__restrict__ ref, size_t ref_pitch,
+                                const uint8_t *__restrict__ blanked, size_t blanked_pitch,
                                 const uint8_t *__restrict__ poly, size_t poly_pitch,
                                 uint8_t *__restrict__ mask, size_t mask_pitch,
                                 int width, int lo_y, int hi_y,
@@ -104,7 +96,10 @@ __global__ void ThresholdKernel(const uint8_t *__restrict__ delta, size_t delta_
   // with alarmed = false and simply write nothing.
   const bool inside = (x < width) && (y <= hi_y);
 
-  const uint8_t d = inside ? delta[y * delta_pitch + x] : 0;
+  const int c = inside ? cur[y * cur_pitch + x] : 0;
+  const int r = inside ? ref[y * ref_pitch + x] : 0;
+  const bool blanked_here = inside && blanked && blanked[y * blanked_pitch + x];
+  const uint8_t d = blanked_here ? 0 : static_cast<uint8_t>(abs(c - r));
   const uint8_t p = inside ? poly[y * poly_pitch + x] : 0;
   const bool alarmed = inside && (p != 0) && (d > min_threshold) && (d <= max_threshold);
   if (inside) mask[y * mask_pitch + x] = alarmed ? kWhite : kBlack;
@@ -429,16 +424,17 @@ __global__ void BlobStatsKernel(const uint32_t *__restrict__ labels,
   atomicAdd(&y_sums[slot], static_cast<unsigned long long>(y));
 }
 
-// Inactive zones blank their area of the delta so no other zone sees motion
-// there, which the CPU path does with Image::Fill before any zone is checked.
-__global__ void MaskOutKernel(uint8_t *__restrict__ delta, size_t delta_pitch,
-                              const uint8_t *__restrict__ poly, size_t poly_pitch,
-                              int width, int lo_y, int hi_y) {
+// Inactive zones are collapsed into one plane when the zones are set, so the
+// threshold can blank their area with a single lookup rather than a pass of its
+// own over the frame.
+__global__ void BlankKernel(uint8_t *__restrict__ blanked, size_t blanked_pitch,
+                            const uint8_t *__restrict__ poly, size_t poly_pitch,
+                            int width, int lo_y, int hi_y) {
   const int x = blockIdx.x * blockDim.x + threadIdx.x;
   const int y = lo_y + blockIdx.y * blockDim.y + threadIdx.y;
   if (x >= width || y > hi_y) return;
 
-  if (poly[y * poly_pitch + x]) delta[y * delta_pitch + x] = 0;
+  if (poly[y * poly_pitch + x]) blanked[y * blanked_pitch + x] = 1;
 }
 
 // fast_blend quantises the percentage to a power-of-two shift and works in
@@ -515,7 +511,7 @@ class MotionDetector::Impl {
     }
     zones.clear();
     cudaFree(ref);
-    cudaFree(delta);
+    cudaFree(blanked);
     cudaFree(labels);
     cudaFree(slot_map);
     cudaFree(scratch);
@@ -523,7 +519,7 @@ class MotionDetector::Impl {
       cudaStreamDestroy(stream);
       stream = nullptr;
     }
-    ref = delta = nullptr;
+    ref = blanked = nullptr;
     labels = slot_map = nullptr;
     scratch = nullptr;
   }
@@ -535,8 +531,10 @@ class MotionDetector::Impl {
   cudaStream_t stream = nullptr;
   uint8_t *ref = nullptr;
   size_t ref_pitch = 0;
-  uint8_t *delta = nullptr;
-  size_t delta_pitch = 0;
+  // Non-null only when some zone is inactive: one byte per pixel marking the
+  // area those zones blank for everyone else.
+  uint8_t *blanked = nullptr;
+  size_t blanked_pitch = 0;
   uint32_t *labels = nullptr;
   uint32_t *slot_map = nullptr;
   // One allocation for every small per-frame value the kernels write: the
@@ -605,9 +603,6 @@ bool MotionDetector::Init(int width, int height, void *cuda_context) {
 
   err = cudaMallocPitch(reinterpret_cast<void **>(&impl_->ref),
                         &impl_->ref_pitch, width, height);
-  if (err == cudaSuccess)
-    err = cudaMallocPitch(reinterpret_cast<void **>(&impl_->delta),
-                          &impl_->delta_pitch, width, height);
   if (err != cudaSuccess) {
     impl_->last_error = std::string("Failed to allocate device planes: ") + cudaGetErrorString(err);
     return false;
@@ -693,6 +688,34 @@ bool MotionDetector::SetZones(const std::vector<ZoneSpec> &specs) {
     }
   }
 
+  // Collapse the inactive zones into one plane, so the per-frame path is a
+  // lookup rather than a pass per inactive zone.
+  bool wants_blank = false;
+  for (const ZoneSpec &spec : specs) wants_blank = wants_blank || spec.inactive;
+  if (wants_blank) {
+    if (!impl_->blanked) {
+      cudaError_t err = cudaMallocPitch(reinterpret_cast<void **>(&impl_->blanked),
+                                        &impl_->blanked_pitch, width_, height_);
+      if (err != cudaSuccess) {
+        impl_->last_error = std::string("Failed to allocate the blanking plane: ") + cudaGetErrorString(err);
+        return false;
+      }
+    }
+    cudaMemset2D(impl_->blanked, impl_->blanked_pitch, 0, width_, height_);
+    const dim3 block(32, 8);
+    for (size_t i = 0; i < impl_->zones.size(); i++) {
+      const Impl::Zone &zone = impl_->zones[i];
+      if (!zone.inactive || zone.hi_y < zone.lo_y) continue;
+      BlankKernel<<<Grid2D(width_, zone.hi_y - zone.lo_y + 1, block), block>>>(
+          impl_->blanked, impl_->blanked_pitch, zone.mask, zone.mask_pitch,
+          width_, zone.lo_y, zone.hi_y);
+    }
+    cudaDeviceSynchronize();
+  } else if (impl_->blanked) {
+    cudaFree(impl_->blanked);
+    impl_->blanked = nullptr;
+  }
+
   if (wants_blobs && !impl_->labels) {
     const size_t pixels = static_cast<size_t>(width_) * height_;
     cudaError_t err = cudaMalloc(reinterpret_cast<void **>(&impl_->labels), pixels * sizeof(uint32_t));
@@ -729,21 +752,8 @@ bool MotionDetector::Detect(const uint8_t *y_plane, size_t pitch, std::vector<Zo
 
   const dim3 block(32, 8);
   cudaStream_t stream = impl_->stream;
-  DeltaKernel<<<Grid2D(width_, height_, block), block, 0, stream>>>(
-      y_plane, pitch, impl_->ref, impl_->ref_pitch,
-      impl_->delta, impl_->delta_pitch, width_, height_);
 
   results.assign(impl_->zones.size(), ZoneResult());
-
-  // Inactive zones first: they blank their area of the delta so no zone checked
-  // below sees motion there, which is what Image::Fill does on the CPU path.
-  for (const Impl::Zone &zone : impl_->zones) {
-    if (!zone.inactive || zone.hi_y < zone.lo_y) continue;
-    const dim3 zone_grid = Grid2D(width_, zone.hi_y - zone.lo_y + 1, block);
-    MaskOutKernel<<<zone_grid, block, 0, stream>>>(impl_->delta, impl_->delta_pitch,
-                                        zone.mask, zone.mask_pitch,
-                                        width_, zone.lo_y, zone.hi_y);
-  }
 
   // Counters live at the front of the scratch allocation; the blob arrays
   // follow it.
@@ -774,7 +784,8 @@ bool MotionDetector::Detect(const uint8_t *y_plane, size_t pitch, std::vector<Zo
 
     cudaMemsetAsync(counters, 0, sizeof(unsigned long long) * 8, stream);
     ThresholdKernel<<<zone_grid, block, 0, stream>>>(
-        impl_->delta, impl_->delta_pitch, zone.mask, zone.mask_pitch,
+        y_plane, pitch, impl_->ref, impl_->ref_pitch,
+        impl_->blanked, impl_->blanked_pitch, zone.mask, zone.mask_pitch,
         zone.alarm, zone.alarm_pitch, width_, zone.lo_y, zone.hi_y,
         zone.min_threshold, zone.max_threshold, alarm_count, diff_sum,
         box, height_);
