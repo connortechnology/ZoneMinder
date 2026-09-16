@@ -435,6 +435,52 @@ TEST_CASE("CUDA motion: a serpentine stays one component", "[cuda]") {
   REQUIRE(results[0].blobs[0].count == static_cast<uint32_t>(expected));
 }
 
+TEST_CASE("CUDA motion: an unaligned zone counts exactly", "[cuda]") {
+  if (!zm::cuda::MotionDetector::Available()) {
+    WARN("No CUDA device present, skipping");
+    return;
+  }
+
+  // Nothing here is a multiple of 32: the zone starts at x=7 and is 38 wide,
+  // so warps are partial. The kernels reduce across the whole warp, and a lane
+  // that has left the kernel cannot take part in that, so out of range lanes
+  // have to stay and contribute nothing instead of returning early.
+  std::vector<uint8_t> reference(kWidth * kHeight, 30);
+  std::vector<uint8_t> current(kWidth * kHeight, 30);
+
+  // A 13x11 patch inside the zone, and one outside it that must not count.
+  uint32_t expected = 0;
+  for (int y = 9; y < 20; y++)
+    for (int x = 11; x < 24; x++) { current[y * kWidth + x] = 210; expected++; }
+  for (int y = 9; y < 20; y++)
+    for (int x = 100; x < 120; x++) current[y * kWidth + x] = 210;
+
+  const HostZone zone(7, 5, 44, 43);
+  zm::cuda::ZoneSpec spec = zone.Spec(20, 0);
+  spec.want_blobs = true;
+
+  zm::cuda::MotionDetector detector;
+  REQUIRE(detector.Init(kWidth, kHeight));
+  REQUIRE(detector.SetZones({spec}));
+
+  DevicePlane device_reference(kWidth, kHeight);
+  DevicePlane device_current(kWidth, kHeight);
+  device_reference.Upload(reference, kWidth, kHeight);
+  device_current.Upload(current, kWidth, kHeight);
+  REQUIRE(detector.AssignReference(device_reference.data, device_reference.pitch));
+
+  std::vector<zm::cuda::ZoneResult> results;
+  REQUIRE(detector.Detect(device_current.data, device_current.pitch, results));
+
+  REQUIRE(results[0].alarm_pixels == expected);
+  REQUIRE(results[0].blobs.size() == 1);
+  REQUIRE(results[0].blobs[0].count == expected);
+  REQUIRE(results[0].blobs[0].lo_x == 11);
+  REQUIRE(results[0].blobs[0].hi_x == 23);
+  REQUIRE(results[0].blobs[0].lo_y == 9);
+  REQUIRE(results[0].blobs[0].hi_y == 19);
+}
+
 // Hidden by default (the leading dot); run with ./tests "[.cudabench]". This is
 // the workload the component pass is sensitive to: wide solid blobs, where a
 // labelling scheme that moves one pixel per round pays for every pixel of the
@@ -522,6 +568,34 @@ TEST_CASE("CUDA motion: component pass throughput", "[.cudabench]") {
   WARN("stage costs: threshold " << threshold_ms
        << ", filter " << (filter_ms - threshold_ms)
        << ", components " << (blobs_ms - filter_ms) << " ms");
+
+  // Blobs spread over the whole frame is the worst case for a labelling stage
+  // that bounds itself to where the motion is. What a camera usually sees is a
+  // person or a car in part of the view, and an empty frame most of the time.
+  auto retime = [&](const char *what, const std::vector<uint8_t> &frame) {
+    cudaMemcpy2D(device_current, current_pitch, frame.data(), kBenchWidth,
+                 kBenchWidth, kBenchHeight, cudaMemcpyHostToDevice);
+    REQUIRE(detector.AssignReference(device_reference, reference_pitch));
+    REQUIRE(detector.Detect(device_current, current_pitch, results));
+
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < kFrames; i++) {
+      REQUIRE(detector.Detect(device_current, current_pitch, results));
+    }
+    const auto end = std::chrono::steady_clock::now();
+    const double ms = std::chrono::duration<double, std::milli>(end - start).count() / kFrames;
+    WARN(what << ": " << ms << " ms/frame (" << results[0].blobs.size() << " blobs)");
+  };
+
+  std::vector<uint8_t> localised(kBenchWidth * kBenchHeight, 20);
+  for (int y = 700; y < 900; y++)
+    for (int x = 1400; x < 1700; x++) localised[y * kBenchWidth + x] = 200;
+
+  const std::vector<uint8_t> quiet(kBenchWidth * kBenchHeight, 20);
+
+  retime("motion across the frame", current);
+  retime("motion in one corner", localised);
+  retime("quiet frame", quiet);
 
   cudaFree(device_reference);
   cudaFree(device_current);

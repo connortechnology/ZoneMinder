@@ -41,6 +41,38 @@ dim3 Grid2D(int width, int height, dim3 block) {
   return dim3((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
 }
 
+// Bounding box of the pixels a stage kept, aggregated per warp so a stage pays
+// a couple of atomics per warp rather than four per pixel.
+//
+// Both ends use atomicMax so the surrounding memory can be zeroed with a plain
+// memset: the low edge is accumulated as (limit - 1 - coordinate) and undone on
+// the host. A frame with nothing alarmed leaves all four at zero, which the
+// caller discards by looking at the count first.
+__device__ __forceinline__ void AccumulateBox(bool keep, int x, int y,
+                                              int width, int height,
+                                              unsigned int *__restrict__ box) {
+  const unsigned int active = __ballot_sync(0xFFFFFFFFu, keep);
+  if (!active) return;
+
+  int max_x = keep ? x : INT_MIN;
+  int max_y = keep ? y : INT_MIN;
+  int flip_x = keep ? (width - 1 - x) : INT_MIN;
+  int flip_y = keep ? (height - 1 - y) : INT_MIN;
+  for (int offset = 16; offset > 0; offset >>= 1) {
+    max_x = max(max_x, __shfl_down_sync(0xFFFFFFFFu, max_x, offset));
+    max_y = max(max_y, __shfl_down_sync(0xFFFFFFFFu, max_y, offset));
+    flip_x = max(flip_x, __shfl_down_sync(0xFFFFFFFFu, flip_x, offset));
+    flip_y = max(flip_y, __shfl_down_sync(0xFFFFFFFFu, flip_y, offset));
+  }
+
+  if ((threadIdx.x & 31u) == 0) {
+    atomicMax(&box[0], static_cast<unsigned int>(flip_x));
+    atomicMax(&box[1], static_cast<unsigned int>(max_x));
+    atomicMax(&box[2], static_cast<unsigned int>(flip_y));
+    atomicMax(&box[3], static_cast<unsigned int>(max_y));
+  }
+}
+
 __global__ void DeltaKernel(const uint8_t *__restrict__ cur, size_t cur_pitch,
                             const uint8_t *__restrict__ ref, size_t ref_pitch,
                             uint8_t *__restrict__ delta, size_t delta_pitch,
@@ -62,15 +94,20 @@ __global__ void ThresholdKernel(const uint8_t *__restrict__ delta, size_t delta_
                                 int width, int lo_y, int hi_y,
                                 uint8_t min_threshold, uint8_t max_threshold,
                                 uint32_t *__restrict__ out_count,
-                                unsigned long long *__restrict__ out_sum) {
+                                unsigned long long *__restrict__ out_sum,
+                                unsigned int *__restrict__ out_box,
+                                int height) {
   const int x = blockIdx.x * blockDim.x + threadIdx.x;
   const int y = lo_y + blockIdx.y * blockDim.y + threadIdx.y;
-  if (x >= width || y > hi_y) return;
+  // No early return: the ballot and the shuffles below are warp-wide, and a
+  // lane that has left cannot take part in them. Out of range lanes carry on
+  // with alarmed = false and simply write nothing.
+  const bool inside = (x < width) && (y <= hi_y);
 
-  const uint8_t d = delta[y * delta_pitch + x];
-  const uint8_t p = poly[y * poly_pitch + x];
-  const bool alarmed = (p != 0) && (d > min_threshold) && (d <= max_threshold);
-  mask[y * mask_pitch + x] = alarmed ? kWhite : kBlack;
+  const uint8_t d = inside ? delta[y * delta_pitch + x] : 0;
+  const uint8_t p = inside ? poly[y * poly_pitch + x] : 0;
+  const bool alarmed = inside && (p != 0) && (d > min_threshold) && (d <= max_threshold);
+  if (inside) mask[y * mask_pitch + x] = alarmed ? kWhite : kBlack;
 
   // One atomic per warp rather than per alarmed pixel: at 4K with a lively
   // scene the per-pixel version is most of the kernel's time.
@@ -83,6 +120,8 @@ __global__ void ThresholdKernel(const uint8_t *__restrict__ delta, size_t delta_
     atomicAdd(out_count, __popc(active));
     atomicAdd(out_sum, static_cast<unsigned long long>(sum));
   }
+
+  AccumulateBox(alarmed, x, y, width, height, out_box);
 }
 
 // The filter stage of Zone::CheckAlarms: a white pixel survives when it takes
@@ -99,13 +138,15 @@ __global__ void FilterKernel(const uint8_t *__restrict__ mask_in, size_t in_pitc
                              const int *__restrict__ row_hi_x,
                              int width, int lo_y, int hi_y,
                              int box_x, int box_y,
-                             uint32_t *__restrict__ out_count) {
+                             uint32_t *__restrict__ out_count,
+                             unsigned int *__restrict__ out_box,
+                             int height) {
   const int x = blockIdx.x * blockDim.x + threadIdx.x;
   const int y = lo_y + blockIdx.y * blockDim.y + threadIdx.y;
-  if (x >= width || y > hi_y) return;
+  const bool inside = (x < width) && (y <= hi_y);
 
   bool keep = false;
-  if (mask_in[y * in_pitch + x] == kWhite) {
+  if (inside && mask_in[y * in_pitch + x] == kWhite) {
     const int lo_x = row_lo_x[y];
     const int hi_x = row_hi_x[y];
     if (lo_x >= 0 && x >= lo_x && x <= hi_x) {
@@ -130,20 +171,22 @@ __global__ void FilterKernel(const uint8_t *__restrict__ mask_in, size_t in_pitc
     }
   }
 
-  mask_out[y * out_pitch + x] = keep ? kWhite : kBlack;
+  if (inside) mask_out[y * out_pitch + x] = keep ? kWhite : kBlack;
 
   const unsigned int active = __ballot_sync(0xFFFFFFFFu, keep);
   if ((threadIdx.x & 31u) == 0 && active) atomicAdd(out_count, __popc(active));
+
+  AccumulateBox(keep, x, y, width, height, out_box);
 }
 
 // Components are 4-connected, matching the CPU pass, which only ever looks at
 // the pixel to the left and the one above.
 __global__ void LabelInitKernel(const uint8_t *__restrict__ mask, size_t mask_pitch,
                                 uint32_t *__restrict__ labels,
-                                int width, int lo_y, int hi_y) {
-  const int x = blockIdx.x * blockDim.x + threadIdx.x;
+                                int width, int lo_x, int hi_x, int lo_y, int hi_y) {
+  const int x = lo_x + blockIdx.x * blockDim.x + threadIdx.x;
   const int y = lo_y + blockIdx.y * blockDim.y + threadIdx.y;
-  if (x >= width || y > hi_y) return;
+  if (x > hi_x || y > hi_y) return;
 
   const uint32_t idx = static_cast<uint32_t>(y) * width + x;
   labels[idx] = mask[y * mask_pitch + x] ? idx : kNoSlot;
@@ -193,7 +236,8 @@ __device__ __forceinline__ uint32_t SegmentedMinScan(uint32_t value, bool valid,
 }
 
 __global__ void LabelRowSweepKernel(uint32_t *__restrict__ labels,
-                                    int width, int lo_y, int hi_y,
+                                    int width, int lo_x, int hi_x,
+                                    int lo_y, int hi_y,
                                     int *__restrict__ changed) {
   const int lane = threadIdx.x & 31;
   const int warp_in_block = threadIdx.x >> 5;
@@ -204,9 +248,9 @@ __global__ void LabelRowSweepKernel(uint32_t *__restrict__ labels,
   bool wrote = false;
 
   uint32_t carry = kNoSlot;
-  for (int base = 0; base < width; base += 32) {
+  for (int base = lo_x; base <= hi_x; base += 32) {
     const int x = base + lane;
-    const bool inside = x < width;
+    const bool inside = x <= hi_x;
     const uint32_t label = inside ? labels[row + x] : kNoSlot;
     const bool valid = inside && label != kNoSlot;
     const unsigned int valid_mask = __ballot_sync(0xFFFFFFFFu, valid);
@@ -225,9 +269,10 @@ __global__ void LabelRowSweepKernel(uint32_t *__restrict__ labels,
   // Right to left, so a minimum sitting at the right of a run reaches the rest
   // of it without waiting for another round.
   carry = kNoSlot;
-  for (int base = ((width + 31) / 32) * 32 - 32; base >= 0; base -= 32) {
+  const int span = hi_x - lo_x + 1;
+  for (int base = lo_x + ((span + 31) / 32) * 32 - 32; base >= lo_x; base -= 32) {
     const int x = base + (31 - lane);
-    const bool inside = x < width;
+    const bool inside = x <= hi_x;
     const uint32_t label = inside ? labels[row + x] : kNoSlot;
     const bool valid = inside && label != kNoSlot;
     const unsigned int valid_mask = __ballot_sync(0xFFFFFFFFu, valid);
@@ -245,14 +290,15 @@ __global__ void LabelRowSweepKernel(uint32_t *__restrict__ labels,
 }
 
 __global__ void LabelColSweepKernel(uint32_t *__restrict__ labels,
-                                    int width, int lo_y, int hi_y,
+                                    int width, int lo_x, int hi_x,
+                                    int lo_y, int hi_y,
                                     int chunk, int *__restrict__ changed) {
   const int rows = hi_y - lo_y + 1;
   const int chunks_per_col = (rows + chunk - 1) / chunk;
   const int tid = blockIdx.x * blockDim.x + threadIdx.x;
-  const int x = tid / chunks_per_col;
+  const int x = lo_x + tid / chunks_per_col;
   const int chunk_index = tid % chunks_per_col;
-  if (x >= width) return;
+  if (x > hi_x) return;
 
   const int from = lo_y + chunk_index * chunk;
   const int to = min(from + chunk, hi_y + 1);
@@ -296,11 +342,11 @@ __global__ void LabelColSweepKernel(uint32_t *__restrict__ labels,
 
 __global__ void BlobSlotKernel(const uint32_t *__restrict__ labels,
                                uint32_t *__restrict__ slot_map,
-                               int width, int lo_y, int hi_y,
+                               int width, int lo_x, int hi_x, int lo_y, int hi_y,
                                uint32_t *__restrict__ blob_count) {
-  const int x = blockIdx.x * blockDim.x + threadIdx.x;
+  const int x = lo_x + blockIdx.x * blockDim.x + threadIdx.x;
   const int y = lo_y + blockIdx.y * blockDim.y + threadIdx.y;
-  if (x >= width || y > hi_y) return;
+  if (x > hi_x || y > hi_y) return;
 
   const uint32_t idx = static_cast<uint32_t>(y) * width + x;
   // The pixel whose label is its own index is the component's canonical one,
@@ -313,17 +359,17 @@ __global__ void BlobSlotKernel(const uint32_t *__restrict__ labels,
 
 __global__ void BlobStatsKernel(const uint32_t *__restrict__ labels,
                                 const uint32_t *__restrict__ slot_map,
-                                int width, int lo_y, int hi_y,
+                                int width, int lo_x, int hi_x, int lo_y, int hi_y,
                                 uint32_t *__restrict__ counts,
                                 int *__restrict__ lo_xs, int *__restrict__ hi_xs,
                                 int *__restrict__ lo_ys, int *__restrict__ hi_ys,
                                 unsigned long long *__restrict__ x_sums,
                                 unsigned long long *__restrict__ y_sums) {
-  const int x = blockIdx.x * blockDim.x + threadIdx.x;
+  const int x = lo_x + blockIdx.x * blockDim.x + threadIdx.x;
   const int y = lo_y + blockIdx.y * blockDim.y + threadIdx.y;
 
   uint32_t slot = kMaxBlobs;
-  if (x < width && y <= hi_y) {
+  if (x <= hi_x && y <= hi_y && x < width) {
     const uint32_t idx = static_cast<uint32_t>(y) * width + x;
     const uint32_t label = labels[idx];
     if (label != kNoSlot) slot = slot_map[label];
@@ -707,6 +753,9 @@ bool MotionDetector::Detect(const uint8_t *y_plane, size_t pitch, std::vector<Zo
   uint32_t *filter_count = reinterpret_cast<uint32_t *>(counters + 2);
   uint32_t *blob_count = reinterpret_cast<uint32_t *>(counters + 3);
   int *changed = reinterpret_cast<int *>(counters + 4);
+  // Four unsigned ints holding the box the alarmed (or filtered) pixels sit in:
+  // flipped low x, high x, flipped low y, high y.
+  unsigned int *box = reinterpret_cast<unsigned int *>(counters + 5);
   uint32_t *blob_counts = reinterpret_cast<uint32_t *>(counters + 8);
   int *blob_lo_x = reinterpret_cast<int *>(blob_counts + kMaxBlobs);
   int *blob_hi_x = blob_lo_x + kMaxBlobs;
@@ -727,24 +776,52 @@ bool MotionDetector::Detect(const uint8_t *y_plane, size_t pitch, std::vector<Zo
     ThresholdKernel<<<zone_grid, block, 0, stream>>>(
         impl_->delta, impl_->delta_pitch, zone.mask, zone.mask_pitch,
         zone.alarm, zone.alarm_pitch, width_, zone.lo_y, zone.hi_y,
-        zone.min_threshold, zone.max_threshold, alarm_count, diff_sum);
+        zone.min_threshold, zone.max_threshold, alarm_count, diff_sum,
+        box, height_);
 
     const uint8_t *stage = zone.alarm;
     size_t stage_pitch = zone.alarm_pitch;
 
     if (zone.want_filter) {
+      // The filter reports its own box, since what it leaves behind is what the
+      // labelling will see.
+      cudaMemsetAsync(box, 0, 4 * sizeof(unsigned int), stream);
       FilterKernel<<<zone_grid, block, 0, stream>>>(
           zone.alarm, zone.alarm_pitch, zone.filtered, zone.filtered_pitch,
           zone.row_lo_x, zone.row_hi_x, width_, zone.lo_y, zone.hi_y,
-          zone.filter_box_x, zone.filter_box_y, filter_count);
+          zone.filter_box_x, zone.filter_box_y, filter_count, box, height_);
       stage = zone.filtered;
       stage_pitch = zone.filtered_pitch;
     }
 
+    // Read the counts and the box now rather than at the end of the zone: the
+    // labelling only has to cover the pixels that survived, which on a real
+    // scene is a corner of the zone rather than all of it, and a frame with
+    // nothing alarmed skips the stage altogether.
+    unsigned long long host_counters[4] = {0, 0, 0, 0};
+    unsigned int host_box[4] = {0, 0, 0, 0};
+    cudaMemcpyAsync(host_counters, counters, sizeof(host_counters), cudaMemcpyDeviceToHost, stream);
+    cudaMemcpyAsync(host_box, box, sizeof(host_box), cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
+
+    result.alarm_pixels = static_cast<uint32_t>(host_counters[0]);
+    result.pixel_diff_sum = host_counters[1];
+    result.filter_pixels = zone.want_filter ? static_cast<uint32_t>(host_counters[2])
+                                            : result.alarm_pixels;
+
+    const uint32_t stage_pixels = zone.want_filter ? result.filter_pixels : result.alarm_pixels;
+    const int box_lo_x = width_ - 1 - static_cast<int>(host_box[0]);
+    const int box_hi_x = static_cast<int>(host_box[1]);
+    const int box_lo_y = height_ - 1 - static_cast<int>(host_box[2]);
+    const int box_hi_y = static_cast<int>(host_box[3]);
+    const int box_width = box_hi_x - box_lo_x + 1;
+    const int box_rows = box_hi_y - box_lo_y + 1;
+
     uint32_t host_blob_count = 0;
-    if (zone.want_blobs) {
-      LabelInitKernel<<<zone_grid, block, 0, stream>>>(stage, stage_pitch, impl_->labels,
-                                            width_, zone.lo_y, zone.hi_y);
+    if (zone.want_blobs && stage_pixels && box_width > 0 && box_rows > 0) {
+      const dim3 box_grid = Grid2D(box_width, box_rows, block);
+      LabelInitKernel<<<box_grid, block, 0, stream>>>(stage, stage_pitch, impl_->labels,
+                                            width_, box_lo_x, box_hi_x, box_lo_y, box_hi_y);
       // One thread per row, then one per column, alternating until nothing
       // moves. Each sweep is a launch and one 4-byte readback; a sweep settles
       // a whole run at once, so this is a few rounds rather than one per pixel
@@ -755,18 +832,19 @@ bool MotionDetector::Detect(const uint8_t *y_plane, size_t pitch, std::vector<Zo
       // still fit inside one chunk.
       constexpr int kSweepChunk = 128;
       const dim3 line_block(128);
-      const int col_chunks = (rows + kSweepChunk - 1) / kSweepChunk;
+      const int col_chunks = (box_rows + kSweepChunk - 1) / kSweepChunk;
       // One warp per row, so a block of 128 threads covers four rows.
       const int rows_per_block = line_block.x / 32;
-      const dim3 row_grid((rows + rows_per_block - 1) / rows_per_block);
-      const dim3 col_grid((width_ * col_chunks + line_block.x - 1) / line_block.x);
+      const dim3 row_grid((box_rows + rows_per_block - 1) / rows_per_block);
+      const dim3 col_grid((box_width * col_chunks + line_block.x - 1) / line_block.x);
       int iterations = 0;
       for (; iterations < kMaxLabelIterations; iterations++) {
         cudaMemsetAsync(changed, 0, sizeof(int), stream);
         LabelRowSweepKernel<<<row_grid, line_block, 0, stream>>>(
-            impl_->labels, width_, zone.lo_y, zone.hi_y, changed);
+            impl_->labels, width_, box_lo_x, box_hi_x, box_lo_y, box_hi_y, changed);
         LabelColSweepKernel<<<col_grid, line_block, 0, stream>>>(
-            impl_->labels, width_, zone.lo_y, zone.hi_y, kSweepChunk, changed);
+            impl_->labels, width_, box_lo_x, box_hi_x, box_lo_y, box_hi_y,
+            kSweepChunk, changed);
         int host_changed = 0;
         cudaMemcpyAsync(&host_changed, changed, sizeof(int), cudaMemcpyDeviceToHost, stream);
         cudaStreamSynchronize(stream);
@@ -777,8 +855,8 @@ bool MotionDetector::Detect(const uint8_t *y_plane, size_t pitch, std::vector<Zo
       // slot_map is indexed by label, and labels only exist in this zone's
       // rows, so clearing the whole plane was 33MB of writes per zone per frame
       // at 4K for a zone that may cover a tenth of it.
-      cudaMemsetAsync(impl_->slot_map + static_cast<size_t>(zone.lo_y) * width_, 0xFF,
-                      static_cast<size_t>(rows) * width_ * sizeof(uint32_t), stream);
+      cudaMemsetAsync(impl_->slot_map + static_cast<size_t>(box_lo_y) * width_, 0xFF,
+                      static_cast<size_t>(box_rows) * width_ * sizeof(uint32_t), stream);
       cudaMemsetAsync(blob_counts, 0, kMaxBlobs * sizeof(uint32_t), stream);
       // Bounding boxes start inverted so atomicMin/atomicMax build them up.
       cudaMemsetAsync(blob_lo_x, 0x7F, kMaxBlobs * sizeof(int), stream);
@@ -788,27 +866,17 @@ bool MotionDetector::Detect(const uint8_t *y_plane, size_t pitch, std::vector<Zo
       cudaMemsetAsync(blob_x_sum, 0, kMaxBlobs * sizeof(unsigned long long), stream);
       cudaMemsetAsync(blob_y_sum, 0, kMaxBlobs * sizeof(unsigned long long), stream);
 
-      BlobSlotKernel<<<zone_grid, block, 0, stream>>>(impl_->labels, impl_->slot_map,
-                                           width_, zone.lo_y, zone.hi_y, blob_count);
-      BlobStatsKernel<<<zone_grid, block, 0, stream>>>(impl_->labels, impl_->slot_map,
-                                            width_, zone.lo_y, zone.hi_y,
+      BlobSlotKernel<<<box_grid, block, 0, stream>>>(impl_->labels, impl_->slot_map,
+                                           width_, box_lo_x, box_hi_x, box_lo_y, box_hi_y,
+                                           blob_count);
+      BlobStatsKernel<<<box_grid, block, 0, stream>>>(impl_->labels, impl_->slot_map,
+                                            width_, box_lo_x, box_hi_x, box_lo_y, box_hi_y,
                                             blob_counts, blob_lo_x, blob_hi_x,
                                             blob_lo_y, blob_hi_y,
                                             blob_x_sum, blob_y_sum);
       cudaMemcpyAsync(&host_blob_count, blob_count, sizeof(uint32_t), cudaMemcpyDeviceToHost, stream);
       cudaStreamSynchronize(stream);
     }
-
-    // alarm count, diff sum, filter count and blob count are consecutive in the
-    // scratch allocation, so they come back in one transfer rather than three.
-    unsigned long long host_counters[4] = {0, 0, 0, 0};
-    cudaMemcpyAsync(host_counters, counters, sizeof(host_counters), cudaMemcpyDeviceToHost, stream);
-    cudaStreamSynchronize(stream);
-
-    result.alarm_pixels = static_cast<uint32_t>(host_counters[0]);
-    result.pixel_diff_sum = host_counters[1];
-    result.filter_pixels = zone.want_filter ? static_cast<uint32_t>(host_counters[2])
-                                            : result.alarm_pixels;
 
     if (zone.want_blobs && host_blob_count) {
       if (host_blob_count > kMaxBlobs) {
