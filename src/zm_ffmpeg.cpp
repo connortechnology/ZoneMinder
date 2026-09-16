@@ -835,6 +835,21 @@ void FFMPEGInit() {
       // lost; with it, how the card is really behaving lands beside the
       // capture it belongs to.
       ni_log_set_callback(log_ni_callback);
+      // Set the level here rather than leaving it to nidec.c, which derives it
+      // from av_log_get_level() when the decoder opens. That only works if
+      // this ran first, and it evidently does not: the callback was installed
+      // and nothing arrived, because ni_log2() drops anything above the level
+      // before it reaches a callback and the level was still its INFO default.
+      //
+      // Driven from our own debug level so the volume is controllable.
+      // libxcoder's TRACE is per NVMe transaction and will bury the log, so it
+      // needs asking for specifically.
+      const int zm_level = logDebugging() ? Logger::fetch()->level() : 0;
+      ni_log_level_t ni_level = NI_LOG_INFO;
+      if (zm_level >= Logger::DEBUG8) ni_level = NI_LOG_TRACE;
+      else if (zm_level >= Logger::DEBUG3) ni_level = NI_LOG_DEBUG;
+      ni_log_set_level(ni_level);
+      Info("libxcoder logging at level %d (ZM debug level %d)", ni_level, zm_level);
 #endif
     } else {
       Debug(1,"Not enabling ffmpeg logs, as LOG_FFMPEG and/or LOG_DEBUG is disabled in options, or this monitor is not part of your debug targets");
