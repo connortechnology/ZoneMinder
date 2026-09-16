@@ -36,9 +36,43 @@ void AnalysisThread::Join() {
 void AnalysisThread::Run() {
   SystemTimePoint last_analysis_time = std::chrono::system_clock::now();
 
+  // Analyse_Quadra is 23% of the frame interval and the reference blend 4%,
+  // yet the analysis thread sits one to two seconds behind capture and only
+  // holds there by skipping a quarter of its inferences. Either the rest of
+  // Analyse() accounts for the difference, or the thread is idle and the lag
+  // is where it reads from rather than how fast it reads. Time the whole call
+  // and count the times there was nothing to do, which tells those apart.
+  uint64_t analyse_us = 0, analyse_max_us = 0, analysed = 0, idle = 0;
+  SystemTimePoint loop_reported = std::chrono::system_clock::now();
+
   while (!(terminate_ or zm_terminate)) {
     // Some periodic updates are required for variable capturing framerate
+    SystemTimePoint analyse_start = std::chrono::system_clock::now();
     int ret = monitor_->Analyse();
+    {
+      const SystemTimePoint now = std::chrono::system_clock::now();
+      const uint64_t us = std::chrono::duration_cast<Microseconds>(now - analyse_start).count();
+      if (ret < 0) {
+        idle++;
+      } else {
+        analyse_us += us;
+        if (us > analyse_max_us) analyse_max_us = us;
+        analysed++;
+      }
+      if (FPSeconds(now - loop_reported).count() >= 60.0) {
+        const double secs = FPSeconds(now - loop_reported).count();
+        Info("Analyse loop: %ju frames in %.0fs (%.1f/s), mean %.1fms, max %.1fms, "
+             "using %.0f%% of the thread; %ju passes had nothing to do",
+             static_cast<uintmax_t>(analysed), secs,
+             analysed / secs,
+             analysed ? analyse_us / 1000.0 / analysed : 0.0,
+             analyse_max_us / 1000.0,
+             analyse_us / 10000.0 / secs,
+             static_cast<uintmax_t>(idle));
+        analyse_us = analyse_max_us = analysed = idle = 0;
+        loop_reported = now;
+      }
+    }
     if (ret < 0) {
       if (!(terminate_ or zm_terminate)) {
         // We wait on the packetqueue condition variable instead of sleeping.
