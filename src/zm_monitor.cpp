@@ -2171,8 +2171,16 @@ void Monitor::UpdateFPS() {
         const int card = -1;
 #endif
         zm_set_device_frame_card(card);
-        Info("Decode pool on card %d: %s; device frame budget is %u",
-             card, describe_hw_pool_line(pool).c_str(), zm_device_frame_budget());
+        // Only name a card when there is one to name. Every non-NetInt backend
+        // reports -1, and "on card -1" reads as a failure rather than as the
+        // absence of a concept that does not apply.
+        if (card >= 0) {
+          Info("Decode pool on card %d: %s; device frame budget is %u",
+               card, describe_hw_pool_line(pool).c_str(), zm_device_frame_budget());
+        } else {
+          Info("Decode pool: %s; device frame budget is %u",
+               describe_hw_pool_line(pool).c_str(), zm_device_frame_budget());
+        }
         if (pool.pool_size > 0 and zm_device_frame_budget() >= static_cast<unsigned int>(pool.pool_size)) {
           Warning("Device frame budget %u is at or above the decode pool of %d frames; "
                   "decoding will stall waiting for slots we are holding",
