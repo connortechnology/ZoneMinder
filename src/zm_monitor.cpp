@@ -2519,7 +2519,30 @@ int Monitor::Analyse() {
 #if !AI_IN_DECODE
 #if HAVE_QUADRA
                 if (objectdetection == OBJECT_DETECTION_QUADRA) {
+                  // The AI lag is not explained by what it costs to run: AI
+                  // receive is 31ms about twice a second, under 5% of this
+                  // thread, and taking 120 device queries an inference out of
+                  // the poll loop moved it not at all. Time the whole call so
+                  // the question stops being argued from the parts.
+                  SystemTimePoint quadra_start = std::chrono::system_clock::now();
                   std::pair<int, std::string> results = Analyse_Quadra(packet);
+                  const uint64_t quadra_us = std::chrono::duration_cast<Microseconds>(
+                      std::chrono::system_clock::now() - quadra_start).count();
+                  quadra_analyse_us_ += quadra_us;
+                  if (quadra_us > quadra_analyse_max_us_) quadra_analyse_max_us_ = quadra_us;
+                  // Anything past a frame interval is this thread losing
+                  // ground, which is the thing the lag is made of.
+                  const double frame_us = get_capture_fps() > 0 ? 1e6 / get_capture_fps() : 0;
+                  if (frame_us > 0 and quadra_us > frame_us) quadra_analyse_over_++;
+                  if (++quadra_analyse_count_ % 500 == 0) {
+                    Info("Quadra analyse over %ju frames: mean %.1fms, max %.1fms, "
+                         "%ju took longer than the %.1fms frame interval",
+                         static_cast<uintmax_t>(quadra_analyse_count_),
+                         quadra_analyse_us_ / 1000.0 / quadra_analyse_count_,
+                         quadra_analyse_max_us_ / 1000.0,
+                         static_cast<uintmax_t>(quadra_analyse_over_),
+                         frame_us / 1000.0);
+                  }
                 }
 #endif
 #if HAVE_MX_ACCL_H
