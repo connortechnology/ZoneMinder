@@ -259,3 +259,182 @@ TEST_CASE("av_log_should_print", "[ffmpeg]") {
     REQUIRE(suppressed == 0);
   }
 }
+
+TEST_CASE("xcoder_param_int", "[ffmpeg]") {
+  // The shape the Options column actually holds.
+  const std::string m28 = "out=hw:maxExtraHwFrameCnt=20:extendPoolSize=32";
+
+  SECTION("reads a parameter from the middle and the end") {
+    CHECK(xcoder_param_int(m28, "maxExtraHwFrameCnt") == 20);
+    CHECK(xcoder_param_int(m28, "extendPoolSize") == 32);
+  }
+
+  SECTION("a key that is absent is not a zero") {
+    // -1 rather than 0, because 0 is a meaningful value for extendPoolSize
+    // and would read as "configured to nothing" rather than "not configured".
+    CHECK(xcoder_param_int(m28, "missing") == -1);
+    CHECK(xcoder_param_int("out=hw", "maxExtraHwFrameCnt") == -1);
+    CHECK(xcoder_param_int("", "maxExtraHwFrameCnt") == -1);
+  }
+
+  SECTION("keeps the quotes the Options column stores") {
+    CHECK(xcoder_param_int("'out=hw:extendPoolSize=32'", "extendPoolSize") == 32);
+    CHECK(xcoder_param_int("\"out=hw:extendPoolSize=32\"", "extendPoolSize") == 32);
+  }
+
+  SECTION("a key that is a prefix of another does not match it") {
+    // Searching for the name inside the string would return 32 for both.
+    CHECK(xcoder_param_int("out=hw:extendPoolSizeExtra=32", "extendPoolSize") == -1);
+    CHECK(xcoder_param_int("out=hw:xmaxExtraHwFrameCnt=9", "maxExtraHwFrameCnt") == -1);
+  }
+
+  SECTION("a value that is not a number is not half-read") {
+    CHECK(xcoder_param_int("out=hw:extendPoolSize=abc", "extendPoolSize") == -1);
+    CHECK(xcoder_param_int("out=hw:extendPoolSize=32x", "extendPoolSize") == -1);
+    CHECK(xcoder_param_int("out=hw:extendPoolSize=", "extendPoolSize") == -1);
+    CHECK(xcoder_param_int("out=hw:extendPoolSize=-4", "extendPoolSize") == -1);
+  }
+
+  SECTION("a flag with no value is skipped rather than confusing the scan") {
+    CHECK(xcoder_param_int("out=hw:someflag:extendPoolSize=8", "extendPoolSize") == 8);
+  }
+
+  SECTION("zero is a value, not an absence") {
+    CHECK(xcoder_param_int("out=hw:extendPoolSize=0", "extendPoolSize") == 0);
+  }
+}
+
+TEST_CASE("decode_rate_worth_reporting", "[ffmpeg]") {
+  const double budget = 66900;   // 66.9ms, a 14.95fps capture
+
+  SECTION("a hair over budget is not worth saying") {
+    // 67.2ms against 67.0ms, three parts in a thousand. The average is an EMA
+    // and the budget comes from a smoothed capture rate; they do not agree to
+    // that precision. 29% of a day's warnings on one monitor were under a
+    // tenth over, and their decoder queue averaged 3.7 frames.
+    CHECK_FALSE(decode_rate_worth_reporting(67200, 67000));
+    CHECK_FALSE(decode_rate_worth_reporting(budget * 1.02, budget));
+    CHECK_FALSE(decode_rate_worth_reporting(budget * 1.09, budget));
+  }
+
+  SECTION("a tenth over is where the queue starts to build") {
+    CHECK(decode_rate_worth_reporting(budget * 1.11, budget));
+    CHECK(decode_rate_worth_reporting(budget * 1.5, budget));
+    // 96.3ms against 66.5ms, the case that really was starving the decoder.
+    CHECK(decode_rate_worth_reporting(96300, 66500));
+  }
+
+  SECTION("under budget is never worth saying") {
+    CHECK_FALSE(decode_rate_worth_reporting(budget * 0.5, budget));
+    CHECK_FALSE(decode_rate_worth_reporting(budget, budget));
+  }
+
+  SECTION("no capture rate means no budget to compare against") {
+    // get_capture_fps() returns 0 before the rate is known, and dividing by it
+    // would make the budget infinite or zero rather than absent.
+    CHECK_FALSE(decode_rate_worth_reporting(100000, 0));
+    CHECK_FALSE(decode_rate_worth_reporting(100000, -1));
+  }
+}
+
+TEST_CASE("analysis_should_pace at a few frames of slack", "[ffmpeg]") {
+  // The threshold is now taken from the frame rate rather than a flat two
+  // seconds, because pacing sleeps to the capture rate and so preserves
+  // whatever lag it already has. At 15fps four frames is about 267ms.
+  const int64_t stale = (1000000 / 15) * 4;
+  const int burst = 8;
+
+  SECTION("a lag inside the slack still paces") {
+    CHECK(analysis_should_pace(0, burst, 100000, stale, false));
+  }
+
+  SECTION("a lag past the slack catches up instead of holding it") {
+    // This is the case that used to pace: a third of a second behind is well
+    // inside two seconds, so analysis slept and stayed a third of a second
+    // behind indefinitely.
+    CHECK_FALSE(analysis_should_pace(0, burst, 330000, stale, false));
+  }
+
+  SECTION("a second behind is nowhere near acceptable now") {
+    CHECK_FALSE(analysis_should_pace(0, burst, 1000000, stale, false));
+    CHECK_FALSE(analysis_should_pace(0, burst, 2000000, stale, false));
+  }
+
+  SECTION("hysteresis still applies, at half the new threshold") {
+    // Catching up continues until well inside the slack, so a lag sitting on
+    // the line does not flip every frame.
+    CHECK_FALSE(analysis_should_pace(0, burst, stale * 3 / 4, stale, true));
+    CHECK(analysis_should_pace(0, burst, stale / 4, stale, true));
+  }
+
+  SECTION("frames queued still burst regardless of age") {
+    CHECK_FALSE(analysis_should_pace(burst + 1, burst, 0, stale, false));
+  }
+}
+
+TEST_CASE("analysis_should_pace", "[ffmpeg]") {
+  const int burst = 7;                       // image_buffer_count/4 on a 30-slot ring
+  const int64_t stale = 2 * 1000 * 1000;     // 2s, as Monitor::Analyse uses
+  const bool paced = false, catching = true;
+
+  SECTION("keeping up: pace, so the analyser does not lap the streamers") {
+    CHECK(analysis_should_pace(0, burst, 0, stale, paced));
+    CHECK(analysis_should_pace(3, burst, 100000, stale, paced));
+    CHECK(analysis_should_pace(burst, burst, 0, stale, paced));
+  }
+
+  SECTION("frames behind the decoder: burst") {
+    CHECK_FALSE(analysis_should_pace(burst + 1, burst, 0, stale, paced));
+    CHECK_FALSE(analysis_should_pace(100, burst, 0, stale, paced));
+  }
+
+  SECTION("seconds behind real time: burst, even with the decoder alongside") {
+    // The case the frame counts cannot see. When the decoder is itself late
+    // both counters advance together and decoder_lag stays small, so pacing
+    // held the lag open until the queue overflowed.
+    CHECK_FALSE(analysis_should_pace(0, burst, 2'100'000, stale, paced));
+    CHECK_FALSE(analysis_should_pace(2, burst, 5'000'000, stale, paced));
+  }
+
+  SECTION("entering takes the full threshold") {
+    CHECK(analysis_should_pace(0, burst, 1'900'000, stale, paced));
+    CHECK(analysis_should_pace(0, burst, stale, stale, paced));
+  }
+
+  SECTION("leaving takes half, so a lag on the line does not flip every frame") {
+    // m4 settled between 2.00 and 2.10s. With one threshold it crossed 2.4
+    // times a second; with two it keeps catching up until it is under 1s.
+    CHECK_FALSE(analysis_should_pace(0, burst, 1'900'000, stale, catching));
+    CHECK_FALSE(analysis_should_pace(0, burst, 1'100'000, stale, catching));
+    CHECK(analysis_should_pace(0, burst, 900'000, stale, catching));
+  }
+
+  SECTION("no staleness threshold leaves the frame-count behaviour alone") {
+    CHECK(analysis_should_pace(0, burst, 10'000'000, 0, paced));
+    CHECK(analysis_should_pace(0, burst, 10'000'000, 0, catching));
+    CHECK_FALSE(analysis_should_pace(burst + 1, burst, 10'000'000, 0, paced));
+  }
+}
+
+TEST_CASE("hw_jpeg_encoder_name", "[ffmpeg]") {
+  SECTION("devices whose jpeg encoder is worth using") {
+    REQUIRE(std::string(hw_jpeg_encoder_name(AV_HWDEVICE_TYPE_VAAPI)) == "mjpeg_vaapi");
+    REQUIRE(std::string(hw_jpeg_encoder_name(AV_HWDEVICE_TYPE_QSV)) == "mjpeg_qsv");
+  }
+  SECTION("no device at all") {
+    REQUIRE(hw_jpeg_encoder_name(AV_HWDEVICE_TYPE_NONE) == nullptr);
+  }
+#ifdef HAVE_QUADRA
+  // The enum value only exists in NetInt's ffmpeg, so this can only be asserted
+  // where that is what we built against.
+  SECTION("NetInt Quadra is excluded deliberately") {
+    // jpeg_ni_quadra_enc exists, but it costs the card far more than the jpegs
+    // are worth. Returning it here would quietly opt every Quadra monitor in.
+    REQUIRE(hw_jpeg_encoder_name(AV_HWDEVICE_TYPE_NI_QUADRA) == nullptr);
+  }
+#endif
+  SECTION("a device with no jpeg encoder falls back to software") {
+    REQUIRE(hw_jpeg_encoder_name(AV_HWDEVICE_TYPE_CUDA) == nullptr);
+    REQUIRE(hw_jpeg_encoder_name(AV_HWDEVICE_TYPE_VDPAU) == nullptr);
+  }
+}

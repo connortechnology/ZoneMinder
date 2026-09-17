@@ -41,7 +41,8 @@ PacketQueue::PacketQueue():
   max_keyframe_interval_(0),
   frames_since_last_keyframe_(0),
   clear_packets_pending_(false),
-  next_queue_index_(0)
+  next_queue_index_(0),
+  video_packets_queued_(0)
 {
 }
 
@@ -130,6 +131,7 @@ bool PacketQueue::queuePacket(std::shared_ptr<ZMPacket> add_packet) {
       Debug(1, "Not video stream %d", add_avpacket->stream_index);
     }
 
+    if (add_avpacket->stream_index == video_stream_id) video_packets_queued_++;
     add_packet->queue_index = next_queue_index_++;
     pktQueue.push_back(add_packet);
 
@@ -648,6 +650,10 @@ packetqueue_iterator *PacketQueue::get_event_start_packet_it(
 ) {
   std::lock_guard<std::mutex> lck(mutex);
 
+  // Kept because pre_event_count is counted down below, and the check at the
+  // end needs to know how many were asked for.
+  const uint64_t wanted = pre_event_count;
+
   packetqueue_iterator *it = new packetqueue_iterator;
   iterators.push_back(it);
 
@@ -689,9 +695,19 @@ packetqueue_iterator *PacketQueue::get_event_start_packet_it(
   }
 
   if (pre_event_count) {
-    if (packet->image_index < (int)pre_event_count) {
-      // probably just starting up
-      Debug(1, "Hit end of packetqueue before satisfying pre_event_count. Needed %d more video frames", pre_event_count);
+    // Fewer video packets have been queued than the event wanted behind it, so
+    // the frames were never captured rather than dropped: the daemon has not
+    // been running long enough. Every one of these seen on this fleet was
+    // three or four seconds after a restart.
+    //
+    // This test used to read packet->image_index, which is the shared memory
+    // ring slot and wraps at image_buffer_count, so it was true only when the
+    // slot number happened to be small and the warning fired on every start.
+    if (video_packets_queued_ < wanted) {
+      Debug(1, "Hit end of packetqueue before satisfying pre_event_count."
+               " Needed %d more video frames, but only %ju have been captured"
+               " since startup", pre_event_count,
+            static_cast<uintmax_t>(video_packets_queued_));
     } else {
       Warning("Hit end of packetqueue before satisfying pre_event_count. Needed %d more video frames", pre_event_count);
     }

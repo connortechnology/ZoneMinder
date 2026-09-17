@@ -20,6 +20,7 @@ class AnalysisThread {
   bool Stopped() const { return terminate_; }
 
  private:
+  bool catching_up_ = false;
   void Run();
 
   Monitor *monitor_;

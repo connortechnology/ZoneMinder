@@ -33,12 +33,97 @@ void AnalysisThread::Join() {
   if (thread_.joinable()) thread_.join();
 }
 
+// Frames of slack before analysis stops pacing and catches up. Enough to ride
+// out ordinary jitter, far short of the two seconds that used to be allowed to
+// become permanent.
+static constexpr int kAnalysisSlackFrames = 4;
+
 void AnalysisThread::Run() {
   SystemTimePoint last_analysis_time = std::chrono::system_clock::now();
 
+  // Analyse_Quadra is 23% of the frame interval and the reference blend 4%,
+  // yet the analysis thread sits one to two seconds behind capture and only
+  // holds there by skipping a quarter of its inferences. Either the rest of
+  // Analyse() accounts for the difference, or the thread is idle and the lag
+  // is where it reads from rather than how fast it reads. Time the whole call
+  // and count the times there was nothing to do, which tells those apart.
+  uint64_t analyse_us = 0, analyse_max_us = 0, analysed = 0, idle = 0;
+  // Work plus wait came to 56% of the thread while the lag persisted, so a
+  // third of each second is going somewhere neither timer sees. Measure the
+  // gap between one Analyse() returning and the next starting: a tight loop
+  // leaves nothing here, and anything large means the thread is held up
+  // outside the call, which no amount of making Analyse() cheaper would fix.
+  uint64_t between_us = 0, between_max_us = 0;
+  // The lag itself, which is the thing being managed. Reading it from the AI
+  // catch-up counters only works when there are detections to run, and a
+  // quiet scene reports nothing either way -- twice now that has looked like
+  // an improvement when it was only an empty field of view.
+  uint64_t lag_us_total = 0, lag_max_us = 0, lag_samples = 0;
+  SystemTimePoint last_analyse_end{};
+  SystemTimePoint loop_reported = std::chrono::system_clock::now();
+
   while (!(terminate_ or zm_terminate)) {
     // Some periodic updates are required for variable capturing framerate
+    SystemTimePoint analyse_start = std::chrono::system_clock::now();
+    if (last_analyse_end.time_since_epoch().count()) {
+      const uint64_t gap = std::chrono::duration_cast<Microseconds>(
+          analyse_start - last_analyse_end).count();
+      between_us += gap;
+      if (gap > between_max_us) between_max_us = gap;
+    }
     int ret = monitor_->Analyse();
+    {
+      const SystemTimePoint now = std::chrono::system_clock::now();
+      last_analyse_end = now;
+      const uint64_t us = std::chrono::duration_cast<Microseconds>(now - analyse_start).count();
+      if (ret < 0) {
+        idle++;
+      } else {
+        analyse_us += us;
+        if (us > analyse_max_us) analyse_max_us = us;
+        analysed++;
+      }
+      {
+        const int64_t lag = monitor_->AnalysisLagUs();
+        if (lag > 0) {
+          lag_us_total += lag;
+          if (static_cast<uint64_t>(lag) > lag_max_us) lag_max_us = lag;
+          lag_samples++;
+        }
+      }
+      if (FPSeconds(now - loop_reported).count() >= 60.0) {
+        const double secs = FPSeconds(now - loop_reported).count();
+        // Split the wait out of the total. Waiting is the decoder not having
+        // finished; the remainder is what analysis actually costs.
+        const uint64_t wait_us = monitor_->TakeAnalyseWaitUs();
+        const uint64_t wait_max_us = monitor_->TakeAnalyseWaitMaxUs();
+        const uint64_t work_us = analyse_us > wait_us ? analyse_us - wait_us : 0;
+        Info("Analyse loop: %ju frames in %.0fs (%.1f/s), mean %.1fms of which "
+             "%.1fms waiting for a decoded packet and %.1fms analysing; max "
+             "%.1fms, longest wait %.1fms; work is %.0f%% of the thread, wait "
+             "%.0f%%, and %.0f%% is between calls (mean %.1fms, max %.1fms); "
+             "%ju passes had nothing to do; analysis lag mean %.0fms max %.0fms",
+             static_cast<uintmax_t>(analysed), secs,
+             analysed / secs,
+             analysed ? analyse_us / 1000.0 / analysed : 0.0,
+             analysed ? wait_us / 1000.0 / analysed : 0.0,
+             analysed ? work_us / 1000.0 / analysed : 0.0,
+             analyse_max_us / 1000.0,
+             wait_max_us / 1000.0,
+             work_us / 10000.0 / secs,
+             wait_us / 10000.0 / secs,
+             between_us / 10000.0 / secs,
+             analysed ? between_us / 1000.0 / analysed : 0.0,
+             between_max_us / 1000.0,
+             static_cast<uintmax_t>(idle),
+             lag_samples ? lag_us_total / 1000.0 / lag_samples : 0.0,
+             lag_max_us / 1000.0);
+        analyse_us = analyse_max_us = analysed = idle = 0;
+        between_us = between_max_us = 0;
+        lag_us_total = lag_max_us = lag_samples = 0;
+        loop_reported = now;
+      }
+    }
     if (ret < 0) {
       if (!(terminate_ or zm_terminate)) {
         // We wait on the packetqueue condition variable instead of sleeping.
@@ -65,7 +150,30 @@ void AnalysisThread::Run() {
     const int decoder_lag =
         monitor_->shared_data->decoder_image_count -
         monitor_->shared_data->analysis_image_count;
-    if (decoder_lag <= burst_lag) {
+    // Stale by more than this and we stop pacing and work through it. Matches
+    // the threshold Monitor::Analyse uses to decide the AI has fallen behind,
+    // so the two agree about what "behind" means.
+    // How far behind real time analysis may sit before it stops pacing and
+    // catches up. Pacing sleeps until a frame interval has passed, so it holds
+    // whatever lag it already has: a hiccup that puts analysis a second behind
+    // keeps it a second behind for as long as it paces. A flat two seconds
+    // meant m4 sat between 1.0 and 2.1s indefinitely, skipping a quarter of
+    // its inferences to stay there, on a thread that was sleeping 38% of the
+    // time.
+    //
+    // Take it from the frame rate instead. A few frames of slack absorbs
+    // jitter without pacing a standing lag into place, and detection then runs
+    // as close to real time as the pipeline allows, which is the point of
+    // doing it at all.
+    const double pace_fps = monitor_->get_capture_fps();
+    const int64_t frame_interval_us =
+        (pace_fps > 0) ? static_cast<int64_t>(1e6 / pace_fps) : 66'666;
+    const int64_t kStaleAfterUs = frame_interval_us * kAnalysisSlackFrames;
+    const bool pace = analysis_should_pace(decoder_lag, burst_lag,
+                                          monitor_->AnalysisLagUs(),
+                                          kStaleAfterUs, catching_up_);
+    catching_up_ = !pace;
+    if (pace) {
       const double fps = monitor_->get_capture_fps();
       if (fps > 0) {
         const Microseconds target_interval(static_cast<int64_t>(1e6 / fps));

@@ -57,9 +57,9 @@ VideoStore::VideoStore(
   encode_count_(0),
   video_encoded(false),
   video_encoder_failed(false),
+  shares_decoder_pool(false),
   video_passthrough_fallback(false),
   hw_device_ctx(nullptr),
-  encoder_pool_shared(false),
   upload_frames_ctx(nullptr),
   resample_ctx(nullptr),
   fifo(nullptr),
@@ -417,19 +417,25 @@ bool VideoStore::open() {
         // was opened with has to be the pool every frame comes from -- which
         // rules out sharing as soon as a software frame is possible at all.
         const AVCodecContext *decoder_ctx = monitor->GetVideoCodecContext();
-        bool rewrites_frames = false;
-#ifdef HAVE_QUADRA
-        if (chosen_codec_data->hwdevice_type == AV_HWDEVICE_TYPE_NI_QUADRA) {
-          rewrites_frames = software_frames_expected(
-              monitor->ObjectDetection() != Monitor::OBJECT_DETECTION_NONE,
-              zm_device_frame_budget());
-        }
-#endif
-        AVBufferRef *const share_pool =
-            encoder_share_pool(decoder_ctx ? decoder_ctx->hw_frames_ctx : nullptr, rewrites_frames);
+        // Sharing the decoder's pool is what keeps a decoded frame out of host
+        // memory, but a frame that could not stay on the device has to be
+        // uploaded, and an upload cannot allocate from a pool the decoder owns.
+        //
+        // On CUDA the uploads go to a pool of this object's own and encode
+        // correctly, so sharing is worth taking even when software frames are
+        // possible. Everywhere else it is not: a VAAPI or Quadra encoder renders
+        // a surface from any pool but its own as black and reports success, so
+        // those keep the conservative rule and stop sharing as soon as a
+        // software frame can appear.
+        bool rewrites_frames = software_frames_expected(
+            monitor->ObjectDetection() != Monitor::OBJECT_DETECTION_NONE,
+            zm_device_frame_budget());
+        if (chosen_codec_data->hwdevice_type == AV_HWDEVICE_TYPE_CUDA)
+          rewrites_frames = false;
+        AVBufferRef *const decoder_pool = decoder_ctx ? decoder_ctx->hw_frames_ctx : nullptr;
         if (setup_hwaccel(video_out_ctx,
               chosen_codec_data, hw_device_ctx, monitor->EncoderHWAccelDevice(), monitor->Width(), monitor->Height(),
-              share_pool)) {
+              encoder_share_pool(decoder_pool, rewrites_frames))) {
           avcodec_free_context(&video_out_ctx);
           av_dict_free(&opts);
           if (hw_device_ctx) {
@@ -442,14 +448,6 @@ bool VideoStore::open() {
           video_out_codec = nullptr;
           continue;
         }
-        // setup_hwaccel only takes the offered pool when its format and geometry
-        // match, so ask the context which pool it ended up with rather than
-        // assuming the offer was accepted.
-        encoder_pool_shared = share_pool and video_out_ctx->hw_frames_ctx
-                              and video_out_ctx->hw_frames_ctx->data == share_pool->data;
-        if (encoder_pool_shared)
-          Debug(1, "Encoder is on the decoder's frame pool; uploads will use a pool of their own");
-
 #ifdef HAVE_QUADRA
         if (hw_device_ctx) {
           int devid = ni_get_cardno(video_in_ctx);
@@ -491,8 +489,15 @@ bool VideoStore::open() {
         }
         av_dict_free(&opts);
 
+        // Ask the context rather than assume: setup_hwaccel only shares the pool
+        // when format and geometry match, so offering it is not the same as
+        // getting it. Identical AVBufferRef data means the same pool.
+        shares_decoder_pool = decoder_pool and video_out_ctx->hw_frames_ctx
+                              and (video_out_ctx->hw_frames_ctx->data == decoder_pool->data);
+
         if (video_out_codec) {
-          Info("Selected video encoder %s", video_out_codec->name);
+          Info("Selected video encoder %s%s", video_out_codec->name,
+               shares_decoder_pool ? " (taking frames from the decoder's pool)" : "");
           zm_dump_codec(video_out_ctx);
           break;
         }
@@ -1369,7 +1374,11 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
 
     av_frame_ptr frame(av_frame_alloc());
 
-    if (zm_packet->hw_frame) {
+    // Only take the device frame when this encoder draws from the same pool.
+    // Otherwise it is a surface the encoder does not own, which it encodes as
+    // black while reporting success -- and since both sides are
+    // AV_PIX_FMT_VAAPI the upload below does not fire to rescue it either.
+    if (zm_packet->hw_frame and shares_decoder_pool) {
       av_frame_ref(frame.get(), zm_packet->hw_frame.get());
     } else if (zm_packet->out_frame) {
       av_frame_ref(frame.get(), zm_packet->out_frame.get());
@@ -1485,7 +1494,7 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
         return AVERROR(ENOMEM);
       }
       AVBufferRef *upload_pool = video_out_ctx->hw_frames_ctx;
-      if (encoder_pool_shared) {
+      if (shares_decoder_pool) {
         if (!upload_frames_ctx and (ret = alloc_upload_pool()) < 0) {
           video_encoder_failed = true;
           return ret;

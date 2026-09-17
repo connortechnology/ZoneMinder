@@ -917,6 +917,33 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   nlohmann::json last_detections;
   int last_detection_count;
   bool ai_behind_ = false;  // true while skipping AI inference to catch up
+  // A lag that sits inside the hysteresis band crosses it over and over, and
+  // each crossing is the mechanism working rather than anything to act on.
+  // Count the cycles and the frames given up, and report at an interval.
+  // How long Analyse_Quadra actually takes, against the frame interval it has
+  // to fit inside. The lag is made of frames that did not.
+  // The reference image blend, which runs per frame while the motion
+  // detection that reads it runs one frame in motion_frame_skip+1.
+  // Time spent in get_packet waiting for a packet to exist and be decoded,
+  // as distinct from time spent analysing one.
+  uint64_t analyse_wait_us_ = 0;
+  uint64_t analyse_wait_max_us_ = 0;
+  uint64_t analyse_wait_count_ = 0;
+  uint64_t ref_blend_us_ = 0;
+  uint64_t ref_blend_max_us_ = 0;
+  uint64_t ref_blend_count_ = 0;
+  uint64_t quadra_analyse_us_ = 0;
+  uint64_t quadra_analyse_max_us_ = 0;
+  uint64_t quadra_analyse_count_ = 0;
+  uint64_t quadra_analyse_over_ = 0;
+  uint64_t ai_catchup_cycles_ = 0;
+  uint64_t ai_inferences_skipped_ = 0;
+  double ai_lag_worst_ = 0.0;
+  int64_t ai_catchup_reported_at_ = 0;
+  // How stale the packet last analysed was. The analysis thread paces itself
+  // against the decoder by frame count, which says nothing about whether
+  // either of them is keeping up with real time.
+  std::atomic<int64_t> analysis_lag_us_{0};
 
   // Per-class AI detection settings (keyed by class name for quick lookup)
   std::unordered_map<std::string, AIDetectionSetting> ai_detection_settings;
@@ -1304,6 +1331,11 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   void closeEvent();
 
   int DeviceFrameBudget() const { return device_frame_budget; };
+  // Read and reset the accumulated get_packet wait, for the loop report.
+  uint64_t TakeAnalyseWaitUs() { uint64_t v = analyse_wait_us_; analyse_wait_us_ = 0; return v; }
+  uint64_t TakeAnalyseWaitMaxUs() { uint64_t v = analyse_wait_max_us_; analyse_wait_max_us_ = 0; return v; }
+  // Age of the packet last analysed, in microseconds.
+  int64_t AnalysisLagUs() const { return analysis_lag_us_.load(std::memory_order_relaxed); }
   ObjectDetectionOption ObjectDetection() const { return objectdetection; };
   const std::string &ObjectDetection_Model() const { return objectdetection_model; };
   float ObjectDetection_Object_Threshold() const { return objectdetection_object_threshold; };

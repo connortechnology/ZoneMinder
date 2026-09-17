@@ -236,6 +236,23 @@ int main(int argc, char *argv[], char **envp) {
     const unsigned int budget = effective_device_frame_budget(monitor_budgets, global_budget);
     Debug(1, "Device frame budget %u (global %u)", budget, global_budget);
     zm_set_device_frame_budget(budget);
+
+    // A decoded frame is worth keeping on the card if something will read it:
+    // an encoder it can be handed straight to, or object detection, which
+    // works from the device frame. Only where neither applies -- a monitor
+    // that records by passthrough and runs no AI -- are the frames given back
+    // as they are decoded rather than held to the budget and shed at it.
+    std::vector<MonitorFrameUse> monitor_uses;
+    monitor_uses.reserve(monitors.size());
+    for (const std::shared_ptr<Monitor> &monitor : monitors) {
+      monitor_uses.push_back({
+          monitor->GetOptVideoWriter() != Monitor::PASSTHROUGH,
+          monitor->ObjectDetection() != Monitor::OBJECT_DETECTION_NONE});
+    }
+    const bool worth_holding = device_frames_worth_holding(monitor_uses);
+    Debug(1, "Device frames %s worth holding for these monitors",
+          worth_holding ? "are" : "are not");
+    zm_set_device_frames_used(worth_holding);
   }
 
   Info("Starting Capture version %s", ZM_VERSION);

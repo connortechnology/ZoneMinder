@@ -142,13 +142,13 @@ TEST_CASE("ZmFont: load font file") {
   }
 
   SECTION("invalid files") {
-    REQUIRE(font.LoadFontFile("data/fonts/01_bad_magic.zmfnt") == FontLoadError::kInvalidFile);
-    REQUIRE(font.LoadFontFile("data/fonts/02_variant_invalid.zmfnt") == FontLoadError::kInvalidFile);
-    REQUIRE(font.LoadFontFile("data/fonts/03_missing_cps.zmfnt") == FontLoadError::kInvalidFile);
+    REQUIRE(font.LoadFontFile(ZM_TEST_DATA_DIR "/fonts/01_bad_magic.zmfnt") == FontLoadError::kInvalidFile);
+    REQUIRE(font.LoadFontFile(ZM_TEST_DATA_DIR "/fonts/02_variant_invalid.zmfnt") == FontLoadError::kInvalidFile);
+    REQUIRE(font.LoadFontFile(ZM_TEST_DATA_DIR "/fonts/03_missing_cps.zmfnt") == FontLoadError::kInvalidFile);
   }
 
   SECTION("valid file") {
-    REQUIRE(font.LoadFontFile("data/fonts/04_valid.zmfnt") == FontLoadError::kOk);
+    REQUIRE(font.LoadFontFile(ZM_TEST_DATA_DIR "/fonts/04_valid.zmfnt") == FontLoadError::kOk);
 
     uint8 var_idx = GENERATE(range(static_cast<std::remove_cv<decltype(kNumFontSizes)>::type>(0), kNumFontSizes));
     FontVariant variant = font.GetFontVariant(var_idx);

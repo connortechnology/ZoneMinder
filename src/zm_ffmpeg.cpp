@@ -33,6 +33,7 @@ extern "C" {
 #include <libavutil/pixdesc.h>
 #ifdef HAVE_QUADRA
 #include <libavutil/hwcontext_ni_quad.h>
+#include <ni_log.h>
 #endif
 }
 
@@ -366,12 +367,52 @@ bool shed_report_due(int64_t now_us, int64_t last_report_us, int64_t interval_us
   return now_us - last_report_us >= interval_us;
 }
 
+int xcoder_param_int(const std::string &xcoder_params, const std::string &key) {
+  if (xcoder_params.empty() or key.empty()) return -1;
+
+  // The value as stored often keeps the quotes from the Options column.
+  std::string params = xcoder_params;
+  if (params.size() >= 2 and (params.front() == '\'' or params.front() == '"')
+      and params.back() == params.front()) {
+    params = params.substr(1, params.size() - 2);
+  }
+
+  size_t pos = 0;
+  while (pos < params.size()) {
+    size_t sep = params.find(':', pos);
+    std::string pair = params.substr(pos, sep == std::string::npos ? std::string::npos : sep - pos);
+    size_t eq = pair.find('=');
+    // A key that is a prefix of another must not match, so compare the whole
+    // thing rather than searching for the name in the string.
+    if (eq != std::string::npos and pair.substr(0, eq) == key) {
+      const std::string value = pair.substr(eq + 1);
+      if (value.empty()) return -1;
+      for (char c : value) if (!isdigit(static_cast<unsigned char>(c))) return -1;
+      errno = 0;
+      long parsed = strtol(value.c_str(), nullptr, 10);
+      if (errno or parsed < 0 or parsed > INT_MAX) return -1;
+      return static_cast<int>(parsed);
+    }
+    if (sep == std::string::npos) break;
+    pos = sep + 1;
+  }
+  return -1;
+}
+
+// True until a daemon says otherwise, so a caller that never sets it keeps the
+// old behaviour of holding frames.
+static std::atomic<bool> device_frames_used{true};
+
 unsigned int zm_device_frame_budget() {
   return device_frame_budget.load(std::memory_order_relaxed);
 }
 
 void zm_set_device_frame_budget(unsigned int budget) {
   device_frame_budget.store(budget, std::memory_order_relaxed);
+}
+
+void zm_set_device_frames_used(bool used) {
+  device_frames_used.store(used, std::memory_order_relaxed);
 }
 
 uint64_t zm_device_frames_shed() {
@@ -383,6 +424,13 @@ bool zm_device_frames_shedding() {
 }
 
 bool zm_device_frame_should_shed() {
+  // Nothing in this process will hand a device frame to an encoder, so there
+  // is nothing to hold them for. Give every one back as soon as it is decoded,
+  // and say nothing: this is what we chose to do, not a budget we failed to
+  // keep within. A passthrough-only daemon used to log a shed warning a minute
+  // for frames it was never going to use.
+  if (!device_frames_used.load(std::memory_order_relaxed)) return true;
+
   const unsigned int budget = device_frame_budget.load(std::memory_order_relaxed);
   // A budget of zero disables the cap rather than shedding everything, so the
   // behaviour of an unset or cleared budget is "hold frames", not "hold none".
@@ -394,24 +442,14 @@ bool zm_device_frame_should_shed() {
   if (!shedding) {
     if (in_flight < budget) return false;
     device_frames_shedding_now.store(true, std::memory_order_relaxed);
-    const int64_t now_us = steady_now_us();
-    if (shed_report_due(now_us, device_frames_shed_reported_at.load(std::memory_order_relaxed),
-                        kShedReportIntervalUs)) {
-      device_frames_shed_reported_at.store(now_us, std::memory_order_relaxed);
-      const uint64_t total = device_frames_shed_total.load(std::memory_order_relaxed);
-      const uint64_t since = total - device_frames_shed_at_last_report.exchange(
-          total, std::memory_order_relaxed);
-      const int card = device_frame_card.load(std::memory_order_relaxed);
-      const std::string where =
-          (card >= 0) ? stringtf(" on card %d", card) : std::string();
-      Warning("Holding %u hardware frames%s, at the budget of %u; "
-              "releasing frames back to the card until occupancy falls to %u "
-              "(%ju given back since the last report). "
-              "Recording is unaffected -- frames are re-uploaded for encoding -- "
-              "but the saving from keeping them on the card is lost meanwhile.",
-              in_flight, where.c_str(), budget, budget / 2,
-              static_cast<uintmax_t>(since));
-    }
+    // Crossing the line gives nothing back, so there is nothing to report yet.
+    // Reporting here said "releasing frames back to the card ... (0 given back
+    // since the last report)": an intention, with its own cost measured at
+    // zero. Start the clock instead and let the report below say what it
+    // actually came to.
+    device_frames_shed_reported_at.store(steady_now_us(), std::memory_order_relaxed);
+    device_frames_shed_at_last_report.store(
+        device_frames_shed_total.load(std::memory_order_relaxed), std::memory_order_relaxed);
   } else if (in_flight <= budget / 2) {
     // Low-water reached: stop shedding and let occupancy build again. At Debug
     // because it is the other half of the same flip, and just as frequent.
@@ -420,7 +458,34 @@ bool zm_device_frame_should_shed() {
     return false;
   }
 
-  device_frames_shed_total.fetch_add(1, std::memory_order_relaxed);
+  const uint64_t total = device_frames_shed_total.fetch_add(1, std::memory_order_relaxed) + 1;
+
+  // Report what was given back, once there is a figure worth reporting.
+  const int64_t now_us = steady_now_us();
+  if (shed_report_due(now_us, device_frames_shed_reported_at.load(std::memory_order_relaxed),
+                      kShedReportIntervalUs)) {
+    const uint64_t since =
+        total - device_frames_shed_at_last_report.load(std::memory_order_relaxed);
+    if (since > 0) {
+      device_frames_shed_reported_at.store(now_us, std::memory_order_relaxed);
+      device_frames_shed_at_last_report.store(total, std::memory_order_relaxed);
+      const int card = device_frame_card.load(std::memory_order_relaxed);
+      const std::string where =
+          (card >= 0) ? stringtf(" on card %d", card) : std::string();
+      // What shedding actually costs depends on the monitor, and this gauge
+      // cannot see which kind it is serving, so say both rather than assert the
+      // wrong one. The previous wording claimed the frames get re-uploaded for
+      // encoding; on a monitor that records by passthrough nothing encodes at
+      // all, and one such monitor shed 99971 frames for exactly zero uploads.
+      Warning("Gave %ju hardware frames%s back to the card in the last minute, "
+              "holding at the budget of %u. The software copy is already "
+              "downloaded so recording is unaffected; what is given up is "
+              "handing the device frame straight to the encoder, which costs an "
+              "upload per frame on a monitor that encodes and nothing at all on "
+              "one that records by passthrough.",
+              static_cast<uintmax_t>(since), where.c_str(), budget);
+    }
+  }
   return true;
 }
 
@@ -505,6 +570,43 @@ unsigned int effective_device_frame_budget(const std::vector<int> &monitor_budge
     have = true;
   }
   return smallest;
+}
+
+// How far over the budget the average has to be before it means anything.
+// Below this the two figures are simply not precise enough to compare.
+constexpr double kDecodeBudgetMargin = 1.10;
+
+bool decode_rate_worth_reporting(double avg_send_us, double budget_us) {
+  if (budget_us <= 0) return false;
+  return avg_send_us > budget_us * kDecodeBudgetMargin;
+}
+
+bool analysis_should_pace(int decoder_lag, int burst_lag, int64_t packet_age_us,
+                          int64_t stale_after_us, bool catching_up) {
+  if (decoder_lag > burst_lag) return false;      // frames behind: burst
+  if (stale_after_us > 0) {
+    // Entering takes the full threshold, leaving takes half, so a lag that
+    // settles near the line does not flip on every frame.
+    const int64_t leave_at = analysis_caught_up_us(stale_after_us);
+    if (catching_up ? (packet_age_us > leave_at) : (packet_age_us > stale_after_us))
+      return false;
+  }
+  return true;
+}
+
+bool device_budget_starves_decoder(unsigned int budget, int max_extra_hw_frame_cnt) {
+  if (max_extra_hw_frame_cnt < 0) return false;
+  return budget > static_cast<unsigned int>(max_extra_hw_frame_cnt);
+}
+
+bool device_frames_worth_holding(const std::vector<MonitorFrameUse> &monitors) {
+  // Nothing known about the monitors is not the same as knowing none use the
+  // frames, so hold them rather than throwing them away on no evidence.
+  if (monitors.empty()) return true;
+  for (const MonitorFrameUse &use : monitors) {
+    if (use.encodes or use.detects) return true;
+  }
+  return false;
 }
 
 bool software_frames_expected(bool object_detection_enabled, unsigned int device_frame_budget) {
@@ -678,6 +780,61 @@ void log_libav_callback(void *ptr, int level, const char *fmt, va_list vargs) {
   }
 }
 
+#ifdef HAVE_QUADRA
+// libxcoder writes its own diagnostics straight to stderr, which for a daemon
+// means they are lost: everything the card has to say about sessions, frame
+// pools and read/write retries never reaches the log the rest of the capture
+// is written to. It offers a callback instead, so take it and put that output
+// where the surrounding lines are.
+void log_ni_callback(int level, const char *fmt, va_list vargs) {
+  Logger *log = Logger::fetch();
+  if (!log) return;
+
+  // libxcoder's INFO carries warnings too, and its DEBUG and TRACE are per
+  // call and per NVMe transaction, so they belong well down the debug levels
+  // rather than in the log by default.
+  int log_level;
+  switch (level) {
+    case NI_LOG_FATAL: log_level = Logger::FATAL; break;
+    case NI_LOG_ERROR: log_level = Logger::WARNING; break;
+    case NI_LOG_INFO:  log_level = Logger::DEBUG1; break;
+    case NI_LOG_DEBUG: log_level = Logger::DEBUG3; break;
+    case NI_LOG_TRACE: log_level = Logger::DEBUG8; break;
+    default: return;  // NONE and INVALID have nothing to say
+  }
+  if (log->level() < log_level) return;
+
+  char logString[8192];
+  int length = vsnprintf(logString, sizeof(logString)-1, fmt, vargs);
+  if (length <= 0) return;
+  if (static_cast<size_t>(length) > sizeof(logString)-1) length = sizeof(logString)-1;
+  // These carry a trailing newline, as the libav ones do.
+  if (length > 0 and logString[length-1] == '\n') logString[length-1] = 0;
+
+  // Same rule as the libav callback: rate limit only what reaches the
+  // database. The retry loops this is being read for repeat by design, and
+  // suppressing them in the file would hide the very sequence being chased.
+  if (log_level <= Logger::WARNING) {
+    static std::mutex repeat_mutex;
+    static AvLogRepeat repeat;
+    uint64_t suppressed = 0;
+    bool print;
+    {
+      std::lock_guard<std::mutex> lock(repeat_mutex);
+      print = av_log_should_print(repeat, logString, steady_now_us(),
+                                  kAvLogRepeatIntervalUs, &suppressed);
+    }
+    if (!print) return;
+    if (suppressed > 0) {
+      log->logPrint(false, __FILE__, __LINE__, log_level, "NI: %s (%ju repeats suppressed)",
+                    logString, static_cast<uintmax_t>(suppressed));
+      return;
+    }
+  }
+  log->logPrint(false, __FILE__, __LINE__, log_level, "NI: %s", logString);
+}
+#endif
+
 static bool bInit = false;
 
 void FFMPEGInit() {
@@ -687,6 +844,29 @@ void FFMPEGInit() {
       av_log_set_level(AV_LOG_DEBUG);
       av_log_set_callback(log_libav_callback);
       Info("Enabling ffmpeg logs, as LOG_DEBUG+LOG_FFMPEG are enabled in options");
+#ifdef HAVE_QUADRA
+      // The decoder and encoder each set libxcoder's level from
+      // av_log_get_level() when they open, so raising ffmpeg's level above is
+      // what turns this on. Without the callback it would go to stderr and be
+      // lost; with it, how the card is really behaving lands beside the
+      // capture it belongs to.
+      ni_log_set_callback(log_ni_callback);
+      // Set the level here rather than leaving it to nidec.c, which derives it
+      // from av_log_get_level() when the decoder opens. That only works if
+      // this ran first, and it evidently does not: the callback was installed
+      // and nothing arrived, because ni_log2() drops anything above the level
+      // before it reaches a callback and the level was still its INFO default.
+      //
+      // Driven from our own debug level so the volume is controllable.
+      // libxcoder's TRACE is per NVMe transaction and will bury the log, so it
+      // needs asking for specifically.
+      const int zm_level = logDebugging() ? Logger::fetch()->level() : 0;
+      ni_log_level_t ni_level = NI_LOG_INFO;
+      if (zm_level >= Logger::DEBUG8) ni_level = NI_LOG_TRACE;
+      else if (zm_level >= Logger::DEBUG3) ni_level = NI_LOG_DEBUG;
+      ni_log_set_level(ni_level);
+      Info("libxcoder logging at level %d (ZM debug level %d)", ni_level, zm_level);
+#endif
     } else {
       Debug(1,"Not enabling ffmpeg logs, as LOG_FFMPEG and/or LOG_DEBUG is disabled in options, or this monitor is not part of your debug targets");
       av_log_set_level(AV_LOG_QUIET);
@@ -1174,6 +1354,14 @@ int zm_get_samples_from_fifo(AVAudioFifo *fifo, AVFrame *frame) {
 #include <algorithm> // for std::max and std::min
 
 // Converts libjpeg quality [0-100] to ffmpeg -q:v [2-31] for MJPEG encoding
+const char *hw_jpeg_encoder_name(enum AVHWDeviceType device_type) {
+  switch (device_type) {
+    case AV_HWDEVICE_TYPE_VAAPI: return "mjpeg_vaapi";
+    case AV_HWDEVICE_TYPE_QSV:   return "mjpeg_qsv";
+    default: return nullptr;
+  }
+}
+
 int libjpeg_to_ffmpeg_qv(int libjpeg_quality) {
     // Clamp libjpeg_quality to valid range
     libjpeg_quality = std::max(0, std::min(100, libjpeg_quality));

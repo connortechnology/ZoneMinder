@@ -41,6 +41,13 @@ class TestStream : public StreamBase {
   int preScale(int base_width, int base_height, int &width, int &height) {
     return preScaleDimensions(base_width, base_height, width, height);
   }
+  static void jpegDims(int &width, int &height) {
+    jpegEncodeDimensions(width, height);
+  }
+  static FPSeconds schedule(TimePoint now, TimePoint previous_due,
+                            FPSeconds interval, TimePoint &next_due) {
+    return scheduleNextFrame(now, previous_due, interval, next_due);
+  }
   void setView(int p_scale, int p_zoom) {
     scale = p_scale;
     zoom = p_zoom;
@@ -194,6 +201,111 @@ TEST_CASE("StreamBase::prepareImage pre-scaled frames") {
       REQUIRE(scaled.Width() == (kWidth * scale) / ZM_SCALE_BASE);
       REQUIRE(scaled.Height() == (kHeight * scale) / ZM_SCALE_BASE);
     }
+  }
+}
+
+TEST_CASE("StreamBase::scheduleNextFrame") {
+  const TimePoint kEpoch{};
+  const FPSeconds interval{1.0 / 15};   // 66.7ms, a 15fps stream
+  TimePoint next_due{};
+
+  SECTION("keeps a fixed cadence when sending costs nothing") {
+    // Due now, nothing spent: the next frame is due one interval on.
+    FPSeconds sleep = TestStream::schedule(kEpoch, kEpoch, interval, next_due);
+    CHECK(sleep.count() == Catch::Approx(1.0 / 15));
+    CHECK(next_due == kEpoch + std::chrono::duration_cast<Microseconds>(interval));
+  }
+
+  SECTION("sending time comes out of the wait, not on top of it") {
+    // 20ms spent encoding. The frame after is still due at one interval from
+    // when it was due, so we sleep the remaining 46ms, and the cadence holds.
+    const TimePoint due = kEpoch;
+    const TimePoint now = kEpoch + Milliseconds(20);
+    FPSeconds sleep = TestStream::schedule(now, due, interval, next_due);
+    CHECK(sleep.count() == Catch::Approx(1.0 / 15 - 0.020).margin(0.001));
+    CHECK(next_due == due + std::chrono::duration_cast<Microseconds>(interval));
+  }
+
+  SECTION("a frame that overran its slot does not send the next immediately") {
+    // This is the bug: the old code subtracted the lateness from the interval,
+    // drove the sleep negative and fired the next frame at once, which is the
+    // burst a viewer sees as a stutter.
+    const TimePoint due = kEpoch;
+    const TimePoint now = kEpoch + Milliseconds(100);   // 33ms over its slot
+    FPSeconds sleep = TestStream::schedule(now, due, interval, next_due);
+    CHECK(sleep.count() > 0.0);
+    CHECK(sleep.count() == Catch::Approx(1.0 / 15).margin(0.001));
+    CHECK(next_due == now + std::chrono::duration_cast<Microseconds>(interval));
+  }
+
+  SECTION("a long overrun restarts the cadence rather than catching up") {
+    // A second late is fifteen missed slots. Sending fifteen frames back to
+    // back would empty the buffer and then stall.
+    const TimePoint due = kEpoch;
+    const TimePoint now = kEpoch + Milliseconds(1000);
+    FPSeconds sleep = TestStream::schedule(now, due, interval, next_due);
+    CHECK(sleep.count() == Catch::Approx(1.0 / 15).margin(0.001));
+    CHECK(next_due == now + std::chrono::duration_cast<Microseconds>(interval));
+  }
+
+  SECTION("never returns a negative sleep") {
+    const TimePoint due = kEpoch + Milliseconds(500);
+    FPSeconds sleep = TestStream::schedule(kEpoch, due, interval, next_due);
+    CHECK(sleep.count() >= 0.0);
+  }
+
+  SECTION("a zero or negative interval does not spin or go backwards") {
+    FPSeconds sleep = TestStream::schedule(kEpoch, kEpoch, FPSeconds(0), next_due);
+    CHECK(sleep.count() == 0.0);
+    CHECK(next_due == kEpoch);
+    sleep = TestStream::schedule(kEpoch, kEpoch, FPSeconds(-1), next_due);
+    CHECK(sleep.count() == 0.0);
+  }
+}
+
+TEST_CASE("StreamBase::jpegEncodeDimensions") {
+  int width = -1, height = -1;
+
+  SECTION("leaves a frame the encoder can already take alone") {
+    // The regression this guards: sendFrame used to multiply send_image's
+    // dimensions by scale again, although prepareImage had already scaled it,
+    // so a 50% view of a 3840x2160 monitor went out at 960x540 instead of
+    // 1920x1080. The dimensions handed in here are the ones to encode.
+    width = 1920; height = 1080;
+    TestStream::jpegDims(width, height);
+    CHECK(width == 1920);
+    CHECK(height == 1080);
+  }
+
+  SECTION("rounds an odd dimension down to even") {
+    // YUV420 has no half chroma sample.
+    width = 641; height = 481;
+    TestStream::jpegDims(width, height);
+    CHECK(width % 2 == 0);
+    CHECK(width == 640);
+  }
+
+  SECTION("grows a too-narrow frame and takes the height with it") {
+    width = 72; height = 540;
+    TestStream::jpegDims(width, height);
+    CHECK(width == 144);
+    // Proportional, not distorted: the aspect ratio survives the clamp.
+    CHECK(height == 1080);
+  }
+
+  SECTION("grows a too-short frame and takes the width with it") {
+    width = 400; height = 64;
+    TestStream::jpegDims(width, height);
+    CHECK(height == 128);
+    CHECK(width == 800);
+  }
+
+  SECTION("a frame under both minimums comes out at or above both") {
+    width = 100; height = 50;
+    TestStream::jpegDims(width, height);
+    CHECK(width >= 144);
+    CHECK(height >= 128);
+    CHECK(width % 2 == 0);
   }
 }
 

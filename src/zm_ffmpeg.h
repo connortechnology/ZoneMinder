@@ -400,6 +400,11 @@ unsigned int zm_device_frames_high_water();
 // continues until occupancy falls to the low-water mark, so the pipeline gets
 // real headroom back before it starts pinning frames again.
 unsigned int zm_device_frame_budget();
+// Reads one integer out of an xcoder-params string, as the decoder options
+// carry it: "out=hw:maxExtraHwFrameCnt=20:extendPoolSize=32", optionally
+// wrapped in quotes. Returns -1 when the key is absent or not an integer,
+// since every parameter it is used for is non-negative.
+int xcoder_param_int(const std::string &xcoder_params, const std::string &key);
 void zm_set_device_frame_budget(unsigned int budget);
 
 // Whether this frame should be handed back rather than held. Call once per
@@ -411,9 +416,20 @@ uint64_t zm_device_frames_shed();
 bool zm_device_frames_shedding();
 
 struct zm_free_device_av_frame {
+  // Whether this pointer's frame was counted into the gauge. A pointer built
+  // directly -- device_frame_ptr{frame} -- leaves this false and so neither
+  // counts nor discounts; only adopt_device_frame() sets it.
+  //
+  // The deleter used to decrement unconditionally, which made the direct form
+  // silently destructive: it skipped the increment but still decremented, and
+  // one such pointer underflowed the unsigned gauge and left every later
+  // reading wrong. tests/zm_packet.cpp did exactly that, and the damage landed
+  // on an unrelated test rather than on the one that caused it.
+  bool counted = false;
+
   void operator()(AVFrame *frame) const {
     if (!frame) return;
-    zm_device_frame_released();
+    if (counted) zm_device_frame_released();
     zm_free_av_frame{}(frame);
   }
 };
@@ -425,8 +441,9 @@ using device_frame_ptr = std::unique_ptr<AVFrame, zm_free_device_av_frame>;
 // out of an av_frame_ptr rather than accepting a raw pointer keeps the transfer
 // of ownership explicit at the call site.
 inline device_frame_ptr adopt_device_frame(av_frame_ptr frame) {
-  if (frame) zm_device_frame_acquired();
-  return device_frame_ptr{frame.release()};
+  if (!frame) return device_frame_ptr{};
+  zm_device_frame_acquired();
+  return device_frame_ptr{frame.release(), zm_free_device_av_frame{true}};
 }
 
 struct CodecData {
@@ -509,6 +526,62 @@ bool shed_report_due(int64_t now_us, int64_t last_report_us, int64_t interval_us
 unsigned int effective_device_frame_budget(const std::vector<int> &monitor_budgets,
                                            unsigned int global_budget);
 
+// What a monitor does with a decoded frame, for deciding whether keeping it on
+// the card can pay for itself.
+struct MonitorFrameUse {
+  bool encodes;   // hands a device frame straight to an encoder
+  bool detects;   // runs object detection, which reads the device frame
+};
+
+// Whether keeping decoded frames on the card can pay for itself here. Either
+// use is enough on its own: object detection reads packet->hw_frame for
+// inference and for the drawbox and drawtext filters, so a monitor that
+// records by passthrough and runs AI needs them just as much as one that
+// encodes. Releasing them under it would break detection outright.
+bool device_frames_worth_holding(const std::vector<MonitorFrameUse> &monitors);
+
+// Whether the frames we may hold would leave the decoder short.
+// maxExtraHwFrameCnt caps the frames a decoder session may hold *beyond* its
+// own working set, so holding exactly that many still leaves the session what
+// it needs; only holding more than that starves it. A cap below zero means the
+// monitor's Options do not set one, so libxcoder's default of 255 applies and
+// nothing here can exceed it.
+bool device_budget_starves_decoder(unsigned int budget, int max_extra_hw_frame_cnt);
+
+// Whether a decode average is far enough over its frame budget to be worth
+// saying so. The average is an EMA and the budget comes from a smoothed
+// capture rate, so the two agree only to within a few percent and a bare
+// comparison fires on noise: of 19286 of these on one monitor in a day, 29%
+// were under a tenth over budget, and their decoder queue averaged 3.7 frames
+// -- nothing was accumulating. Past a tenth the queue does start to build,
+// averaging 8.4 frames, and past half it averages 16.
+bool decode_rate_worth_reporting(double avg_send_us, double budget_us);
+
+// Whether the analysis thread should pace itself to the capture rate rather
+// than running flat out. Pacing stops the analyser lapping the streamers
+// reading its ring buffer, so it is the normal state; it is given up only to
+// work through a real backlog.
+//
+// The decoder being frames ahead is one kind of backlog. Packets arriving
+// seconds stale is another, and the frame counts cannot see it: when the
+// decoder is itself behind real time both counters advance together, the gap
+// stays small, and pacing holds the lag open indefinitely. Measured on a 4K
+// monitor, analysis ran at 11.8/s against 15fps capture for 75 seconds after
+// an alarm, filling a 300-packet queue and dropping three GOPs.
+bool analysis_should_pace(int decoder_lag, int burst_lag, int64_t packet_age_us,
+                          int64_t stale_after_us, bool catching_up);
+
+// Two thresholds rather than one, because a lag that settles on the threshold
+// crosses it constantly: m4 sat at 2.00 to 2.10s and flipped state 2.4 times a
+// second. Start catching up when the lag passes stale_after_us, and keep going
+// until it is back under half of that.
+inline int64_t analysis_caught_up_us(int64_t stale_after_us) { return stale_after_us / 2; }
+
+// Tells the gauge whether anything in this process will use a device frame.
+// When nothing will, frames are released as soon as they are decoded and that
+// is normal operation rather than a shortfall, so it is not reported.
+void zm_set_device_frames_used(bool used);
+
 // What one frame costs in card memory. The pool reserves this per slot, so it
 // is the unit a memory budget has to be written in -- a frame count means
 // different things at 720p and at 4K.
@@ -572,6 +645,16 @@ bool av_log_should_print(AvLogRepeat &state, const std::string &message,
 int ni_get_cardno(const AVCodecContext *ctx);
 #endif
 int libjpeg_to_ffmpeg_qv(int libjpeg_quality);
+
+// The jpeg encoder that can take a frame from this device without downloading
+// it, or nullptr when there is not one worth using.
+//
+// NetInt Quadra is deliberately absent even though jpeg_ni_quadra_enc exists:
+// it puts far more load on the card than the jpegs are worth, which is why the
+// row for it in the encoder table stays commented out. Keeping the decision
+// here rather than in the encoder table means the video encoder's codec
+// selection is unaffected by what we do for jpegs.
+const char *hw_jpeg_encoder_name(enum AVHWDeviceType device_type);
 enum AVPixelFormat get_hw_format(AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts);
 
 #endif // ZM_FFMPEG_H

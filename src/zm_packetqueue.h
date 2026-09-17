@@ -55,6 +55,10 @@ class PacketQueue {
   int frames_since_last_keyframe_;
   std::atomic<bool> clear_packets_pending_;
   uint64_t next_queue_index_;
+  // Video packets queued since this process started, which never wraps and
+  // never decreases. image_index does both -- it is the shared memory ring
+  // slot -- so it cannot say whether the queue has had time to fill.
+  uint64_t video_packets_queued_;
 
  public:
   PacketQueue();

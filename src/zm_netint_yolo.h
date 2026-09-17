@@ -89,6 +89,45 @@ class Quadra_Yolo {
     AVRegionOfInterestNetintExtra *last_roi_extra;
     int last_roi_count;
 
+    // Annotation cost, split by the two operations, so the software and
+    // hardware paths can be compared on the same monitor. Accumulated per
+    // detection and reported as a mean, because a per-detection line at
+    // frame rate is unreadable and a single sample says nothing.
+    uint64_t annotate_box_us_ = 0;
+    uint64_t annotate_text_us_ = 0;
+    // The mean hid a bimodal cost: most drawtext calls are a few ms, a
+    // minority block for seconds. Keep the shape, not just the average.
+    uint64_t drawtext_calls_ = 0;
+    uint64_t drawtext_slow_calls_ = 0;
+    uint64_t drawtext_max_us_ = 0;
+    // Records one drawtext call, reporting it individually when it blocks.
+    void record_drawtext_time(uint64_t us, size_t labels);
+    uint64_t annotate_count_ = 0;
+    // Highest drawtext slot written last frame, so a quieter frame can blank
+    // what a busier one left set.
+    size_t drawtext_slots_used_ = 0;
+
+    // av_opt_set failing is silent otherwise: the filter simply draws nothing
+    // and the log shows a successful call that cost the price of a few string
+    // formats. Count them, and report the first in full.
+    uint64_t drawtext_opt_errors_ = 0;
+    bool drawtext_opt_reported_ = false;
+    bool drawbox_opt_reported_ = false;
+    bool drawbox_cmd_reported_ = false;
+    bool drawbox_width_reported_ = false;
+    // NI_MAX_SUPPORT_DRAWBOX_NUM: the rectangles ni_quadra_drawbox carries.
+    static constexpr int kDrawboxSlots = 5;
+    // MAX_TEXT_NUM: the text slots ni_quadra_drawtext carries.
+    static constexpr size_t kDrawtextSlots = 32;
+    // The last reinit command sent. Between inferences draw_last_roi redraws
+    // the same detection on every frame, so this is usually unchanged, and a
+    // reinit that sets the values already set costs a full uninit/init.
+    std::string drawtext_last_command_;
+    uint64_t drawtext_reinits_ = 0;
+    // As with drawtext, a narrower border must clear what a wider one set.
+    int drawbox_slots_used_ = 0;
+    int set_drawbox_opt(int slot, const char *name, int value);
+
     bool use_hwframe;
     nlohmann::json detections;
 
@@ -112,6 +151,18 @@ class Quadra_Yolo {
     int generate_ai_frame(ni_session_data_io_t *ai_frame, AVFrame *avframe, bool hwframe);
     int process_roi(AVFrame *frame, AVFrame **filt_frame);
     int check_movement( AVRegionOfInterest cur_roi, AVRegionOfInterestNetintExtra cur_roi_extra);
+    // One label to draw. Collected for a whole frame and drawn in a single
+    // pass: ni_quadra_drawtext takes up to 32 texts at once (t0-t31 and
+    // friends), and every separate call costs a filter reinit, which re-runs
+    // init() and reloads the font through fontconfig.
+    struct TextItem {
+      std::string text;
+      int x = 0;
+      int y = 0;
+      std::string colour;
+    };
+    int draw_texts(AVFrame *in_frame, AVFrame **output, const std::vector<TextItem> &items);
+
     int ni_read_roi(AVFrame *out, int frame_count);
     bool parse_model_file(const std::string &nbg_file);
 };

@@ -155,6 +155,7 @@ Monitor::Monitor() :
   type(LOCAL),
   capturing(CAPTURING_ALWAYS),
   analysing(ANALYSING_ALWAYS),
+  device_frame_budget(-1),
   objectdetection(OBJECT_DETECTION_NONE),
   objectdetection_model(""),
   objectdetection_object_threshold(0.4),
@@ -173,7 +174,6 @@ Monitor::Monitor() :
   restream(false),
   rtsp_user(0),
   janus_rtsp_session_timeout(0),
-  device_frame_budget(-1),
   curl(nullptr),
   //protocol
   //method
@@ -2177,8 +2177,16 @@ void Monitor::UpdateFPS() {
         const int card = -1;
 #endif
         zm_set_device_frame_card(card);
-        Info("Decode pool on card %d: %s; device frame budget is %u",
-             card, describe_hw_pool_line(pool).c_str(), zm_device_frame_budget());
+        // Only name a card when there is one to name. Every non-NetInt backend
+        // reports -1, and "on card -1" reads as a failure rather than as the
+        // absence of a concept that does not apply.
+        if (card >= 0) {
+          Info("Decode pool on card %d: %s; device frame budget is %u",
+               card, describe_hw_pool_line(pool).c_str(), zm_device_frame_budget());
+        } else {
+          Info("Decode pool: %s; device frame budget is %u",
+               describe_hw_pool_line(pool).c_str(), zm_device_frame_budget());
+        }
         if (pool.pool_size > 0 and zm_device_frame_budget() >= static_cast<unsigned int>(pool.pool_size)) {
           Warning("Device frame budget %u is at or above the decode pool of %d frames; "
                   "decoding will stall waiting for slots we are holding",
@@ -2303,7 +2311,20 @@ int Monitor::Analyse() {
   // if have event, send frames until we find a video packet, at which point do analysis. Adaptive skip should only affect which frames we do analysis on.
 
   // get_analysis_packet will lock the packet and may wait if analysis_it is at the end
+  //
+  // Timed apart from the rest, because timing Analyse() as a whole could not
+  // tell waiting from working: the loop showed 61% of the thread and never an
+  // idle pass, which is equally what a thread mostly blocked in here looks
+  // like. This wait is for a packet to exist and for the decoder to have
+  // finished with it, so if it dominates, the analysis lag is decode latency
+  // arriving here rather than anything analysis does.
+  SystemTimePoint wait_start = std::chrono::system_clock::now();
   ZMPacketLock packet_lock = packetqueue.get_packet(analysis_it);
+  const uint64_t wait_us = std::chrono::duration_cast<Microseconds>(
+      std::chrono::system_clock::now() - wait_start).count();
+  analyse_wait_us_ += wait_us;
+  if (wait_us > analyse_wait_max_us_) analyse_wait_max_us_ = wait_us;
+  analyse_wait_count_++;
 
   if (!packet_lock.packet_) {
     Debug(4, "No packet lock, returning false");
@@ -2314,6 +2335,14 @@ int Monitor::Analyse() {
   analysis_image_count ++;
 
   std::shared_ptr<ZMPacket> packet = packet_lock.packet_;
+
+  // Recorded for the analysis thread's pacing, which otherwise only knows how
+  // far the decoder is ahead in frames and cannot tell a queue that is keeping
+  // up from one that is seconds stale.
+  analysis_lag_us_.store(
+      std::chrono::duration_cast<Microseconds>(
+          std::chrono::system_clock::now() - packet->timestamp).count(),
+      std::memory_order_relaxed);
 
   // The capture thread requested that we drop the pre-suspend reference image.
   // Do it here, on the thread that owns ref_image, so the buffer is never freed
@@ -2517,7 +2546,30 @@ int Monitor::Analyse() {
 #if !AI_IN_DECODE
 #if HAVE_QUADRA
                 if (objectdetection == OBJECT_DETECTION_QUADRA) {
+                  // The AI lag is not explained by what it costs to run: AI
+                  // receive is 31ms about twice a second, under 5% of this
+                  // thread, and taking 120 device queries an inference out of
+                  // the poll loop moved it not at all. Time the whole call so
+                  // the question stops being argued from the parts.
+                  SystemTimePoint quadra_start = std::chrono::system_clock::now();
                   std::pair<int, std::string> results = Analyse_Quadra(packet);
+                  const uint64_t quadra_us = std::chrono::duration_cast<Microseconds>(
+                      std::chrono::system_clock::now() - quadra_start).count();
+                  quadra_analyse_us_ += quadra_us;
+                  if (quadra_us > quadra_analyse_max_us_) quadra_analyse_max_us_ = quadra_us;
+                  // Anything past a frame interval is this thread losing
+                  // ground, which is the thing the lag is made of.
+                  const double frame_us = get_capture_fps() > 0 ? 1e6 / get_capture_fps() : 0;
+                  if (frame_us > 0 and quadra_us > frame_us) quadra_analyse_over_++;
+                  if (++quadra_analyse_count_ % 500 == 0) {
+                    Info("Quadra analyse over %ju frames: mean %.1fms, max %.1fms, "
+                         "%ju took longer than the %.1fms frame interval",
+                         static_cast<uintmax_t>(quadra_analyse_count_),
+                         quadra_analyse_us_ / 1000.0 / quadra_analyse_count_,
+                         quadra_analyse_max_us_ / 1000.0,
+                         static_cast<uintmax_t>(quadra_analyse_over_),
+                         frame_us / 1000.0);
+                  }
                 }
 #endif
 #if HAVE_MX_ACCL_H
@@ -3143,13 +3195,65 @@ std::pair<int, std::string> Monitor::Analyse_Quadra(std::shared_ptr<ZMPacket> pa
       // filling.
       FPSeconds ai_lag = std::chrono::system_clock::now() - packet->timestamp;
       constexpr int kAiCatchupSeconds = 2;
-      bool ai_behind = ai_lag > Seconds(kAiCatchupSeconds);
-      if (ai_behind and !ai_behind_) {
-        Warning("AI is %.2fs behind real time; skipping inference to catch up", ai_lag.count());
-      } else if (!ai_behind and ai_behind_) {
-        Info("AI has caught up (%.2fs behind); resuming inference", ai_lag.count());
-      }
+      // Two thresholds. A lag that settles on a single one crosses it
+      // constantly: m4 sat between 2.00 and 2.10s and logged this 2.4 times a
+      // second. Fall behind at two seconds, and count as caught up only under
+      // one, so the state reflects the condition rather than the noise.
+      const FPSeconds enter = Seconds(kAiCatchupSeconds);
+      const FPSeconds leave = FPSeconds(Seconds(kAiCatchupSeconds)) / 2;
+      bool ai_behind = ai_behind_ ? (ai_lag > leave) : (ai_lag > enter);
+      if (ai_behind and !ai_behind_) ai_catchup_cycles_++;
+      if (ai_behind) ai_inferences_skipped_++;
+      if (ai_lag.count() > ai_lag_worst_) ai_lag_worst_ = ai_lag.count();
       ai_behind_ = ai_behind;
+
+      // Entering and leaving is the mechanism doing its job, so it is not
+      // itself news: a lag that settles inside the band crosses it every few
+      // seconds, and m4 logged a pair of lines 7 times a minute for eleven
+      // hours while the lag stayed bounded between 1.0 and 2.1s and always
+      // recovered. What is worth knowing is how much inference that costs,
+      // and whether the lag is staying bounded, so say that at an interval
+      // instead of announcing every crossing.
+      constexpr int64_t kAiCatchupReportIntervalUs = 300 * 1000000LL;  // 5 minutes
+      // Giving frames away is supposed to bring the lag back down. A lag that
+      // climbs well past the threshold anyway means it is not, and no amount
+      // of skipping will fix it -- that is worth a warning where the ordinary
+      // cycle is not. Rate limited to the same interval so a failure does not
+      // flood either.
+      const FPSeconds runaway = Seconds(kAiCatchupSeconds) * 3;
+      if (ai_behind and ai_lag > runaway) {
+        const int64_t now_us = std::chrono::duration_cast<Microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (shed_report_due(now_us, ai_catchup_reported_at_, kAiCatchupReportIntervalUs)) {
+          ai_catchup_reported_at_ = now_us;
+          Warning("AI is %.2fs behind real time and not catching up, past the "
+                  "%.0fs that skipping inference is meant to recover from. "
+                  "Inference cannot keep up with this monitor even drawing "
+                  "every frame from the previous detection.",
+                  ai_lag.count(), runaway.count());
+          ai_catchup_cycles_ = 0;
+          ai_inferences_skipped_ = 0;
+          ai_lag_worst_ = 0.0;
+        }
+      } else if (ai_catchup_cycles_) {
+        const int64_t now_us = std::chrono::duration_cast<Microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (shed_report_due(now_us, ai_catchup_reported_at_, kAiCatchupReportIntervalUs)) {
+          ai_catchup_reported_at_ = now_us;
+          // Worst lag is what says whether catch-up is holding. Bounded near
+          // the threshold means it is; climbing means inference cannot keep
+          // up even with the frames it is giving away, which is actionable.
+          Info("AI catch-up: %ju spells, %ju frames drawn from the previous "
+               "detection instead of a fresh one, worst lag %.2fs (skipping "
+               "above %ds, resuming below %.0fs)",
+               static_cast<uintmax_t>(ai_catchup_cycles_),
+               static_cast<uintmax_t>(ai_inferences_skipped_),
+               ai_lag_worst_, kAiCatchupSeconds, leave.count());
+          ai_catchup_cycles_ = 0;
+          ai_inferences_skipped_ = 0;
+          ai_lag_worst_ = 0.0;
+        }
+      }
 
       if (!ai_behind and !(shared_data->analysis_image_count % (motion_frame_skip+1))) {
       //TODO if (packet->hw_frame or packet->in_frame) {
@@ -3618,6 +3722,13 @@ std::pair<int, std::string> Monitor::Analyse_MotionDetection(std::shared_ptr<ZMP
       Debug(1, "Skipped motion detection last motion score was %d", last_motion_score);
     }
 
+    // The reference image is only read by motion detection, which runs one
+    // frame in motion_frame_skip+1, but this blend runs on every one. At
+    // 3840x2160 that is a pass over 8.3M pixels 13 times a second where 1.7
+    // would do. Measured rather than assumed: Analyse_Quadra was the obvious
+    // suspect for this thread falling behind and turned out to use 23% of the
+    // frame interval, so this gets the same treatment before anything changes.
+    SystemTimePoint blend_start = std::chrono::system_clock::now();
     if (analysis_image == ANALYSISIMAGE_YCHANNEL) {
       Debug(1, "Blending from y-channel");
       if (packet->y_image)
@@ -3632,6 +3743,21 @@ std::pair<int, std::string> Monitor::Analyse_MotionDetection(std::shared_ptr<ZMP
       ref_image.Blend(*(packet->image), ( state==ALARM ? alarm_ref_blend_perc : ref_blend_perc ));
     } else {
       Debug(1, "Not able to blend");
+    }
+    {
+      const uint64_t blend_us = std::chrono::duration_cast<Microseconds>(
+          std::chrono::system_clock::now() - blend_start).count();
+      ref_blend_us_ += blend_us;
+      if (blend_us > ref_blend_max_us_) ref_blend_max_us_ = blend_us;
+      if (++ref_blend_count_ % 500 == 0) {
+        const double fps = get_capture_fps();
+        const double mean_ms = ref_blend_us_ / 1000.0 / ref_blend_count_;
+        Info("Reference blend over %ju frames: mean %.1fms, max %.1fms, "
+             "about %.0fms a second at %.1ffps, and motion detection reads it "
+             "one frame in %d",
+             static_cast<uintmax_t>(ref_blend_count_), mean_ms,
+             ref_blend_max_us_ / 1000.0, mean_ms * fps, fps, motion_frame_skip + 1);
+      }
     }
   } // end if had ref_image_buffer or not
   return std::make_pair(motion_score, std::move(cause));
@@ -4230,6 +4356,32 @@ int Monitor::OpenDecoder() {
         }
         av_dict_free(&opts_defaults);
       }
+      // The decoder can only hand out so many frames at once, and we are the
+      // ones holding them. maxExtraHwFrameCnt caps the session firmware-side
+      // (libxcoder defaults it to 255), so a budget at or above it leaves the
+      // decoder with nothing to decode into: ni_decoder_session_write blocks,
+      // send_packet runs over the frame budget and the packet queue fills.
+      // The existing decode-pool warning cannot catch this, because an
+      // on-demand pool reports a size of zero and the comparison is skipped.
+      {
+        const AVDictionaryEntry *xcoder = av_dict_get(opts, "xcoder-params", nullptr, AV_DICT_MATCH_CASE);
+        if (xcoder and xcoder->value) {
+          const int cap = xcoder_param_int(xcoder->value, "maxExtraHwFrameCnt");
+          const unsigned int budget = device_frame_budget > 0
+              ? static_cast<unsigned int>(device_frame_budget)
+              : zm_device_frame_budget();
+          if (device_budget_starves_decoder(budget, cap)) {
+            Warning("Device frame budget %u is above maxExtraHwFrameCnt %d in "
+                    "this monitor's Options. The decoder session may hold %d "
+                    "frames beyond its own working set, so holding %u takes "
+                    "frames it needs and decoding stalls waiting for them. "
+                    "Raise maxExtraHwFrameCnt (libxcoder's default is 255) or "
+                    "lower the budget to %d or less.",
+                    budget, cap, cap, budget, cap);
+          }
+        }
+      }
+
       av_opt_set(mVideoCodecContext->priv_data, "dec", (decoder_hwaccel_device != "" ? decoder_hwaccel_device.c_str() : "-1"), 0);
 
       // Hardware decoding. Ported from the camera-side setup on master, which

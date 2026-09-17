@@ -283,6 +283,43 @@ int StreamBase::preScaleDimensions(int base_width, int base_height, int &width, 
   return cur_scale;
 }
 
+FPSeconds StreamBase::scheduleNextFrame(TimePoint now, TimePoint previous_due,
+                                        FPSeconds interval, TimePoint &next_due) {
+  if (interval <= FPSeconds::zero()) {
+    // No usable rate to pace against. Send as they come rather than spinning.
+    next_due = now;
+    return FPSeconds::zero();
+  }
+
+  next_due = previous_due + std::chrono::duration_cast<Microseconds>(interval);
+  if (next_due <= now) {
+    // The frame took its whole slot or longer. Catching up would send the
+    // missed frames back to back, which is the burst the viewer sees as a
+    // stutter, so give up the missed slots and start the cadence again.
+    next_due = now + std::chrono::duration_cast<Microseconds>(interval);
+  }
+
+  FPSeconds sleep_time = next_due - now;
+  return sleep_time > FPSeconds::zero() ? sleep_time : FPSeconds::zero();
+}
+
+void StreamBase::jpegEncodeDimensions(int &width, int &height) {
+  if (width < 144) {
+    float factor = 144.0/width;
+    width = 144;
+    height = floor(height * factor);
+    Debug(1, "Adjust width to 144 using factor %.2f", factor);
+  }
+  width += (2-width)%2;
+  if (height < 128) {
+    float factor = 128.0/height;
+    height = 128;
+    width = floor(width * factor);
+    Debug(1, "Adjust height to min 128, width to %d using factor %.2f", width, factor);
+  }
+  width += (2-width)%2;
+}
+
 Image *StreamBase::prepareImage(Image *image, int pre_scaled_by) {
   if (pre_scaled_by) {
     // The caller produced the image at exactly the size to send, folding the

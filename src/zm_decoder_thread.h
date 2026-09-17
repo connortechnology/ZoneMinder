@@ -27,6 +27,8 @@ class DecoderThread {
   std::thread thread_;
   double avg_send_us_;   // Exponential moving average of send_packet duration (microseconds)
   int send_count_;       // Number of samples (for warmup)
+  int64_t last_slow_report_us_ = 0;  // When the decode rate was last reported
+  static constexpr int64_t kSlowReportIntervalUs = 60 * 1000 * 1000;
 };
 
 #endif

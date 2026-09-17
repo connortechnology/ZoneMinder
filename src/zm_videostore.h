@@ -67,17 +67,20 @@ class VideoStore {
   int encode_count_;
   bool video_encoded;  // true once at least one frame has been sent to the video encoder
   bool video_encoder_failed;  // true after a fatal encoder error; skip further sends
+  // True when video_out_ctx draws frames from the decoder's own pool. Only then
+  // may a decoded device frame be handed to the encoder: a VAAPI encoder accepts
+  // a surface from a pool it does not own and encodes black without any error,
+  // and because both are AV_PIX_FMT_VAAPI the upload path does not trigger
+  // either, so nothing else catches it.
+  bool shares_decoder_pool;
   // Set in open() when the monitor is configured to ENCODE but no encoder could
   // be opened; we then copy the input stream and write packets unchanged.
   bool video_passthrough_fallback;
 
   AVBufferRef *hw_device_ctx;
-  // True when video_out_ctx->hw_frames_ctx is the decoder's pool rather than one
-  // of our own. Frames then reach the encoder without a copy, but an upload must
-  // not allocate out of that pool: the surface it took would be one the decoder
-  // is counting on, which stalls decoding. upload_frames_ctx is created on the
-  // first upload to hold those frames instead.
-  bool encoder_pool_shared;
+  // Where an upload goes while shares_decoder_pool is set: it must not allocate
+  // out of the decoder's pool, since the surface it took would be one the
+  // decoder is counting on. Created on the first upload.
   AVBufferRef *upload_frames_ctx;
 
   SwrContext *resample_ctx;

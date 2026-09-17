@@ -25,6 +25,74 @@ av_frame_ptr make_frame() {
 
 }  // namespace
 
+TEST_CASE("device_budget_starves_decoder", "[device_frames]") {
+  // maxExtraHwFrameCnt caps the frames a decoder session may hold beyond its
+  // own working set, so the boundary is strict: holding exactly that many
+  // leaves the session what it needs.
+  SECTION("holding more than the cap starves it") {
+    // m4: cap 10, budget 16, and 18468 send_packet-over-budget events.
+    CHECK(device_budget_starves_decoder(16, 10));
+    CHECK(device_budget_starves_decoder(64, 20));
+    CHECK(device_budget_starves_decoder(11, 10));
+  }
+
+  SECTION("holding exactly the cap does not") {
+    // m34 and m73: cap 16, budget 16, and not one over-budget event between
+    // them. Warning at >= made both of them false positives.
+    CHECK_FALSE(device_budget_starves_decoder(16, 16));
+    CHECK_FALSE(device_budget_starves_decoder(10, 10));
+    CHECK_FALSE(device_budget_starves_decoder(255, 255));
+  }
+
+  SECTION("holding less than the cap does not") {
+    CHECK_FALSE(device_budget_starves_decoder(8, 16));
+    CHECK_FALSE(device_budget_starves_decoder(0, 16));
+  }
+
+  SECTION("no cap in Options means libxcoder's default, which nothing exceeds") {
+    // xcoder_param_int returns -1 when the key is absent.
+    CHECK_FALSE(device_budget_starves_decoder(16, -1));
+    CHECK_FALSE(device_budget_starves_decoder(1000, -1));
+  }
+}
+
+TEST_CASE("device_frames_worth_holding", "[device_frames]") {
+  // {encodes, detects}
+  const MonitorFrameUse kEncodes{true, false};
+  const MonitorFrameUse kDetects{false, true};
+  const MonitorFrameUse kBoth{true, true};
+  const MonitorFrameUse kNeither{false, false};
+
+  SECTION("an encoder can be handed the device frame directly") {
+    CHECK(device_frames_worth_holding({kEncodes}));
+    CHECK(device_frames_worth_holding({kNeither, kEncodes}));
+  }
+
+  SECTION("object detection reads the device frame, encoder or not") {
+    // m4: records by passthrough and runs AI. receive_detection and
+    // draw_last_roi both work from packet->hw_frame, so releasing frames on
+    // the grounds that nothing encodes would break detection outright.
+    CHECK(device_frames_worth_holding({kDetects}));
+    CHECK(device_frames_worth_holding({kNeither, kDetects}));
+  }
+
+  SECTION("both uses at once is still worth holding") {
+    CHECK(device_frames_worth_holding({kBoth}));
+  }
+
+  SECTION("neither use has nothing to hold them for") {
+    // m28: copies packets to disk and runs no AI, so a frame kept on the card
+    // is never read. Holding them to a budget and shedding at it logged a
+    // warning a minute for frames nothing was going to use.
+    CHECK_FALSE(device_frames_worth_holding({kNeither}));
+    CHECK_FALSE(device_frames_worth_holding({kNeither, kNeither, kNeither}));
+  }
+
+  SECTION("knowing nothing is not the same as knowing nothing uses them") {
+    CHECK(device_frames_worth_holding({}));
+  }
+}
+
 TEST_CASE("device frame gauge counts an adopted frame", "[device_frames]") {
   const unsigned int before = zm_device_frames_in_flight();
 
@@ -32,6 +100,22 @@ TEST_CASE("device frame gauge counts an adopted frame", "[device_frames]") {
     device_frame_ptr held = adopt_device_frame(make_frame());
     REQUIRE(held);
     REQUIRE(zm_device_frames_in_flight() == before + 1);
+  }
+
+  REQUIRE(zm_device_frames_in_flight() == before);
+}
+
+TEST_CASE("a pointer built directly is not counted either way", "[device_frames]") {
+  // device_frame_ptr{frame} gets the right deleter but skips the increment.
+  // The deleter must therefore not decrement for it: doing so underflows an
+  // unsigned gauge, and the wrong readings land on whatever runs next rather
+  // than here. Prefer adopt_device_frame(); this only has to be harmless.
+  const unsigned int before = zm_device_frames_in_flight();
+
+  {
+    device_frame_ptr raw{av_frame_alloc()};
+    REQUIRE(raw);
+    REQUIRE(zm_device_frames_in_flight() == before);
   }
 
   REQUIRE(zm_device_frames_in_flight() == before);

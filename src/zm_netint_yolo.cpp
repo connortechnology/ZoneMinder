@@ -18,7 +18,16 @@
 constexpr size_t NB_MODEL_NAME_OFFSET = 0x0C;
 constexpr size_t NB_MODEL_NAME_MAX_LEN = 64;
 
-#define SOFTWARE_DRAWBOX 1
+#define SOFTWARE_DRAWBOX 0
+
+// Background drawn behind a label. Dark enough to carry white text over a
+// bright scene, transparent enough to keep what is behind it visible.
+static constexpr const char *kLabelBackground = "black@0.5";
+
+// A call over this is not a slow blit, it is a wait: the filter allocates its
+// output from the frame pool and blocks when the card has none to give.
+static constexpr uint64_t kDrawtextBlockedUs = 250000;
+
 
 namespace zm_yolo {
 
@@ -230,8 +239,49 @@ bool Quadra_Yolo::setup(
 #if !SOFTWARE_DRAWBOX
   if (drawbox) drawbox = drawbox_filter.setup("ni_quadra_drawbox=inplace=1", "ni_quadra_drawbox", dec_ctx, dec_stream->time_base, dec_ctx->hw_frames_ctx, dec_ctx->pix_fmt);
   //monitor->LabelSize() // 1234
-  if (drawtext) drawtext = drawtext_filter.setup(stringtf("ni_quadra_drawtext=text=init:expansion=none:fontsize=%d:font=Sans",10+monitor->LabelSize() * 4), "ni_quadra_drawtext",
-      dec_ctx, dec_stream->time_base, dec_ctx->hw_frames_ctx, dec_ctx->pix_fmt);
+  if (drawtext) {
+    const int fontsize = 10 + monitor->LabelSize() * 4;
+    // White on a bright scene is unreadable, which is why the software
+    // blitter drew onto black. box fills the glyph box before the text, and
+    // ff_blend_rectangle honours the alpha, so a part-transparent black still
+    // shows the scene through it.
+    //
+    // box is one flag for the filter, but the colour and the padding are per
+    // slot, so every slot we might use has to be set. They are set here
+    // rather than per frame because they never change, and because they are
+    // the options NETINT did not mark runtime -- a reinit command carrying
+    // them is refused. reinit runs av_opt_copy from the live context before
+    // applying its own string, so what is set here survives every reinit.
+    // The filter takes an output frame from its own pool for every frame it
+    // draws, and that pool defaults to four. Four in flight is not enough
+    // while this monitor also holds decoded frames of its own:
+    // ni_scaler_session_read_hwdesc gets frame index 0 and spins for seconds,
+    // with ni_rsrc_mon showing the scaler at 0% load and 0% frame memory.
+    // The card has the frames; the session's pool does not.
+    //
+    // Set as an option rather than through filter_ctx->extra_hw_frames, which
+    // is libavfilter's own accounting and fixed once the filter is
+    // initialised: a pool bigger than that field leaves these frames outside
+    // the hardware frames context hwdownload was configured for, and it
+    // refuses every one with EINVAL. Needs
+    // utils/netint/ffmpeg-patches/0001, which adds the option.
+    const int budget = monitor->DeviceFrameBudget() > 0
+        ? monitor->DeviceFrameBudget()
+        : static_cast<int>(zm_device_frame_budget());
+    const int pool_size = std::max(8, budget / 2);
+
+    std::string options = stringtf(
+        "ni_quadra_drawtext=text=init:expansion=none:fontsize=%d:font=Sans:box=1"
+        ":pool_size=%d",
+        fontsize, pool_size);
+    Debug(1, "drawtext output pool of %d frames (budget %d)", pool_size, budget);
+    const int padding = std::max(2, fontsize / 6);
+    for (size_t i = 0; i < kDrawtextSlots; i++)
+      options += stringtf(":bc%zu=%s:bb%zu=%d", i, kLabelBackground, i, padding);
+
+    drawtext = drawtext_filter.setup(options, "ni_quadra_drawtext",
+        dec_ctx, dec_stream->time_base, dec_ctx->hw_frames_ctx, dec_ctx->pix_fmt);
+  }
   //if (drawtext) drawtext = drawtext_filter.setup("ni_quadra_scale=iw:ih:format=rgba,ni_quadra_drawtext=text=init:fontsize=24:font=Sans", "ni_quadra_drawtext", true, dec_ctx->pix_fmt);
 #endif
 
@@ -331,15 +381,19 @@ int Quadra_Yolo::receive_detection(std::shared_ptr<ZMPacket> packet) {
       return 1;
     }
     aiframe_number++;
-    AVFrame *out_frame;
+    AVFrame *out_frame = nullptr;
     // Allocates out_frame
     ret = process_roi(avframe, &out_frame);
     if (ret < 0) {
       Error("Quadra: cannot draw roi");
       return -1;
     }
-    packet->set_ai_frame(out_frame);
-    zm_dump_video_frame(out_frame, "ai");
+    // No frame means nothing was detected and nothing was drawn, which is
+    // the common case. The analysis image falls back to the captured frame.
+    if (out_frame) {
+      packet->set_ai_frame(out_frame);
+      zm_dump_video_frame(out_frame, "ai");
+    }
   } else {
     return 0;
   }
@@ -458,7 +512,7 @@ int Quadra_Yolo::draw_roi_box_in_place(
   Image in_image(inframe);
 
   for (int i=0; i<line_width; i++) {
-    in_image.DrawBox(roi.left+i, roi.top+i, roi.right-2*i, roi.bottom-2*i, box_color);
+    in_image.DrawBox(roi.left+i, roi.top+i, roi.right-i, roi.bottom-i, box_color);
   }
   return 1;
 } // end draw_roi_box_in_place
@@ -483,19 +537,63 @@ int Quadra_Yolo::draw_roi_box(
     color = object_classes_.colorStringFor(roi_extra.cls);
   }
 
-  for (int i=0; i<line_width; i++) {
+  // The filter carries kDrawboxSlots rectangles and draws each as a one pixel
+  // outline, so a thick border is that many nested rectangles drawn in one
+  // pass. Writing them all to the unsuffixed x/y/w/h left only the last
+  // iteration set, which is why the borders came out a single pixel wide,
+  // inset by line_width-1.
+  int slots = line_width;
+  if (slots > kDrawboxSlots) {
+    if (!drawbox_width_reported_) {
+      drawbox_width_reported_ = true;
+      Warning("line width %d exceeds the %d boxes the filter carries; "
+              "drawing a %d pixel border", line_width, kDrawboxSlots, kDrawboxSlots);
+    }
+    slots = kDrawboxSlots;
+  }
+
+  int r = 0;
+  for (int i = 0; i < slots; i++) {
     int x = roi.left + i;
     int y = roi.top + i;
     int w = (roi.right - roi.left) - 2*i;
     int h = (roi.bottom - roi.top) - 2*i;
 
-    Debug(1, "draw_roi_box: x %d, y %d, w %d, h %d color %s line_width %d", x, y, w, h, color, line_width);
-    drawbox_filter.opt_set("x", x);
-    drawbox_filter.opt_set("y", y);
-    drawbox_filter.opt_set("w", w);
-    drawbox_filter.opt_set("h", h);
+    // A rectangle that has closed up contributes nothing, and a negative one
+    // is refused outright by the filter.
+    if (w <= 0 or h <= 0) {
+      slots = i;
+      break;
+    }
+
+    Debug(1, "draw_roi_box: slot %d x %d, y %d, w %d, h %d color %s line_width %d",
+        i, x, y, w, h, color, line_width);
+    // Checked for the same reason as the drawtext slots: a refused option
+    // leaves the filter drawing the previous box, or none, and says nothing.
+    if (set_drawbox_opt(i, "x", x) < 0) r = -1;
+    if (set_drawbox_opt(i, "y", y) < 0) r = -1;
+    if (set_drawbox_opt(i, "w", w) < 0) r = -1;
+    if (set_drawbox_opt(i, "h", h) < 0) r = -1;
   }
-  drawbox_filter.send_command("ni_quadra_drawbox", "color", color);
+
+  // A wider border left slots set that this one does not use, and the filter
+  // draws every slot whose width and height are positive. Zero the tail.
+  for (int i = slots; i < drawbox_slots_used_; i++) {
+    set_drawbox_opt(i, "w", 0);
+    set_drawbox_opt(i, "h", 0);
+  }
+  drawbox_slots_used_ = slots;
+
+  if (r < 0 and !drawbox_opt_reported_) {
+    drawbox_opt_reported_ = true;
+    Error("drawbox rejected a geometry option; boxes will not follow detections");
+  }
+  int cmd_ret = drawbox_filter.send_command("ni_quadra_drawbox", "color", color);
+  if (cmd_ret < 0 and !drawbox_cmd_reported_) {
+    drawbox_cmd_reported_ = true;
+    Error("drawbox rejected the colour command: %d %s; boxes will use the previous colour",
+          cmd_ret, av_make_error_string(cmd_ret).c_str());
+  }
 
   int ret = drawbox_filter.execute(inframe, outframe);
   SystemTimePoint endtime = std::chrono::system_clock::now();
@@ -514,11 +612,16 @@ int Quadra_Yolo::process_roi(AVFrame *in_frame, AVFrame **filt_frame) {
   Debug(4, "Filt %d frame pts %3" PRId64, ++filt_cnt, in_frame->pts);
 	zm_dump_video_frame(in_frame, "Quadra: process_roi in_frame");
   if (!sd || !sd_roi_extra || sd->size == 0 || sd_roi_extra->size == 0) {
-    *filt_frame = in_frame;
-    if (*filt_frame == nullptr) {
-      Error("cannot clone frame");
-      return NIERROR(ENOMEM);
-    }
+    // Nothing was detected, so there is nothing annotated to hand back. Say
+    // so rather than returning a frame: this goes to set_ai_frame(), which
+    // takes ownership, and in_frame is packet->hw_frame or packet->in_frame,
+    // already owned by that packet. Returning it outright made the packet own
+    // one AVFrame twice and ~ZMPacket freed it twice. Returning a clone fixed
+    // the double free but kept a reference on the decoder's hardware frame
+    // for the life of the packet, and holding those is what starves the
+    // filters: hwdownload then failed on thousands of frames. The analysis
+    // image falls back to in_frame on its own.
+    *filt_frame = nullptr;
     Debug(1, "no roi area in frame %d", filt_cnt);
     return 0;
   }
@@ -529,7 +632,12 @@ int Quadra_Yolo::process_roi(AVFrame *in_frame, AVFrame **filt_frame) {
 #else
   if (!use_hwframe && in_frame->hw_frames_ctx) {
 #endif
-    if (!hwdl_filter.initialised) {
+    // Keyed on the context of the frame we are about to hand it, not on
+    // whether it has ever been set up. hwdownload only accepts frames from
+    // the context it was configured with, and this one filter is shared with
+    // the post-annotation downloads below, whose frames come from the drawbox
+    // and drawtext output pools rather than the decoder's.
+    if (!hwdl_filter.built_for(in_frame->hw_frames_ctx)) {
       if (!hwdl_filter.setup("hwdownload,format=yuv420p", "", dec_ctx, dec_stream->time_base, in_frame->hw_frames_ctx, dec_ctx->pix_fmt)) {
         Warning("No hwdl");
         return -1;
@@ -561,6 +669,7 @@ int Quadra_Yolo::process_roi(AVFrame *in_frame, AVFrame **filt_frame) {
   int num = sd->size / roi->self_size;
 
   detections = nlohmann::json::array();
+  std::vector<TextItem> text_items;
   Debug(1, "Num, detections %d from sd %ld size / roi size %d", num, sd->size, roi->self_size);
 
   for (int i = 0; i < num; i++) {
@@ -593,7 +702,30 @@ int Quadra_Yolo::process_roi(AVFrame *in_frame, AVFrame **filt_frame) {
       if (input != in_frame and input != output) av_frame_free(&input);
       input = output;
     }
+    if (drawtext) {
+      text_items.push_back({
+          stringtf("%s %.1f%%", class_name.c_str(), 100*roi_extra[i].prob),
+          roi[i].left + 1 + monitor->LabelSize(),
+          roi[i].top + 1 + monitor->LabelSize(),
+          "white"});
+    }
   } // end foreach roi
+
+  // Every label on this frame in one pass. See draw_texts().
+  if (!text_items.empty()) {
+    SystemTimePoint text_starttime = std::chrono::system_clock::now();
+    AVFrame *text_output = nullptr;
+    int ret = draw_texts(input, &text_output, text_items);
+    if (ret < 0) {
+      Error("cannot draw labels %d %s", ret, av_make_error_string(ret).c_str());
+    } else if (text_output) {
+      if (input != in_frame) av_frame_free(&input);
+      input = text_output;
+    }
+    record_drawtext_time(std::chrono::duration_cast<Microseconds>(
+        std::chrono::system_clock::now() - text_starttime).count(),
+        text_items.size());
+  }
   
   AVFrame *output = nullptr;
   // Allocates the frame, gets the image from hw
@@ -602,14 +734,18 @@ int Quadra_Yolo::process_roi(AVFrame *in_frame, AVFrame **filt_frame) {
 #else
   if (use_hwframe) {
 #endif
-    if (hwdl_filter.initialised or hwdl_filter.setup("hwdownload,format=yuv420p", "", dec_ctx, dec_stream->time_base, input->hw_frames_ctx, dec_ctx->pix_fmt)) {
+    if (hwdl_filter.built_for(input->hw_frames_ctx)
+        or hwdl_filter.setup("hwdownload,format=yuv420p", "", dec_ctx, dec_stream->time_base, input->hw_frames_ctx, dec_ctx->pix_fmt)) {
       zm_dump_video_frame(input, "Quadra: process_roi hwframe");
       Debug(1, "*** Start of hwdownload ***");
       int ret = hwdl_filter.execute(input, &output);
       Debug(1, "*** End   of hwdownload ***");
       if (ret < 0) {
+        // Not a frame anyone downstream can use: the analysis image cannot
+        // read a hardware frame, and handing back in_frame gives the packet
+        // a second claim on a frame it already owns.
         Error("cannot download hwframe");
-        output = input;
+        output = nullptr;
       } else {
         zm_dump_video_frame(output, "Quadra: process_roi output");
       }
@@ -620,7 +756,13 @@ int Quadra_Yolo::process_roi(AVFrame *in_frame, AVFrame **filt_frame) {
     output = input;
   }
 
-  *filt_frame = output;
+  // Only hand back a frame we actually produced. output is in_frame whenever
+  // nothing was drawn or the download did not happen, and in_frame belongs to
+  // the caller's packet: set_ai_frame would take a second ownership of it, and
+  // if it is still a hardware frame the analysis image cannot read it anyway.
+  // No frame means "nothing annotated", and the analysis image falls back to
+  // the captured one.
+  *filt_frame = (output == in_frame) ? nullptr : output;
   if (input != in_frame and input != output) av_frame_free(&input);
   
   // Technicall we should have a lock around this, but since we only access from the Analysis thread, we won't worry about it.
@@ -663,6 +805,7 @@ int Quadra_Yolo::annotate(
     ) {
   AVFrame *input = in_frame;
   if (drawbox) {
+    SystemTimePoint box_starttime = std::chrono::system_clock::now();
 #if SOFTWARE_DRAWBOX
     int ret = draw_roi_box_in_place(input, roi, roi_extra, monitor->LabelSize(), box_color);
     if (ret < 0) Error("draw roi box failed");
@@ -684,36 +827,38 @@ int Quadra_Yolo::annotate(
       zm_dump_video_frame(input, "Quadra: drawbox output");
     }
 #endif
+    annotate_box_us_ += std::chrono::duration_cast<Microseconds>(
+        std::chrono::system_clock::now() - box_starttime).count();
   }  // end if drawbox
 
-  if (drawtext) {
-    SystemTimePoint starttime = std::chrono::system_clock::now();
-    std::string text = stringtf("%s %.1f%%", object_classes_.getClassName(roi_extra.cls).c_str(), 100*roi_extra.prob);
-#if SOFTWARE_DRAWBOX
-    Image img(input);
-    img.Annotate(text.c_str(), Vector2(roi.left, roi.top), monitor->LabelSize(), kRGBWhite, kRGBTransparent);
-#else
-    Debug(1, "Drawing text %s", text.c_str());
-    AVFrame *drawtext_output = nullptr;
 
-    zm_dump_video_frame(input, "Quadra: drawtext input");
-    int ret = draw_text(input, &drawtext_output, text,
-        roi.left+1+monitor->LabelSize(), roi.top+1+monitor->LabelSize(), "white");
-    if (ret < 0) {
-      Error("cannot drawtext %d %s", ret, av_make_error_string(ret).c_str());
-    } else {
-      if (drawtext_output) {
-        if (input != in_frame) av_frame_free(&input);
-        input = drawtext_output;
-      } else {
-        Error("drawtext_output is null");
-      }
-      zm_dump_video_frame(input, "Quadra: drawtext");
-    }
-#endif
-    SystemTimePoint endtime = std::chrono::system_clock::now();
-    Debug(1, "draw_roi_text took: %.2f seconds", FPSeconds(endtime - starttime).count());
-  }  // end if drawtext
+  // Report the means rather than each detection: at frame rate with several
+  // detections a frame, a line per call is unreadable, and one sample of a
+  // filter says nothing about its cost.
+  annotate_count_++;
+  if (annotate_count_ % 100 == 0) {
+    Debug(1, "Annotation over %ju detections (%s): drawbox %.2fms each, "
+             "drawtext %ju calls mean %.2fms max %.2fms, %ju blocked over %.0fms"
+             ", %ju reinits, %u hwdl rebuilds%s",
+        static_cast<uintmax_t>(annotate_count_),
+        SOFTWARE_DRAWBOX ? "software" : "hardware filters",
+        annotate_box_us_ / 1000.0 / annotate_count_,
+        static_cast<uintmax_t>(drawtext_calls_),
+        drawtext_calls_ ? annotate_text_us_ / 1000.0 / drawtext_calls_ : 0.0,
+        drawtext_max_us_ / 1000.0,
+        static_cast<uintmax_t>(drawtext_slow_calls_),
+        kDrawtextBlockedUs / 1000.0,
+        static_cast<uintmax_t>(drawtext_reinits_),
+        // One or two as the graph settles is expected. Per frame would mean
+        // two callers alternating contexts and each wanting its own filter.
+        hwdl_filter.rebuilds,
+        // A timing means nothing if the options were refused, so never print
+        // one that looks respectable without saying the labels are missing.
+        drawtext_opt_errors_
+            ? stringtf(" -- %ju option rejections, labels NOT drawn",
+                       static_cast<uintmax_t>(drawtext_opt_errors_)).c_str()
+            : "");
+  }
   *output = input;
   // So in_frame should not be touched, and we should have an output frame, that references the same data as in_frame.
   return 1;
@@ -734,6 +879,7 @@ int Quadra_Yolo::draw_last_roi(std::shared_ptr<ZMPacket> packet) {
   AVFrame *in_frame = packet->hw_frame.get();
 #endif
   AVFrame *input = in_frame;
+  std::vector<TextItem> text_items;
 
   if (!input) return 1;
 
@@ -764,10 +910,33 @@ int Quadra_Yolo::draw_last_roi(std::shared_ptr<ZMPacket> packet) {
       if (input != in_frame) av_frame_free(&input);
       input = output;
     }
+    if (drawtext) {
+      text_items.push_back({
+          stringtf("%s %.1f%%", class_name.c_str(), 100*last_roi_extra[i].prob),
+          last_roi[i].left + 1 + monitor->LabelSize(),
+          last_roi[i].top + 1 + monitor->LabelSize(),
+          "white"});
+    }
   } // end foreach detection
 
+  // Every label in one pass, as in process_roi.
+  if (!text_items.empty()) {
+    SystemTimePoint text_starttime = std::chrono::system_clock::now();
+    AVFrame *text_output = nullptr;
+    int ret = draw_texts(input, &text_output, text_items);
+    if (ret < 0) {
+      Error("cannot draw labels %d %s", ret, av_make_error_string(ret).c_str());
+    } else if (text_output) {
+      if (input != in_frame) av_frame_free(&input);
+      input = text_output;
+    }
+    record_drawtext_time(std::chrono::duration_cast<Microseconds>(
+        std::chrono::system_clock::now() - text_starttime).count(),
+        text_items.size());
+  }
+
 #if !SOFTWARE_DRAWBOX
-  if (!hwdl_filter.initialised) {
+  if (!hwdl_filter.built_for(input->hw_frames_ctx)) {
     if (!hwdl_filter.setup("hwdownload,format=yuv420p", "", dec_ctx, dec_stream->time_base, input->hw_frames_ctx, dec_ctx->pix_fmt)) {
       Warning("No hwdl");
       return -1;
@@ -909,6 +1078,144 @@ int Quadra_Yolo::ni_read_roi(AVFrame *out, int frame_count) {
   }
   if (roi_box) free(roi_box);
   return roi_num;
+}
+
+void Quadra_Yolo::record_drawtext_time(uint64_t us, size_t labels) {
+  drawtext_calls_++;
+  annotate_text_us_ += us;
+  if (us > drawtext_max_us_) drawtext_max_us_ = us;
+  if (us > kDrawtextBlockedUs) {
+    drawtext_slow_calls_++;
+    // Counted, and carried in the annotation report, rather than warned about
+    // one at a time. When the pool was undersized a quarter of all calls
+    // blocked for seconds and each was worth seeing; sized, it is two calls in
+    // ten thousand at a few hundred ms, and the rate is the only part that
+    // means anything. The report already carries it.
+    Debug(1, "drawtext blocked %.2fs on %zu label%s (%ju of %ju calls so far)",
+        us / 1000000.0, labels, labels == 1 ? "" : "s",
+        static_cast<uintmax_t>(drawtext_slow_calls_),
+        static_cast<uintmax_t>(drawtext_calls_));
+  }
+}
+
+// The reinit command carries an option string parsed on ':' and '=', so a
+// value containing either has to be escaped or it splits the command.
+static std::string escape_filter_value(const std::string &value) {
+  std::string out;
+  for (char c : value) {
+    if (c == '\\' or c == ':' or c == '=' or c == '\'') out += '\\';
+    out += c;
+  }
+  return out;
+}
+
+// Slot 0 is the unsuffixed x/y/w/h, the rest carry their index.
+int Quadra_Yolo::set_drawbox_opt(int slot, const char *name, int value) {
+  std::string key = slot ? stringtf("%s%d", name, slot) : name;
+  return drawbox_filter.opt_set(key, value);
+}
+
+
+int Quadra_Yolo::draw_texts(AVFrame *in_frame, AVFrame **output,
+                            const std::vector<TextItem> &items) {
+  if (items.empty()) {
+    *output = nullptr;
+    return 1;
+  }
+
+#if SOFTWARE_DRAWBOX
+  Image img(in_frame);
+  for (const TextItem &item : items) {
+    // Black rather than transparent, for the same reason the hardware path
+    // draws a box: white on a bright scene cannot be read. Annotate has no
+    // alpha, so this is the opaque version of what the filter does.
+    img.Annotate(item.text.c_str(), Vector2(item.x, item.y),
+                 monitor->LabelSize(), kRGBWhite, kRGBBlack);
+  }
+  *output = nullptr;   // drawn in place, caller keeps in_frame
+  return 1;
+#else
+  if (!drawtext_filter.filter_ctx) {
+    Error("drawtext filter not configured");
+    return -1;
+  }
+
+  // One command for every label on the frame. The filter carries 32 slots, so
+  // anything beyond that is dropped rather than silently overwriting slot 31.
+  size_t count = items.size();
+  if (count > kDrawtextSlots) {
+    Warning("%zu labels on one frame, drawing the first %zu", count, kDrawtextSlots);
+    count = kDrawtextSlots;
+  }
+
+  // Set every slot through the filter's own reinit command rather than
+  // av_opt_set on filter_ctx->priv. opt_set reaches the option storage but
+  // not what init() derives from it, and this filter derives two things that
+  // matter: text_num is counted once in init() by walking text[] to the first
+  // null, so with a single text at graph construction only slot 0 is ever
+  // drawn however many we set; and x/y are evaluated from the pre-parsed
+  // x_pexpr/y_pexpr, not from the strings, so a new position is ignored.
+  // That is why the boxes moved with the detections and the labels did not
+  // appear at all.
+  //
+  // reinit re-runs uninit() and init(), which recomputes both. It used to
+  // fail with EINVAL because NETINT never gave these options
+  // AV_OPT_FLAG_RUNTIME_PARAM, which FFmpeg 7.x requires on an initialised
+  // object; utils/netint/ffmpeg-patches/0002 adds it.
+  std::string command;
+  for (size_t i = 0; i < count; i++) {
+    if (!command.empty()) command += ":";
+    command += stringtf("t%zu=%s:x%zu=%d:y%zu=%d:fc%zu=%s",
+        i, escape_filter_value(items[i].text).c_str(),
+        i, items[i].x,
+        i, items[i].y,
+        i, items[i].colour.c_str());
+  }
+
+  // Slots a busier frame left behind would otherwise redraw its labels over
+  // this one. A slot must stay non-empty for text_num to count past it, so
+  // blank it with a space rather than dropping it.
+  for (size_t i = count; i < drawtext_slots_used_; i++) {
+    command += stringtf(":t%zu=%s", i, " ");
+  }
+  drawtext_slots_used_ = count;
+
+  // update sets the options on the live filter and re-derives text_num, the
+  // position expressions and any newly used slot's glyphs. reinit was doing
+  // the same job by building a fresh context and uninit()ing the old one,
+  // which closed both Quadra scaler sessions and rebuilt both frame pools
+  // every time a label changed. At 6 to 12 changes a second that starved the
+  // card: drawtext went back to blocking for seconds in
+  // ni_scaler_session_read_hwdesc and the decoder stopped making its frame
+  // budget, so frames were dropped and went out with no box and no label.
+  // utils/netint/ffmpeg-patches/0003 adds the command.
+  //
+  // Still only sent when something changed: draw_last_roi redraws the last
+  // detection on every frame between inferences, so most commands would set
+  // what is already set.
+  if (command == drawtext_last_command_) {
+    Debug(2, "Drawtext unchanged, %zu label%s", count, count == 1 ? "" : "s");
+    return drawtext_filter.execute(in_frame, output);
+  }
+
+  Debug(1, "Drawtext %zu label%s: %s", count, count == 1 ? "" : "s", command.c_str());
+  drawtext_reinits_++;
+  int ret = drawtext_filter.send_command("ni_quadra_drawtext", "update", command.c_str());
+  if (ret < 0) {
+    drawtext_opt_errors_++;
+    if (!drawtext_opt_reported_) {
+      drawtext_opt_reported_ = true;
+      Error("drawtext refused update: %d %s. Labels will not be drawn; the "
+            "command comes from utils/netint/ffmpeg-patches/0003 and needs "
+            "0002's AV_OPT_FLAG_RUNTIME_PARAM. Command was: %s",
+            ret, av_make_error_string(ret).c_str(), command.c_str());
+    }
+    return ret;
+  }
+  drawtext_last_command_ = command;
+
+  return drawtext_filter.execute(in_frame, output);
+#endif
 }
 
 int Quadra_Yolo::draw_text(AVFrame *input, AVFrame **output, const std::string &text, int x, int y, const std::string &colour) {

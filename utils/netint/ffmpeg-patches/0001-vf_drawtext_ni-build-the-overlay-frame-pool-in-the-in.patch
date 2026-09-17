@@ -1,0 +1,151 @@
+From: Isaac Connor <connortechnology@gmail.com>
+Subject: [PATCH 1/2] vf_drawtext_ni: build the overlay frame pool in the
+ in-place path
+
+Against Quadra V5.8.0 (libxcoder 5806tCr2).
+
+init_hwframe_uploader() builds the output frame pool for s->api_ctx only
+under "if (s->use_watermark)". The in-place path needs one just as much:
+both paths reach ni_device_alloc_frame() with NI_SCALER_FLAG_IO set in
+filter_frame(), so both take an output frame from that session for every
+input frame. Without the pool, ni_scaler_session_read_hwdesc() gets
+frame index 0 -- "2D could not acquire frame" -- and spins its for(;;)
+up to 1000 times, issuing an INST_BUF_INFO_RW_UPLOAD device query on
+each pass.
+
+The crop session does get a pool, but sized 1, which allows exactly one
+frame in flight: the next input waits for the previous crop output to be
+recycled, in the same spin.
+
+Measured on a ZoneMinder capture process, one Quadra, 3840x2160 h264
+decode to hardware frames, drawing one or two labels per frame through
+drawtext with drawbox ahead of it:
+
+  Annotation over 100 detections (hardware filters): drawbox 5.96ms
+  each, drawtext 76 calls mean 2691.77ms max 17469.20ms, 20 blocked
+  over 250ms
+
+  drawtext calls                 76
+  under 250ms                    56
+  blocked 6.21 - 6.45s            9
+  blocked 11.46 - 17.47s         11
+
+With the patch, same monitor, same workload:
+
+  Annotation over 100 detections (hardware filters): drawbox 5.12ms
+  each, drawtext 99 calls mean 6.85ms max 15.86ms, 0 blocked over
+  250ms
+
+  drawtext calls                 99
+  under 250ms                    99
+  blocked                         0
+
+Mean 2691.77ms to 6.85ms, worst case 17469.20ms to 15.86ms, and no
+stall at all. drawtext now costs about what drawbox costs, which is
+what it should: the filter was never slow, it was waiting.
+
+26% of calls stalled before. The two clusters are one and two exhausted
+retry loops, the crop session and the overlay session starving
+separately or together. Identical work in the fast and slow cases -- the same one or
+two short labels -- so this is a wait for a frame, not drawing cost.
+vf_drawbox_ni.c in the same graph, over the same frames, builds its
+pool unconditionally and never blocks once: 90 calls, 5.96ms mean,
+10ms worst case.
+
+Build the overlay pool unconditionally, as vf_drawbox_ni.c does, and
+give the crop session the same size.
+
+The size is a pool_size option defaulting to DEFAULT_NI_FILTER_POOL_SIZE,
+so nothing changes for an existing caller. Four frames is not enough for
+a caller that holds device frames of its own, and ctx->extra_hw_frames
+is not the way to raise it: that field is libavfilter's own accounting,
+fixed when the filter is initialised, and a pool larger than it leaves
+the frames this filter emits outside the hardware frames context the
+next filter was configured for. hwdownload then refuses every one of
+them with EINVAL.
+
+--- a/libavfilter/vf_drawtext_ni.c
++++ b/libavfilter/vf_drawtext_ni.c
+@@ -194,6 +194,7 @@
+ 
+     int line_spacing;               ///< lines spacing in pixels
+     short int draw_box;             ///< draw box around text - true or false
++    int pool_size;                  ///< frames in this filter's output pool
+     char *boxborderw[MAX_TEXT_NUM]; ///< box border width (padding)
+                                     ///  allowed formats: "all", "vert|oriz", "top|right|bottom|left"
+     int bb_top[MAX_TEXT_NUM];       ///< the size of the top box border
+@@ -465,6 +466,8 @@
+     { "bordercolor", "set border color",     OFFSET(bordercolor.rgba),   AV_OPT_TYPE_COLOR,  {.str="black"}, 0, 0, FLAGS },
+     { "shadowcolor", "set shadow color",     OFFSET(shadowcolor.rgba),   AV_OPT_TYPE_COLOR,  {.str="black"}, 0, 0, FLAGS },
+     { "box",         "set box",              OFFSET(draw_box),           AV_OPT_TYPE_BOOL,   {.i64=0},     0,        1       , FLAGS },
++    { "pool_size",   "frames in the output pool, 0 for the default",
++                                             OFFSET(pool_size),          AV_OPT_TYPE_INT,    {.i64=0},     0,        256     , FLAGS },
+     { "boxborderw",  "set box borders width", OFFSET(boxborderw[0]),        AV_OPT_TYPE_STRING, {.str="0"},   0, 0, FLAGS },
+     { "bb0",         "set box borders width", OFFSET(boxborderw[0]),        AV_OPT_TYPE_STRING, {.str="0"},   0, 0, FLAGS },
+     { "bb1",         "set box borders width", OFFSET(boxborderw[1]),        AV_OPT_TYPE_STRING, {.str="0"},   0, 0, FLAGS },
+@@ -2455,6 +2458,7 @@
+                                  AVFrame *frame, int txt_w, int txt_h)
+ {
+     int ret;
++    int pool_size;
+     AVHWFramesContext *hwframe_ctx;
+     AVHWFramesContext *out_frames_ctx;
+     AVHWFramesContext *main_frame_ctx;
+@@ -2547,17 +2551,33 @@
+ #if IS_FFMPEG_61_AND_ABOVE
+     s->buffer_limit = 1;
+ #endif
+-    if (s->use_watermark) {
+-        // init the out pool for the overlay session when use watermark
+-        ret = ff_ni_build_frame_pool(&s->api_ctx, frame->width, frame->height,
+-                                        main_frame_ctx->sw_format, 4,
+-                                        s->buffer_limit);
++    /* The overlay session allocates an output frame for every input frame,
++     * in the watermark path and the in-place path alike: both reach
++     * ni_device_alloc_frame() with NI_SCALER_FLAG_IO set. Build the pool
++     * unconditionally, as vf_drawbox_ni.c does. Built only for
++     * use_watermark, the in-place path had no pool of its own, and
++     * ni_scaler_session_read_hwdesc() returned frame index 0 and spun --
++     * 1000 retries, each issuing a device query, before giving up.
++     *
++     * pool_size is an option because DEFAULT_NI_FILTER_POOL_SIZE is four
++     * frames and a caller holding device frames of its own exhausts that
++     * while the card sits idle: ni_rsrc_mon showed the scaler at 0% load
++     * and 0% frame memory throughout. It is an option rather than
++     * ctx->extra_hw_frames because that field is libavfilter's own
++     * accounting, fixed when the filter is initialised, and growing this
++     * pool past it leaves the frames this filter emits outside the hardware
++     * frames context the next filter was configured for -- hwdownload then
++     * refuses them with EINVAL.
++     */
++    pool_size = s->pool_size > 0 ? s->pool_size : DEFAULT_NI_FILTER_POOL_SIZE;
++    ret = ff_ni_build_frame_pool(&s->api_ctx, frame->width, frame->height,
++                                 main_frame_ctx->sw_format, pool_size,
++                                 s->buffer_limit);
+ 
+-        if (ret < 0) {
+-            av_log(ctx, AV_LOG_ERROR,
+-                    "Internal output allocation failed rc = %d\n", ret);
+-            return ret;
+-        }
++    if (ret < 0) {
++        av_log(ctx, AV_LOG_ERROR,
++                "Internal output allocation failed rc = %d\n", ret);
++        return ret;
+     }
+ 
+     // if background frame has no alpha, set up an extra intermediate scaler
+@@ -2592,8 +2612,12 @@
+         s->crop_session_opened = 1;
+ 
+         // init the out pool for the crop session, make it rgba
++        /* One frame is one frame in flight: the next input has to wait for
++         * the last crop output to be recycled, and waits in the same
++         * 1000-retry spin. Size it with the overlay pool.
++         */
+         ret = ff_ni_build_frame_pool(&s->crop_api_ctx, txt_w, txt_h,
+-                                     AV_PIX_FMT_RGBA, 1, 0);
++                                     AV_PIX_FMT_RGBA, pool_size, 0);
+ 
+         if (ret < 0) {
+             av_log(ctx, AV_LOG_ERROR,
