@@ -72,7 +72,12 @@ target_include_directories(tests
 
 target_compile_definitions(tests
   PRIVATE
-    ZM_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    ZM_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    # Absolute, so a test that opens a data file works whatever directory the
+    # binary is run from. Relative paths only resolved when the cwd happened to
+    # be the one ctest picks, so running ./tests/tests from the build root
+    # reported font failures that had nothing to do with the code.
+    ZM_TEST_DATA_DIR="${CMAKE_CURRENT_BINARY_DIR}/data")
 
 # Match the production binaries: bake the OpenVINO runtime dir into RPATH so
 # the test executable can be run (and discovered by Catch) without sourcing

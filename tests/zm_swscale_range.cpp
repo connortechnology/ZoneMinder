@@ -138,7 +138,7 @@ TEST_CASE("SWScale does not hand deprecated pixel formats to swscale", "[swscale
 // logged the deprecated-format warning 15+ times a second per monitor.
 TEST_CASE("Image::Assign of a matching YUVJ frame copies without swscale", "[swscale]") {
   const int w = 32, h = 16;
-  config.font_file_location = "data/fonts/04_valid.zmfnt";
+  config.font_file_location = ZM_TEST_DATA_DIR "/fonts/04_valid.zmfnt";
 
   av_frame_ptr frame{av_frame_alloc()};
   REQUIRE(frame);

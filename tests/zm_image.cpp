@@ -33,7 +33,7 @@ namespace {
 // Image::Initialise() loads the timestamp font from the DB-backed config,
 // which the test binary doesn't have; point it at the test fixture font.
 void bootstrap_image_config() {
-  config.font_file_location = "data/fonts/04_valid.zmfnt";
+  config.font_file_location = ZM_TEST_DATA_DIR "/fonts/04_valid.zmfnt";
 }
 
 struct Planes {

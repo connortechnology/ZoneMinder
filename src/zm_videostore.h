@@ -67,6 +67,12 @@ class VideoStore {
   int encode_count_;
   bool video_encoded;  // true once at least one frame has been sent to the video encoder
   bool video_encoder_failed;  // true after a fatal encoder error; skip further sends
+  // True when video_out_ctx draws frames from the decoder's own pool. Only then
+  // may a decoded device frame be handed to the encoder: a VAAPI encoder accepts
+  // a surface from a pool it does not own and encodes black without any error,
+  // and because both are AV_PIX_FMT_VAAPI the upload path does not trigger
+  // either, so nothing else catches it.
+  bool shares_decoder_pool;
   // Set in open() when the monitor is configured to ENCODE but no encoder could
   // be opened; we then copy the input stream and write packets unchanged.
   bool video_passthrough_fallback;

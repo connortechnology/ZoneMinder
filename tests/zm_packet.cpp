@@ -55,8 +55,11 @@ TEST_CASE("ZMPacket::set_ai_frame ownership", "[packet]") {
     ZMPacket packet;
     AVFrame *frame = make_frame();
     // hw_frame counts against the device-frame gauge, so it takes the
-    // device_frame_ptr deleter rather than the plain one.
-    packet.hw_frame = device_frame_ptr{frame};
+    // device_frame_ptr deleter rather than the plain one. Go through
+    // adopt_device_frame: building the pointer directly skips the increment
+    // while the deleter still decrements, which underflows the unsigned gauge
+    // and leaves it wrong for every later test in the process.
+    packet.hw_frame = adopt_device_frame(av_frame_ptr{frame});
 
     packet.set_ai_frame(frame);
 
