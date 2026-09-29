@@ -167,3 +167,144 @@ TEST_CASE("Audio detector with no decoder open") {
     REQUIRE(detector.Level() == 0);
   }
 }
+
+TEST_CASE("Audio detector does not retry a codec it cannot decode") {
+  // Monitor::Capture calls Open on every audio packet until it succeeds, and
+  // it now does so for every monitor with audio rather than only those with
+  // AudioDetection on. A stream ZoneMinder has no decoder for must therefore
+  // fail quietly after the first attempt, or it warns at the audio packet
+  // rate for as long as the monitor runs.
+  AudioDetector detector;
+
+  AVCodecParameters codecpar = {};
+  codecpar.codec_type = AVMEDIA_TYPE_AUDIO;
+  // Deliberately not a real audio codec, so no decoder can be found for it
+  // whatever ffmpeg build this runs against.
+  codecpar.codec_id = AV_CODEC_ID_FIRST_UNKNOWN;
+
+  SECTION("the first attempt fails and later ones stay failed") {
+    REQUIRE_FALSE(detector.Open(&codecpar));
+    REQUIRE_FALSE(detector.Open(&codecpar));
+    REQUIRE_FALSE(detector.IsOpen());
+  }
+
+  SECTION("a different codec is still tried") {
+    REQUIRE_FALSE(detector.Open(&codecpar));
+
+    // PCM is built into every ffmpeg, so this one really should open. What is
+    // being pinned is that the refusal is specific to the failed codec and
+    // does not disable the detector for the life of the monitor.
+    AVCodecParameters pcm = {};
+    pcm.codec_type = AVMEDIA_TYPE_AUDIO;
+    pcm.codec_id = AV_CODEC_ID_PCM_S16LE;
+    pcm.sample_rate = 8000;
+#if LIBAVUTIL_VERSION_CHECK(57, 28, 100, 28, 0)
+    av_channel_layout_default(&pcm.ch_layout, 1);
+#else
+    pcm.channels = 1;
+    pcm.channel_layout = AV_CH_LAYOUT_MONO;
+#endif
+
+    REQUIRE(detector.Open(&pcm));
+    REQUIRE(detector.IsOpen());
+  }
+
+  SECTION("a successful open clears the refusal") {
+    AVCodecParameters pcm = {};
+    pcm.codec_type = AVMEDIA_TYPE_AUDIO;
+    pcm.codec_id = AV_CODEC_ID_PCM_S16LE;
+    pcm.sample_rate = 8000;
+#if LIBAVUTIL_VERSION_CHECK(57, 28, 100, 28, 0)
+    av_channel_layout_default(&pcm.ch_layout, 1);
+#else
+    pcm.channels = 1;
+    pcm.channel_layout = AV_CH_LAYOUT_MONO;
+#endif
+
+    REQUIRE(detector.Open(&pcm));
+    REQUIRE(detector.Open(&pcm));
+    REQUIRE(detector.IsOpen());
+  }
+}
+
+TEST_CASE("Audio level is only measured when something wants it") {
+  // Decoding audio costs CPU on every packet, so a monitor nobody is asking
+  // about must not do it. Two things ask: scoring on audio, and the editor's
+  // level meter, which writes a deadline into shared memory and pushes it
+  // forward while it is on screen.
+  const uint32_t now = 1000;
+
+  SECTION("a monitor that scores on audio always wants it") {
+    REQUIRE(AudioDetector::LevelWanted(true, 0, now));
+    // Even with a long expired request, because the setting alone is enough.
+    REQUIRE(AudioDetector::LevelWanted(true, 1, now));
+  }
+
+  SECTION("with detection off and nobody asking, it is not measured") {
+    REQUIRE_FALSE(AudioDetector::LevelWanted(false, 0, now));
+  }
+
+  SECTION("an outstanding request turns it on") {
+    REQUIRE(AudioDetector::LevelWanted(false, now + 10, now));
+  }
+
+  SECTION("the deadline second itself still counts") {
+    REQUIRE(AudioDetector::LevelWanted(false, now, now));
+  }
+
+  SECTION("an expired request turns it off again") {
+    // This is what stops the decoding when the editor is closed: nothing
+    // sends a "stop", the request simply runs out.
+    REQUIRE_FALSE(AudioDetector::LevelWanted(false, now - 1, now));
+  }
+}
+
+TEST_CASE("Audio peak tracking") {
+  // The peak is what gets persisted in Frames.AudioLevel. Frames rows are
+  // written well below the capture rate -- only alarm, bulk and
+  // score-increasing frames get one -- so sampling Level() when the row is
+  // written would drop a bang that happened between two rows and had already
+  // decayed by the time the row was built.
+  AudioDetector detector;
+
+  SECTION("starts at zero") {
+    REQUIRE(detector.TakePeak() == 0);
+  }
+
+  SECTION("keeps the loudest level seen, not the most recent") {
+    detector.RaisePeak(12);
+    detector.RaisePeak(73);
+    detector.RaisePeak(4);
+    REQUIRE(detector.TakePeak() == 73);
+  }
+
+  SECTION("taking it clears it, so each row covers its own interval") {
+    detector.RaisePeak(73);
+    REQUIRE(detector.TakePeak() == 73);
+    REQUIRE(detector.TakePeak() == 0);
+
+    detector.RaisePeak(5);
+    REQUIRE(detector.TakePeak() == 5);
+  }
+
+  SECTION("a quieter interval after a loud one is not held up by it") {
+    detector.RaisePeak(90);
+    detector.TakePeak();
+    detector.RaisePeak(3);
+    REQUIRE(detector.TakePeak() == 3);
+  }
+
+  SECTION("the peak is independent of the current level") {
+    // Level() is what the alarm threshold compares against and must keep
+    // tracking the present; TakePeak() must not disturb it.
+    detector.RaisePeak(64);
+    REQUIRE(detector.Level() == 0);
+    REQUIRE(detector.TakePeak() == 64);
+    REQUIRE(detector.Level() == 0);
+  }
+
+  SECTION("silence is recorded as silence") {
+    detector.RaisePeak(0);
+    REQUIRE(detector.TakePeak() == 0);
+  }
+}

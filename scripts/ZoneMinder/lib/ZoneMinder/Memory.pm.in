@@ -188,9 +188,15 @@ our %mem_data = (
     last_analysis_viewed_time => { type=>'time_t64', seq=>$mem_seq++ },
     control_state    => { type=>'uint8[256]', seq=>$mem_seq++ },
     alarm_cause      => { type=>'int8[256]', seq=>$mem_seq++ },
-    video_fifo       => { type=>'int8[64]', seq=>$mem_seq++ },
-    audio_fifo       => { type=>'int8[64]', seq=>$mem_seq++ },
+    stream_socket_path => { type=>'int8[64]', seq=>$mem_seq++ }, # was video_fifo; now the media stream socket path
+    reserved_path2   => { type=>'int8[64]', seq=>$mem_seq++ }, # retired audio_fifo; kept reserved at this offset/size, free for future reuse
     janus_pin        => { type=>'int8[64]', seq=>$mem_seq++ },
+    # ai_server carries last_analysis_index/analysis_image_count inline in the
+    # multi-index header above, so upstream's appended copies are not repeated
+    # here. audio_level_until is appended for the on-demand audio meter; the pad
+    # rounds SharedData to a 16-byte multiple (912) matching uint32 analysis_pad[3].
+    audio_level_until => { type=>'uint32', seq=>$mem_seq++ },
+    analysis_pad     => { type=>'uint8[12]', seq=>$mem_seq++ },
   }
   },
   trigger_data => { type=>'TriggerData', seq=>$mem_seq++, 'contents'=> {

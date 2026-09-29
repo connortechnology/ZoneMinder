@@ -109,6 +109,16 @@ sub extract_cmd {
   return $xml =~ m{<cmd>[\r\n]*(.*?)[\r\n]*</cmd>}s ? $1 : undef;
 }
 
+# The camera's way of saying a session is gone: plain printable text where a
+# masked base64 payload belongs. Kept pure so the exact wording seen on the
+# wire is pinned by a test rather than by a camera being in the right state.
+sub session_error {
+  my ($cmd) = @_;
+  return 0 if !defined $cmd or $cmd eq '';
+  return 0 if $cmd !~ m{\A[\x20-\x7e]+\z};   # base64 is printable too, so this alone is not enough
+  return $cmd =~ m{invalid\s+session}i ? 1 : 0;
+}
+
 # Which channel a method travels on. Login and the key exchange predate the
 # session key and so must not be masked; OutsideCmd is the pre-auth channel
 # that serves the RSA public key.
@@ -172,8 +182,12 @@ sub open {
   return undef;
 }
 
-sub rpc_call {
+# One attempt, no recovery. Records why it failed in {last_failure} so the
+# caller can tell an undecodable reply (the session is probably gone) from an
+# HTTP error or a missing key (re-logging in would not help).
+sub rpc_once {
   my ($self, $method, $params, %opts) = @_;
+  $self->{last_failure} = undef;
   $self->{rpc_id} = ($self->{rpc_id} || 0) + 1;
 
   my $req = { method => $method, id => $self->{rpc_id}, params => $params };
@@ -192,6 +206,7 @@ sub rpc_call {
   # than saying what is actually wrong.
   if ($cmd_type eq 'Request' and !$key) {
     Error("AMLink: not logged in, refusing to send $method");
+    $self->{last_failure} = 'nokey';
     return undef;
   }
 
@@ -203,39 +218,133 @@ sub rpc_call {
                       Content => build_envelope($cmd_type, $payload));
   };
   if (!$res) {
-    Error("AMLink: request failed for $method: $@");
+    Error("AMLink: request failed for $method: ".log_safe($@));
+    $self->{last_failure} = 'transport';
     return undef;
   }
   if (!$res->is_success) {
     Error('AMLink: HTTP '.$res->status_line." for $method");
+    $self->{last_failure} = 'http';
     return undef;
   }
 
   my $cmd = extract_cmd($res->decoded_content(charset => 'none'));
   if (!defined $cmd) {
     Error("AMLink: no <cmd> element in the reply to $method");
+    $self->{last_failure} = 'nocmd';
     return undef;
   }
   my $raw_cmd = $cmd;
+
+  # An expired session is not reported as a JSON error: the camera answers with
+  # a bare plain-text string, unmasked and not base64. Unmasking that and
+  # base64-decoding it yields noise, so it used to surface as an alarming JSON
+  # parse failure for what is a routine timeout. Recognise it for what it is.
+  if (session_error($raw_cmd)) {
+    Debug(1, "AMLink: the camera reports the session is no longer valid ($method)");
+    $self->{last_failure} = 'session';
+    return undef;
+  }
+
   $cmd = mask_data($key, $cmd) if $key;
 
-  my $data = eval { decode_json(decode_base64($cmd)) };
+  my $decoded = decode_base64($cmd);
+  my $data = eval { decode_json($decoded) };
   if ($@ or !$data) {
     # Say enough to identify the cause rather than only the symptom. The reply
     # is masked base64, so a failure here means it was not what we expected and
     # the interesting question is how: answered unmasked, truncated, or masked
     # with a key we no longer share.
+    #
+    # The error has to be captured before anything else runs an eval, and
+    # flattened: ZoneMinder::Logger drops a message from its first newline
+    # onwards, and $@ ends in one, which would take the diagnosis with it.
+    my $err = log_safe($@ || 'no data');
     my $plain = $key ? eval { decode_json(decode_base64($raw_cmd)) } : undef;
     Error(sprintf(
-      'AMLink: failed to decode the reply to %s: %s (payload %d bytes, %d%%4; '
-      .'decodes unmasked: %s; first bytes %s)',
-      $method, ($@ // 'no data'), length($raw_cmd), length($raw_cmd) % 4,
+      'AMLink: failed to decode the reply to %s: %s (base64 %d bytes, %d%%4; '
+      .'decoded %d bytes; decodes unmasked: %s; base64 starts %s; decoded starts %s)',
+      $method, $err, length($raw_cmd), length($raw_cmd) % 4, length($decoded),
       ($plain ? 'YES - the camera answered without masking' : 'no'),
-      unpack('H*', substr($raw_cmd, 0, 16))));
+      substr($raw_cmd, 0, 24), unpack('H*', substr($decoded, 0, 24))));
     return $plain if $plain;   # usable after all, so do not throw it away
+    $self->{last_failure} = 'decode';
     return undef;
   }
   return $data;
+}
+
+# How long to wait before trying to re-establish the session again. Without
+# this a camera that answers unreadably every time would be hit with a fresh
+# login on every command.
+use constant RECOVERY_BACKOFF => 5;
+
+# An undecodable reply means we and the camera no longer agree about the
+# session, and nothing in the old code put that right: Dahua_RPC only re-logs-in
+# when it gets a *parseable* error back, so rpc_call returning undef left the
+# session poisoned and every later command failed the same way. A light switched
+# on by an alarm would then stay on until something else forced a re-login.
+sub rpc_call {
+  my ($self, $method, $params, %opts) = @_;
+
+  my $data = $self->rpc_once($method, $params, %opts);
+  return $data if defined $data;
+
+  # Only a masked Request carries a session to lose. The bootstrap channels
+  # (Login, OutsideCmd, GetGeneralKey) run before one exists, and login() issues
+  # them, so recovering from those would recurse.
+  return undef if cmd_type_for($method, %opts) ne 'Request';
+  my $why = $self->{last_failure} // '';
+  return undef if $why ne 'decode' and $why ne 'session';
+
+  # login() calls logout(), which is itself a Request on the poisoned session.
+  # Without this guard its decode failure would start another recovery.
+  return undef if $self->{recovering};
+
+  my $now = time;
+  if (defined $self->{last_recovery} and $now - $self->{last_recovery} < RECOVERY_BACKOFF) {
+    Debug(1, "AMLink: not re-establishing the session for $method, tried under "
+      .RECOVERY_BACKOFF.'s ago');
+    return undef;
+  }
+  $self->{last_recovery} = $now;
+
+  Info($why eq 'session'
+    ? "AMLink: the session expired, re-establishing it for $method"
+    : "AMLink: reply to $method could not be decoded, re-establishing the session");
+  local $self->{recovering} = 1;
+  # Drop what we have rather than letting logout() try to hand back a session
+  # the camera has evidently already forgotten.
+  $self->{session} = undef;
+  $self->{mask_key} = undef;
+
+  if (!$self->login()) {
+    Error("AMLink: could not re-establish the session after $method");
+    return undef;
+  }
+
+  # One retry only. Re-sending is safe for everything this module issues: the
+  # light commands set an absolute state rather than toggling, and getStatus and
+  # keepAlive are reads.
+  my $retry = $self->rpc_once($method, $params, %opts);
+  if (defined $retry) {
+    Info("AMLink: $method succeeded on the new session");
+  } else {
+    Error("AMLink: $method failed again after re-establishing the session");
+  }
+  return $retry;
+}
+
+# ZoneMinder::Logger writes one line per message and keeps only what precedes
+# the first newline, so anything appended after an embedded one is lost. Perl
+# error strings routinely carry a trailing newline and "at FILE line N." can be
+# followed by more, so flatten before handing a message over.
+sub log_safe {
+  my $text = shift;
+  return '' if !defined $text;
+  $text =~ s/\s+\z//;
+  $text =~ s/[\r\n]+/ | /g;
+  return $text;
 }
 
 # Ask the device for its RSA public key. This rides the OutsideCmd channel,
@@ -270,7 +379,7 @@ sub negotiate_mask_key {
 
   my $rsa = eval { Crypt::PK::RSA->new({ N => $pub->{N}, e => $pub->{e} }) };
   if (!$rsa) {
-    Error("AMLink: could not build the RSA key: $@");
+    Error("AMLink: could not build the RSA key: ".log_safe($@));
     return undef;
   }
   my $enc_salt = uc(unpack('H*', $rsa->encrypt($salt, 'v1.5')));
@@ -284,7 +393,7 @@ sub negotiate_mask_key {
 
   my $blob = eval { $cbc->decrypt(decode_base64($r->{params}{content}), $salt, AES_IV) };
   if (!defined $blob) {
-    Error("AMLink: could not decrypt the general key: $@");
+    Error("AMLink: could not decrypt the general key: ".log_safe($@));
     return undef;
   }
   $blob =~ s/\0+\z//;

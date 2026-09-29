@@ -11,6 +11,7 @@ require_once('Storage.php');
 require_once('Zone.php');
 
 class Monitor extends ZM_Object {
+  protected static $setters = array('User', 'ViewWidth', 'ViewHeight', 'Storage', 'Groups', 'connKey', 'Model', 'Manufacturer');
   private $shm_id = null;
   private $connected = false;
 
@@ -68,20 +69,28 @@ class Monitor extends ZM_Object {
     'last_analysis_viewed_time' => [ 'type'=>'time_t64', 'offset'=>184, 'size'=>8 ],
     'control_state'    => [ 'type'=>'uint8[256]', 'offset'=>192, 'size'=>256 ],
     'alarm_cause'      => [ 'type'=>'int8[256]', 'offset'=>448, 'size'=>256 ],
-    'video_fifo'       => [ 'type'=>'int8[64]', 'offset'=>704, 'size'=>64 ],
-    'audio_fifo'       => [ 'type'=>'int8[64]', 'offset'=>768, 'size'=>64 ],
+    // was video_fifo; now the media stream socket path (same offset/size)
+    'stream_socket_path' => [ 'type'=>'int8[64]', 'offset'=>704, 'size'=>64 ],
+    // retired audio_fifo; kept reserved at this offset/size, free for future reuse
+    'reserved_path2'   => [ 'type'=>'int8[64]', 'offset'=>768, 'size'=>64 ],
     'janus_pin'        => [ 'type'=>'int8[64]', 'offset'=>832, 'size'=>64 ],
-    // 896
+    // audio_level_until appended for the on-demand audio meter, then 12 bytes
+    // of padding (uint32 analysis_pad[3]) to keep the 16-byte-multiple layout,
+    // so SharedData is 912 bytes and TriggerData starts at 912.
+    // ai_server carries last_analysis_index/analysis_image_count inline in the
+    // multi-index header above, so upstream's appended copies are not repeated.
+    'audio_level_until' => [ 'type'=>'uint32', 'offset'=>896, 'size'=>4 ],
   ],
   'TriggerData' => [
-    'size'     => [ 'type'=>'uint32', 'offset'=>896, 'size'=>4 ],
-    'state'    => [ 'type'=>'uint32', 'offset'=>900, 'size'=>4 ],
-    'score'    => [ 'type'=>'uint32', 'offset'=>904, 'size'=>4 ],
-    'padding'  => [ 'type'=>'uint32', 'offset'=>908, 'size'=>4 ],
-    'cause'    => [ 'type'=>'int8[32]', 'offset'=>912, 'size'=>32 ],
-    'text'     => [ 'type'=>'int8[256]', 'offset'=>944, 'size'=>256 ],
-    'showtext' => [ 'type'=>'int8[256]', 'offset'=>1200, 'size'=>256 ],
-    // 1456
+    // SharedData grew from 896 to 912, so TriggerData shifts up by 16.
+    'size'     => [ 'type'=>'uint32', 'offset'=>912, 'size'=>4 ],
+    'state'    => [ 'type'=>'uint32', 'offset'=>916, 'size'=>4 ],
+    'score'    => [ 'type'=>'uint32', 'offset'=>920, 'size'=>4 ],
+    'padding'  => [ 'type'=>'uint32', 'offset'=>924, 'size'=>4 ],
+    'cause'    => [ 'type'=>'int8[32]', 'offset'=>928, 'size'=>32 ],
+    'text'     => [ 'type'=>'int8[256]', 'offset'=>960, 'size'=>256 ],
+    'showtext' => [ 'type'=>'int8[256]', 'offset'=>1216, 'size'=>256 ],
+    // 1472
   ]
   ];
 
@@ -1512,6 +1521,32 @@ class Monitor extends ZM_Object {
     return fwrite($this->shm_id, $packed_value, $this->shm_offsets[$section][$var]['size']);
   }
   
+  // How long zmc keeps measuring after one request. Long enough that a poll
+  // every couple of seconds never lets it lapse mid-session, short enough
+  // that closing the editor stops the decoding promptly.
+  const AUDIO_LEVEL_REQUEST_SECONDS = 10;
+
+  // Ask the capture thread to measure the audio level even though this
+  // monitor does not score on audio, so the editor can show a live reading
+  // while a threshold is being chosen. Has to be repeated to stay in effect.
+  public function requestAudioLevel() {
+    if (!$this->connect()) return false;
+    return false !== $this->shared_write('SharedData', 'audio_level_until',
+      time() + self::AUDIO_LEVEL_REQUEST_SECONDS);
+  }
+
+  // The reading zmc last published, or null when there is no shared memory to
+  // read (zmc not running). 0 is a real answer: silence, or nothing measured.
+  public function audioLevel() {
+    if (!$this->connect()) return null;
+    return $this->shared_read('SharedData', 'audio_level');
+  }
+
+  public function audioAlarm() {
+    if (!$this->connect()) return null;
+    return $this->shared_read('SharedData', 'audio_alarm') ? true : false;
+  }
+
   public function enable() {
     if (!$this->connect()) return false;
     $action = $this->shared_read('TriggerData', 'action');

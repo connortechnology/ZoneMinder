@@ -67,6 +67,7 @@ extern "C" {
 
 class Group;
 class MonitorLinkExpression;
+class StreamSocket;
 
 // Structure to hold per-class AI detection settings
 struct AIDetectionSetting {
@@ -312,18 +313,43 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
     };
     uint8_t control_state[256]; /* +168 */
 
-    char alarm_cause[256];    /* 408 */
-    char video_fifo_path[64]; /* 664 */
-    char audio_fifo_path[64]; /* 728 */
-    char janus_pin[64];       /* 792 */
+    char alarm_cause[256];    /* +448 */
+    /* Absolute path of the per-monitor media stream socket
+     ** (PATH_SOCKS/stream_{monitor_id}.sock), published so consumers discover
+     ** it without hard-coding the convention. Reuses the retired
+     ** video_fifo_path field, same offset and size. */
+    char stream_socket_path[64]; /* +704  (was video_fifo_path) */
+    /* Formerly audio_fifo_path, retired with video_fifo_path when the media
+     ** FIFOs were replaced by the stream socket. Kept reserved at its original
+     ** offset and size, free for a future 64-byte field. */
+    char reserved_path2[64];  /* +768  (was audio_fifo_path) */
+    char janus_pin[64];       /* +832 */
+    /* Wall clock second up to which the capture thread should keep measuring
+     * the audio level even though AudioDetection is off. The monitor editor's
+     * level meter pushes it forward while it is on screen and zmc stops
+     * decoding audio once it has passed, so a reading can be watched without
+     * paying for one on every monitor forever. 0 means nobody is asking.
+     *
+     * Appended after janus_pin. ai_server keeps its multi-index layout
+     * (last_capture_index/last_decoder_index and the separate *_image_count
+     * fields) and camera_width/camera_height, so this sits at +896 rather than
+     * upstream's +880, and ai_server already carries last_analysis_index /
+     * analysis_image_count inline in the header above -- upstream's appended
+     * copies are therefore not repeated here. */
+    uint32_t audio_level_until;   /* +896 */
+    uint32_t analysis_pad[3];     /* +900  pad to 912 (16-byte multiple) */
   } SharedData;
-  // Cross-process ABI guard. The struct is naturally aligned (NOT packed), so
-  // two 4-byte pads exist (before capture_fps and before the startup_time
-  // union); the /* +N */ comments above are the packed-layout ideal and do NOT
-  // reflect real offsets. zmc/zma/zms and the Perl (Memory.pm, which computes
-  // alignment) SHM reader assume this exact layout. If it changes, update the
-  // readers in lockstep and bump the size here.
-  static_assert(sizeof(SharedData) == 896, "SharedData layout changed; update Memory.pm and Monitor.php offsets");
+  // Cross-process ABI guard: zmc/zma/zms plus the Perl (Memory.pm) and PHP
+  // (Monitor.php) SHM readers all assume this exact layout. The struct is
+  // naturally aligned (NOT packed); the /* +N */ comments elsewhere are the
+  // packed-layout ideal and do NOT reflect real offsets. If it changes, update
+  // those readers in lockstep and bump the sizes below. The offsetof asserts
+  // pin the fields the readers hardcode, so an ABI drift fails the build with
+  // the culprit named rather than corrupting shm silently.
+  static_assert(sizeof(SharedData) == 912, "SharedData layout changed; update Memory.pm and Monitor.php offsets");
+  static_assert(offsetof(SharedData, stream_socket_path) == 704, "stream_socket_path offset changed; update Memory.pm and Monitor.php");
+  static_assert(offsetof(SharedData, janus_pin) == 832, "janus_pin offset changed; update Memory.pm and Monitor.php");
+  static_assert(offsetof(SharedData, audio_level_until) == 896, "audio_level_until offset changed; update Memory.pm and Monitor.php");
 
   enum TriggerState : uint32 { TRIGGER_CANCEL, TRIGGER_ON, TRIGGER_OFF };
 
@@ -829,10 +855,22 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   AVPixelFormat *analysis_image_pixelformats;
   size_t shm_slot_size;  // per-slot byte capacity, sized to RGBA upper bound
 
-  int video_stream_id;  // will be filled in PrimeCapture
-  int audio_stream_id;  // will be filled in PrimeCapture
-  Fifo *video_fifo;
-  Fifo *audio_fifo;
+  int video_stream_id; // will be filled in PrimeCapture
+  int audio_stream_id; // will be filled in PrimeCapture
+  // Always-on media output; survives camera reconnects, freed in destructor
+  std::unique_ptr<StreamSocket> stream_socket;
+  // Current capture health for the stream socket snapshot: 0 = healthy, else
+  // the last fault event code, with its message. Guarded by stream_event_mutex
+  // because health events come from the capture thread while state_changed
+  // events come from the analysis thread.
+  uint16_t stream_health_code = 0;
+  // Mirror of the analysis state for the snapshot, written by SetState() under
+  // stream_event_mutex so the capture thread never reads `state` itself.
+  State stream_snapshot_state = IDLE;
+  std::string stream_health_message;
+  std::mutex stream_event_mutex;
+  // Rebuild and cache the stream socket snapshot from current state + health.
+  void RefreshStreamSnapshot();
 
   std::shared_ptr<Camera> camera;
   Event *event;
@@ -1161,6 +1199,19 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   unsigned int GetPreEventCount() const { return pre_event_count; };
   int32_t GetImageBufferCount() const { return image_buffer_count; };
   State GetState() const { return (State)shared_data->state; }
+  // Set the analysis state, publishing the transition as a stream socket
+  // state_changed event (and refreshing the snapshot) when it actually changes.
+  void SetState(State new_state);
+  // Start the per-monitor media stream socket listener if it is not already
+  // running. Independent of the camera: the socket carries lifecycle events
+  // (capture faults) before any media, so zmc starts it before the first
+  // connect attempt to make startup faults observable. PrimeCapture() calls it
+  // too, then adds stream parameters. Producer side only (zmc).
+  void StartStreamSocket();
+  // Emit a capture-fault lifecycle event on the stream socket and update the
+  // cached health snapshot. code is one of the kEvent* health codes; a *_failed
+  // code sets the snapshot's active fault, a *_restored/_resumed code clears it.
+  void SendStreamHealthEvent(uint16_t code, const std::string &message, int detail = 0);
 
   AVStream *GetAudioStream() const { return camera ? camera->getAudioStream() : nullptr; };
   AVCodecContext *GetAudioCodecContext() const { return mAudioCodecContext; };
@@ -1172,12 +1223,7 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
     return mVideoCodecContext = pVideoCodecContext; };
 
   std::string GetSecondPath() const { return second_path; };
-  std::string GetVideoFifoPath() const {
-    return shared_data ? shared_data->video_fifo_path : "";
-  };
-  std::string GetAudioFifoPath() const {
-    return shared_data ? shared_data->audio_fifo_path : "";
-  };
+  std::string GetStreamSocketPath() const { return shared_data ? shared_data->stream_socket_path : ""; };
   std::string GetRTSPStreamName() const { return rtsp_streamname; };
 
   const std::string &getONVIF_URL() const { return onvif_url; };
@@ -1212,16 +1258,24 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
                     const char *force_text = "");
   void ForceAlarmOff();
   void CancelForced();
-  TriggerState GetTriggerState() const {
-    return trigger_data ? trigger_data->trigger_state : TRIGGER_CANCEL;
-  }
+  TriggerState GetTriggerState() const { return trigger_data ? trigger_data->trigger_state : TRIGGER_CANCEL; }
+  // shared_data is null until connect() maps the shm segment, and connect()
+  // fails with it still null whenever the mmap file cannot be opened, grown or
+  // mapped -- wrong ownership, or /dev/shm too small for the requested buffers.
+  // zmc's startup loop calls SetHeartbeatTime() on every failed retry, so
+  // without these guards a monitor that cannot get its shm takes zmc down with
+  // SIGSEGV instead of retrying. The accessors around these already guard the
+  // same way.
   SystemTimePoint GetStartupTime() const {
+    if (!shared_data) return SystemTimePoint();
     return std::chrono::system_clock::from_time_t(shared_data->startup_time);
   }
   void SetStartupTime(SystemTimePoint time) {
+    if (!shared_data) return;
     shared_data->startup_time = std::chrono::system_clock::to_time_t(time);
   }
   void SetHeartbeatTime(SystemTimePoint time) {
+    if (!shared_data) return;
     shared_data->heartbeat_time = std::chrono::system_clock::to_time_t(time);
   }
   void get_ref_image();
@@ -1389,6 +1443,20 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   }
   int Importance() const { return importance; }
   int StartupDelay() const { return startup_delay; }
+
+  // Whether anything wants the audio level right now: either the monitor
+  // scores on it, or the editor's meter has asked for a reading and its
+  // request has not expired. Decoding audio is not free, so a monitor nobody
+  // is asking about does not do it.
+  bool AudioLevelWanted(SystemTimePoint now) const;
+
+  // Peak audio level since the last call, for the Frames row about to be
+  // written. Clears on read, so each row covers its own interval. Always 0
+  // when the monitor has AudioDetection off, because nothing runs the
+  // detector then, and that is what tells the event view there is no audio
+  // series to draw.
+  int TakeAudioPeak() { return audio_detector.TakePeak(); }
+
  private:
   int OpenDecoder();
   int CloseDecoder();

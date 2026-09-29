@@ -39,34 +39,43 @@ AudioDetector::~AudioDetector() {
 }
 
 bool AudioDetector::Open(const AVCodecParameters *codecpar) {
+  // Already established that this codec cannot be decoded. Say so without
+  // logging again: Monitor::Capture retries on every audio packet.
+  if (codecpar and (codecpar->codec_id == failed_codec_)) return false;
+
   Close();
 
   if (!codecpar) return false;
 
   const AVCodec *codec = avcodec_find_decoder(codecpar->codec_id);
   if (!codec) {
-    Warning("Audio detection: no decoder for codec %d, detection disabled", codecpar->codec_id);
+    Warning("Audio detection: no decoder for codec %d, level reporting disabled", codecpar->codec_id);
+    failed_codec_ = codecpar->codec_id;
     return false;
   }
 
   codec_context_ = avcodec_alloc_context3(codec);
   if (!codec_context_) {
     Error("Audio detection: could not allocate a decoder context");
+    failed_codec_ = codecpar->codec_id;
     return false;
   }
 
   if (avcodec_parameters_to_context(codec_context_, codecpar) < 0) {
     Error("Audio detection: could not copy stream parameters");
     Close();
+    failed_codec_ = codecpar->codec_id;
     return false;
   }
 
   if (avcodec_open2(codec_context_, codec, nullptr) < 0) {
     Error("Audio detection: could not open the %s decoder", codec->name);
     Close();
+    failed_codec_ = codecpar->codec_id;
     return false;
   }
 
+  failed_codec_ = AV_CODEC_ID_NONE;
   Debug(1, "Audio detection: opened %s decoder", codec->name);
   return true;
 }
@@ -117,6 +126,15 @@ bool AudioDetector::IsAlarm(int level, int threshold) {
   // included, because a level of 0 is >= a threshold of 0.
   if (threshold <= 0) return false;
   return level >= threshold;
+}
+
+bool AudioDetector::LevelWanted(bool audio_detection, uint32_t request_until, uint32_t now) {
+  // A monitor that scores on audio needs the level on every packet anyway.
+  if (audio_detection) return true;
+  // Nobody has asked. Distinguished from an expired request only for clarity;
+  // the comparison below would reject 0 anyway for any plausible clock.
+  if (!request_until) return false;
+  return now <= request_until;
 }
 
 double AudioDetector::RmsFromFrame(const AVFrame *frame) const {
@@ -185,5 +203,16 @@ int AudioDetector::Process(const AVPacket *packet) {
   if (level < 0) return Level();
 
   level_.store(level, std::memory_order_relaxed);
+  RaisePeak(level);
   return level;
+}
+
+void AudioDetector::RaisePeak(int level) {
+  int current = peak_.load(std::memory_order_relaxed);
+  while (level > current &&
+         !peak_.compare_exchange_weak(current, level,
+                                      std::memory_order_relaxed,
+                                      std::memory_order_relaxed)) {
+    // compare_exchange_weak refreshed current; loop unless it now wins.
+  }
 }

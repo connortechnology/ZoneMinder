@@ -2073,6 +2073,7 @@ function xhtmlFooter() {
   'js/dateTimePicker/jquery-ui-timepicker-addon.js',
   'js/auth-helpers.js',
   'js/table-helpers.js',
+  'js/LevelGraph.js',
   'js/Server.js',
 ), true );
 ?>
@@ -2092,6 +2093,11 @@ function xhtmlFooter() {
   </script>
   <script src="<?php echo cache_bust('js/logger.js')?>"></script>
 <?php
+  # Shared by every view that embeds a log panel (see includes/logpanel.php).
+  # It has to land after $j is defined and before the view's own script, which
+  # may want to drive the panel.
+  echo output_script_if_exists(array('js/logpanel.js'));
+
   $viewJsFile = getSkinFile('views/js/'.$basename.'.js');
   if ( $viewJsFile ) {
 ?>

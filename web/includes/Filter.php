@@ -5,6 +5,7 @@ require_once('FilterTerm.php');
 require_once('Monitor.php');
 
 class Filter extends ZM_Object {
+  protected static $setters = array('Query_json', 'Query', 'terms', 'sort_field', 'sort_asc', 'skip_locked', 'limit');
   protected static $table = 'Filters';
   protected static $attrTypes = null;
   protected static $opTypes = null;
@@ -1159,6 +1160,7 @@ class Filter extends ZM_Object {
             </tr>
 ';
     } # end foreach term
+    $html .= '</tbody></table>';
     // Error($html);
     return $html;
   }  # end function widget()

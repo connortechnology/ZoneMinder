@@ -22,22 +22,6 @@
 // Use skin.js.php for JavaScript that need pre-processing
 //
 
-// Globally define the icons used in the bootstrap-table top-right toolbar
-var icons = {
-  paginationSwitchDown: 'fa-caret-square-o-down',
-  paginationSwitchUp: 'fa-caret-square-o-up',
-  export: 'fa-download',
-  refresh: 'fa-retweet',
-  autoRefresh: 'fa-clock-o',
-  advancedSearchIcon: 'fa-chevron-down',
-  toggleOff: 'fa-toggle-off',
-  toggleOn: 'fa-toggle-on',
-  columns: 'fa-th-list',
-  fullscreen: 'fa-arrows-alt',
-  detailOpen: 'fa-plus',
-  detailClose: 'fa-minus'
-};
-
 var panZoomEnabled = true; //Add it to settings in the future
 var expiredTap; //Time between touch screen clicks. Used to analyze double clicks
 var shifted = false;
@@ -2267,7 +2251,8 @@ function thisClickOnStreamObject(clickObj) {
     } else return false;
   } else {
     // When using go2rtc there will be a <video> element with no ID wrapped in a <video-stream> with an ID of !
-    if (clickObj.closest('video-stream')) return true;
+    // Also, the ".zoompan" object does not have an ID, but we need to ensure that it contains a stream.
+    if (clickObj.closest('video-stream') || clickObj.querySelector('video[id^="liveStream"], video-stream[id^="liveStream"]')) return true;
   }
   return false;
 }

@@ -56,6 +56,9 @@ possible, this should run at more or less constant speed.
 #include "zm.h"
 #include "zm_monitor.h"
 #include "zm_signal.h"
+#include "zm_stream_socket_protocol.h"
+#include "zm_time.h"
+#include "zm_utils.h"
 
 #include <getopt.h>
 #include <unistd.h>
@@ -270,11 +273,17 @@ int main(int argc, char *argv[], char **envp) {
 
   int result = 0;
   int prime_capture_log_count = 0;
+  // Tracks whether a monitor's capture pipeline has faulted since it was last
+  // healthy, so a single capture_resumed fires once the pipeline recovers. The
+  // per-edge events ride the monitor stream socket (no-op until it exists,
+  // which is after the first successful prime; observable on every reconnect).
+  std::vector<bool> monitor_faulted(monitors.size(), false);
 
   while (!zm_terminate) {
     result = 0;
 
-    for (const std::shared_ptr<Monitor> &monitor : monitors) {
+    for (size_t monitor_index = 0; monitor_index < monitors.size(); ++monitor_index) {
+      const std::shared_ptr<Monitor> &monitor = monitors[monitor_index];
       std::string sql = stringtf(
                           "INSERT INTO Monitor_Status (MonitorId,Status,CaptureFPS,AnalysisFPS,CaptureBandwidth)"
                           " VALUES (%u, 'Running',0,0,0) ON DUPLICATE KEY UPDATE Status='Running',CaptureFPS=0,AnalysisFPS=0,CaptureBandwidth=0,UpdatedOn=NOW()",
@@ -283,12 +292,28 @@ int main(int argc, char *argv[], char **envp) {
 
       monitor->LoadCamera();
 
+      // Start the media stream socket before the first connect attempt so a
+      // consumer can observe connection/prime faults that happen before the
+      // camera ever comes up (the listener needs no camera, only lifecycle
+      // events until the first HELLO).
+      monitor->StartStreamSocket();
+
+      bool connection_failed = false;
       while (!monitor->connect() and !zm_terminate) {
         Warning("Couldn't connect to monitor %d", monitor->Id());
+        if (!connection_failed) {
+          monitor->SendStreamHealthEvent(zm::stream_socket::kEventConnectionFailed,
+                                         "Unable to connect to the capture source");
+          connection_failed = true;
+          monitor_faulted[monitor_index] = true;
+        }
         monitor->SetHeartbeatTime(std::chrono::system_clock::now());
         sleep(1);
       }
       if (zm_terminate) break;
+      if (connection_failed)
+        monitor->SendStreamHealthEvent(zm::stream_socket::kEventConnectionRestored,
+                                       "Capture source connection restored");
 
       SystemTimePoint now = std::chrono::system_clock::now();
       monitor->SetStartupTime(now);
@@ -299,11 +324,18 @@ int main(int argc, char *argv[], char **envp) {
       }
 
       Seconds sleep_time = Seconds(0);
+      bool priming_failed = false;
       while ((monitor->PrimeCapture() <= 0) and !zm_terminate) {
         if (prime_capture_log_count % 60) {
           logPrintf(Logger::ERROR + monitor->Importance(), "Failed to prime capture of initial monitor");
         } else {
           Debug(1, "Failed to prime capture of initial monitor");
+        }
+        if (!priming_failed) {
+          monitor->SendStreamHealthEvent(zm::stream_socket::kEventPrimeCaptureFailed,
+                                         "Unable to prime the capture source");
+          priming_failed = true;
+          monitor_faulted[monitor_index] = true;
         }
 
         prime_capture_log_count++;
@@ -315,6 +347,14 @@ int main(int argc, char *argv[], char **envp) {
         monitor->SetHeartbeatTime(std::chrono::system_clock::now());
       }
       if (zm_terminate) break;
+      if (priming_failed)
+        monitor->SendStreamHealthEvent(zm::stream_socket::kEventPrimeCaptureRestored,
+                                       "Capture priming restored");
+      if (monitor_faulted[monitor_index]) {
+        monitor->SendStreamHealthEvent(zm::stream_socket::kEventCaptureResumed,
+                                       "Capture pipeline resumed");
+        monitor_faulted[monitor_index] = false;
+      }
 
       sql = stringtf(
               "INSERT INTO Monitor_Status (MonitorId,Status) VALUES (%u, 'Connected') ON DUPLICATE KEY UPDATE Status='Connected',UpdatedOn=NOW()",
@@ -363,6 +403,9 @@ int main(int argc, char *argv[], char **envp) {
         if (monitors[i]->PreCapture() < 0) {
           Error("Failed to pre-capture monitor %d %s (%zu/%zu)",
                 monitors[i]->Id(), monitors[i]->Name(), i + 1, monitors.size());
+          monitors[i]->SendStreamHealthEvent(zm::stream_socket::kEventCaptureFailed,
+                                             "Pre-capture failed");
+          monitor_faulted[i] = true;
           result = -1;
           break;
         }
@@ -370,12 +413,18 @@ int main(int argc, char *argv[], char **envp) {
           if (!zm_terminate)
             logPrintf(Logger::ERROR + monitors[i]->Importance(), "Failed to capture image from monitor %d %s (%zu/%zu)",
                 monitors[i]->Id(), monitors[i]->Name(), i + 1, monitors.size());
+          monitors[i]->SendStreamHealthEvent(zm::stream_socket::kEventCaptureFailed,
+                                             "Capture failed");
+          monitor_faulted[i] = true;
           result = -1;
           break;
         }
         if (monitors[i]->PostCapture() < 0) {
           Error("Failed to post-capture monitor %d %s (%zu/%zu)",
                 monitors[i]->Id(), monitors[i]->Name(), i + 1, monitors.size());
+          monitors[i]->SendStreamHealthEvent(zm::stream_socket::kEventCaptureFailed,
+                                             "Post-capture failed");
+          monitor_faulted[i] = true;
           result = -1;
           break;
         }

@@ -169,8 +169,8 @@ $SLANG = array(
     'AttrStartWeekday'      => 'Start Weekday',
     'AttrEndWeekday'        => 'End Weekday',
     'AudioMotionVersionOK'  => 'Correct version installed "{AudioMotionVersionInstalled}"',
-    'AudioMotionVersionNotInstalled' => 'Requires audio motion analyzer version "{AudioMotionVersionRequired}" to be installed~~Download link: https://cdn.jsdelivr.net/npm/audiomotion-analyzer@{AudioMotionVersionRequired} or https://github.com/hvianna/audioMotion-analyzer/releases/tag/{AudioMotionVersionRequired}',
-    'AudioMotionVersionWrongVersion' => 'The required analyzer version is "{AudioMotionVersionRequired}", but you have "{AudioMotionVersionInstalled}" installed~~Download link: https://cdn.jsdelivr.net/npm/audiomotion-analyzer@{AudioMotionVersionRequired} or https://github.com/hvianna/audioMotion-analyzer/releases/tag/{AudioMotionVersionRequired}',
+    'AudioMotionVersionNotInstalled' => 'Requires audio motion analyzer version "{AudioMotionVersionRequired}" to be installed~~Download link: https://cdn.jsdelivr.net/npm/audiomotion-analyzer@{AudioMotionVersionRequired}/src/audioMotion-analyzer.js or https://github.com/hvianna/audioMotion-analyzer/releases/tag/{AudioMotionVersionRequired}',
+    'AudioMotionVersionWrongVersion' => 'The required analyzer version is "{AudioMotionVersionRequired}", but you have "{AudioMotionVersionInstalled}" installed~~Download link: https://cdn.jsdelivr.net/npm/audiomotion-analyzer@{AudioMotionVersionRequired}/src/audioMotion-analyzer.js or https://github.com/hvianna/audioMotion-analyzer/releases/tag/{AudioMotionVersionRequired}',
     'Auth'                  => 'Authentication',
     'AutoStopTimeout'       => 'Auto Stop Timeout',
     'AvgBrScore'            => 'Avg.<br/>Score',
@@ -704,6 +704,8 @@ $SLANG = array(
     'OtherAnalysisSettings'     => 'Other',
     'AudioThreshold'            => 'Audio Threshold',
     'AudioThresholdHelp'        => 'Level, 0-100, at or above which the monitor alarms. 0 turns audio detection off. Measure the device\'s quiet level first and set this above it.',
+    'AudioLevelNow'             => 'Current Level',
+    'AudioLevelNowHelp'         => 'Live reading from the capture process, on the same 0-100 scale as the threshold. Watch it while the room is quiet to find the floor, then make some noise to see the range. Measuring only runs while this page is open, so it costs nothing the rest of the time.',
     'AudioAlarmScore'           => 'Audio Alarm Score',
     'AudioAlarmScoreHelp'       => 'Score contributed to a frame while the audio level is over the threshold.',
     'Audio detection only available with FFMPEG' => 'Audio detection only available with FFMPEG',
@@ -731,7 +733,7 @@ $SLANG = array(
     'ReplaySingle'          => 'Single Event',
     'ReportEventAudit'      => 'Audit Events Report',
     'RequestMissing'        => 'The request is missing',
-    'RequiresAudioMotionEnabled' => 'Requires installation of the file "audioMotion-analyzer.js"',
+    'RequiresAudioMotionEnabled' => 'Requires installation of the file "skins/classic/assets/audioMotion-analyzer/src/audioMotion-analyzer.js"',
     'ResetEventCounts'      => 'Reset Event Counts',
     'RestrictedCameraIds'   => 'Restricted Camera Ids',
     'RestrictedMonitors'    => 'Restricted Monitors',
@@ -1198,10 +1200,12 @@ Always: A zmc process will run and immediately connect and stay connected.~~~~
   'OPTIONS_WHATTODISPLAY' => array(
      'Help' => '
      On the Watch, Montage, Event page, you can display either a video stream, or an audio stream visualization, or both a video stream and an audio visualization.~~
-     To display the audio motion visualization, install the file "/skins/MySkin/assets/audioMotion-analyzer/src/audioMotion-analyzer.js".~~
-     This file can be downloaded from the following links:~~
-     https://cdn.jsdelivr.net/npm/audiomotion-analyzer@X.X.X where X.X.X is the version number~~
-     https://github.com/hvianna/audioMotion-analyzer/releases
+     The visualization is drawn by the audioMotion-analyzer library, which is licensed AGPL-3.0-or-later and so is not shipped with ZoneMinder. To display it, install the library as "skins/classic/assets/audioMotion-analyzer/src/audioMotion-analyzer.js" under your web directory, substituting your own skin name for "classic" if you use a different skin.~~
+     Download it from one of the following, where X.X.X is the required version:~~
+     https://cdn.jsdelivr.net/npm/audiomotion-analyzer@X.X.X/src/audioMotion-analyzer.js~~
+     https://github.com/hvianna/audioMotion-analyzer/releases/tag/X.X.X (the file is under src/ in the source tarball)~~
+     Do not use the bare https://cdn.jsdelivr.net/npm/audiomotion-analyzer@X.X.X URL: it serves the minified UMD bundle rather than the ES module this path expects.~~
+     The required version is reported below this setting, and is set by SUPPORTED_AUDIO_MOTION_ANALYZER_VERSION in skins/classic/js/audioMotionAnalyzer.js.
      ',
     ),
   'FUNCTION_ANALYSIS_ENABLED' => array(

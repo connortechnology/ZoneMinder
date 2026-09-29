@@ -27,6 +27,7 @@ set(TEST_SOURCES
   zm_image.cpp
   zm_image_jpeg_codec.cpp
   zm_image_planes.cpp
+  zm_monitor_shm.cpp
   zm_monitorstream.cpp
   zm_netint_lpr.cpp
   zm_netint_yolo.cpp
@@ -39,11 +40,16 @@ set(TEST_SOURCES
   zm_onvif_wsse.cpp
   zm_pixformat.cpp
   zm_rtsp_deprecation.cpp
+  zm_rtsp_server_session_tracker.cpp
   zm_stream.cpp
   zm_stream_races.cpp
   zm_swscale_range.cpp
   zm_poly.cpp
   zm_quadra.cpp
+  zm_stream_socket.cpp
+  zm_stream_socket_bench.cpp
+  zm_stream_socket_client.cpp
+  zm_stream_socket_protocol.cpp
   zm_time.cpp
   zm_device_frames.cpp
   zm_utils.cpp
@@ -51,6 +57,7 @@ set(TEST_SOURCES
   zm_yolov8_onnx_postprocess.cpp
   zm_zone.cpp
   zm_zone_stride.cpp
+  zm_zone_highlight.cpp
   zm_image_linesize.cpp
   zm_logger_rotate.cpp
   zm_ffmpeg_camera.cpp

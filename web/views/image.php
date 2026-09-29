@@ -61,6 +61,28 @@ if (!empty($_REQUEST['proxy'])) {
     return;
   }
 
+  // index.php exempts view=image from csrf_check() so images work as <img src>,
+  // and csrf_check() only looks at POSTs anyway. The proxy makes the server
+  // fetch a URL, so require the token here or any site could drive it through
+  // a logged-in user's browser.
+  if (ZM_ENABLE_CSRF_MAGIC) {
+    require_once('includes/csrf/csrf-magic.php');
+    if (!isset($_REQUEST['__csrf_magic']) || !is_string($_REQUEST['__csrf_magic']) ||
+        !csrf_check_tokens($_REQUEST['__csrf_magic'])) {
+      ZM\Warning('Image proxy request without a valid CSRF token');
+      http_response_code(403);
+      return;
+    }
+  }
+  // Also covers installs with CSRF magic off: browsers that send Sec-Fetch-Site
+  // say when a request was started by another site. Older browsers omit it.
+  if (isset($_SERVER['HTTP_SEC_FETCH_SITE']) and
+      !in_array($_SERVER['HTTP_SEC_FETCH_SITE'], ['same-origin', 'none'], true)) {
+    ZM\Warning('Image proxy request started by another site');
+    http_response_code(403);
+    return;
+  }
+
   $url = $_REQUEST['proxy'];
   if (!$url) {
     ZM\Warning('No url passed to image proxy');
@@ -85,8 +107,10 @@ if (!empty($_REQUEST['proxy'])) {
   // reserved addresses (127.0.0.1, ::1, 169.254.169.254 cloud metadata) are
   // refused. FILTER_FLAG_NO_RES_RANGE covers exactly those without excluding
   // 10/8, 172.16/12, 192.168/16 or fc00::/7.
-  if (filter_var($host, FILTER_VALIDATE_IP)) {
-    $addresses = array($host);
+  // parse_url keeps the brackets around an IPv6 literal.
+  $host_ip = trim($host, '[]');
+  if (filter_var($host_ip, FILTER_VALIDATE_IP)) {
+    $addresses = array($host_ip);
   } else {
     $addresses = gethostbynamel($host);
     if (!$addresses) $addresses = array();
@@ -108,6 +132,21 @@ if (!empty($_REQUEST['proxy'])) {
     }
   }
 
+  // Connect to the address that was just checked rather than letting fopen()
+  // resolve $host again: a second lookup could return a different answer (DNS
+  // rebinding) such as 127.0.0.1. The original name still goes out in the
+  // Host header and as the TLS peer name/SNI.
+  $connect_ip = $addresses[0];
+  $host_header = 'Host: '.$host.(isset($url_parts['port']) ? ':'.$url_parts['port'] : '');
+  $fetch_url = $url_parts['scheme'].'://';
+  if (isset($url_parts['user'])) {
+    $fetch_url .= $url_parts['user'].(isset($url_parts['pass']) ? ':'.$url_parts['pass'] : '').'@';
+  }
+  $fetch_url .= (strpos($connect_ip, ':') !== false ? '['.$connect_ip.']' : $connect_ip);
+  if (isset($url_parts['port'])) $fetch_url .= ':'.$url_parts['port'];
+  $fetch_url .= isset($url_parts['path']) ? $url_parts['path'] : '/';
+  if (isset($url_parts['query'])) $fetch_url .= '?'.$url_parts['query'];
+
   $username = isset($url_parts['user']) ? $url_parts['user'] : '';
   $password = isset($url_parts['pass']) ? $url_parts['pass'] : '';
 
@@ -116,13 +155,18 @@ if (!empty($_REQUEST['proxy'])) {
   $opts = array(
     'http'=>array(
       'method'=>$method,
+      'header'=>array($host_header),
       #'header'=>"Accept-language: en\r\n" .
-      'ignore_errors'   => true
+      'ignore_errors'   => true,
+      // The SSRF guard above only validated $host. Following a redirect would
+      // connect to a Location the guard never checked (e.g. 127.0.0.1).
+      'follow_location' => 0,
       #"Cookie: foo=bar\r\n"
     ),
     'ssl'=>array(
       "verify_peer"=>false,
       "verify_peer_name"=>false,
+      "peer_name"=>$host_ip,
     )
   );
   $context = stream_context_create($opts);
@@ -133,7 +177,7 @@ if (!empty($_REQUEST['proxy'])) {
   @ini_set('zlib.output_compression', 0);
 
   /* Sends an http request with additional headers shown above */
-  $fp = @fopen($url, 'r', false, $context);
+  $fp = @fopen($fetch_url, 'r', false, $context);
   if ($fp) {
     $meta_data = stream_get_meta_data($fp);
     ZM\Debug(print_r($meta_data, true));
@@ -183,9 +227,9 @@ if (!empty($_REQUEST['proxy'])) {
         ZM\Debug($request);
 
         $request_header = array($request);
-        $opts['http']['header'] = $request;
+        $opts['http']['header'] = array($host_header, $request);
         $context = stream_context_create($opts);
-        $fp = fopen($url, 'r', false, $context);
+        $fp = fopen($fetch_url, 'r', false, $context);
         $meta_data = stream_get_meta_data($fp);
         ZM\Debug(print_r($meta_data, true));
       } # end if have auth
@@ -580,7 +624,7 @@ if ( $errorText ) {
   header('Cache-Control: max-age=86400');
   header('Expires: '.gmdate('D, d M Y H:i:s \G\M\T', time() + (60 * 60))); // Default set to 1 hour
   header('Pragma: cache');
-  if (($scale==0 || $scale==100) && ($width==0) && ($height==0)) {
+  if ((($scale==0 || $scale==100) && ($width==0) && ($height==0)) or !function_exists('imagecreatefromjpeg')) {
     # This is so that Save Image As give a useful filename
     if ($Event) {
       $filename = $Event->MonitorId().'_'.$Event->Id().'_'.$Frame->FrameId().'.jpg';

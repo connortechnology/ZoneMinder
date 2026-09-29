@@ -310,6 +310,13 @@ User *zmLoadUser(const std::string &username, const std::string &password) {
 }  // end User *zmLoadUser(const char *username, const char *password)
 
 User *zmLoadTokenUser(const std::string &jwt_token_str, bool use_remote_addr) {
+  // The shipped ZM_AUTH_HASH_SECRET is public, so a token signed with it proves nothing.
+  // refs GHSA-wmcc-x64g-jr84
+  if (!config.auth_hash_secret || !*config.auth_hash_secret
+      || !strcmp(config.auth_hash_secret, "...Change me to something unique...")) {
+    Error("Refusing token authentication: ZM_AUTH_HASH_SECRET is empty or still the shipped default.");
+    return nullptr;
+  }
   std::string key = config.auth_hash_secret;
   std::string remote_addr;
 
@@ -323,7 +330,8 @@ User *zmLoadTokenUser(const std::string &jwt_token_str, bool use_remote_addr) {
     }
   }
 
-  Debug(1, "Inside zmLoadTokenUser, formed key=%s", key.c_str());
+  // Don't log the key: it is the token signing secret.
+  Debug(1, "Inside zmLoadTokenUser, remote_addr=%s", remote_addr.c_str());
 
   std::pair<std::string, unsigned int> ans = verifyToken(jwt_token_str, key);
   std::string username = zmDbEscapeString(ans.first);
@@ -370,34 +378,18 @@ User *zmLoadTokenUser(const std::string &jwt_token_str, bool use_remote_addr) {
 // Function to validate an authentication string
 User *zmLoadAuthUser(const std::string &auth, const std::string &username, bool use_remote_addr) {
   const char *remote_addr = "";
-  std::string forwarded_for_first; // must outlive remote_addr
+  std::string client_addr; // must outlive remote_addr
   if (use_remote_addr) {
-    // Prefer HTTP_X_FORWARDED_FOR if available, consistent with PHP session.php which uses it for hash generation.
-    // This ensures that when ZoneMinder is behind a reverse proxy (e.g. Nginx → Apache),
-    // the same IP address is used for both hash generation and validation.
-    // Use only the first IP to guard against spoofed multi-value headers.
+    // Same rule as getRemoteAddr() in web/includes/Network.php, which bound the
+    // hash: X-Forwarded-For only counts when it came from a trusted proxy.
+    const char *direct_addr = getenv("REMOTE_ADDR");
     const char *forwarded_for = getenv("HTTP_X_FORWARDED_FOR");
-    if (forwarded_for && *forwarded_for) {
-      // Extract the first IP from a potentially comma-separated list
-      forwarded_for_first = forwarded_for;
-      auto comma = forwarded_for_first.find(',');
-      if (comma != std::string::npos) {
-        forwarded_for_first = forwarded_for_first.substr(0, comma);
-      }
-      // Trim leading/trailing whitespace
-      auto start = forwarded_for_first.find_first_not_of(' ');
-      auto end = forwarded_for_first.find_last_not_of(' ');
-      if (start != std::string::npos) {
-        forwarded_for_first = forwarded_for_first.substr(start, end - start + 1);
-      }
-      remote_addr = forwarded_for_first.c_str();
-    } else {
-      remote_addr = getenv("REMOTE_ADDR");
-      if (!remote_addr) {
-        Warning("Can't determine remote address, using null");
-        remote_addr = "";
-      }
-    }
+    client_addr = ClientAddress(direct_addr ? direct_addr : "",
+                                forwarded_for ? forwarded_for : "",
+                                config.auth_trusted_proxies);
+    if (client_addr.empty())
+      Warning("Can't determine remote address, using null");
+    remote_addr = client_addr.c_str();
   }
 
   Debug(1, "Attempting to authenticate user %s from auth string '%s', remote addr(%s)",

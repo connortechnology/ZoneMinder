@@ -1261,8 +1261,10 @@ var cycleIntervalId;
 var secondsToCycle = 0;
 
 function nextCycleView() {
-  secondsToCycle --;
-  if (secondsToCycle<=0) {
+  const stream = (monitorStream) ? monitorStream.getAVStream() : null;
+  const playerErrorLimitReached = monitorStream && monitorStream.selectedPlayer && monitorStream.getCountStreamErrors(monitorStream.player) >= monitorStream.limitCountErrors;
+  if (stream && stream.readyState >= 2) secondsToCycle --;
+  if (secondsToCycle<=0 || monitorStream.fatalError || playerErrorLimitReached) {
     cycleNext();
   }
   $j('#secondsToCycle').text(secondsToCycle);
@@ -1276,6 +1278,12 @@ function cyclePause() {
 }
 
 function cycleStart() {
+  // Drop any interval already running before taking a new id. Several callers
+  // can reach this without a cyclePause() in between - the play button, the
+  // are-you-still-watching modal closing, and startPage() on every restore -
+  // and the old id is unrecoverable once overwritten, so the orphan ticks on
+  // and cyclePause() can only ever stop the last one. refs #5135
+  clearInterval(cycleIntervalId);
   if (secondsToCycle == 0) secondsToCycle = $j('#cyclePeriod').val();
   cycleIntervalId = setInterval(nextCycleView, 1000);
   cycle = true;
@@ -1590,7 +1598,13 @@ function startPage() {
     } else if (monitorStream && monitorStream.element && ((monitorStream.zmsState == 'paused') || (monitorStream.element.video && monitorStream.element.video.paused) || monitorStream.element.paused)) {
       prevStateStarted = null;
     }
-    if (prevStateCycle) cycleStart();
+    // Clear it the way prevStateStarted is cleared above: startPage() runs on
+    // visibilitychange, resume and pageshow, and a restore fires more than one
+    // of those. refs #5135
+    if (prevStateCycle) {
+      prevStateCycle = null;
+      cycleStart();
+    }
   });
 }
 
