@@ -679,12 +679,6 @@ packetqueue_iterator *PacketQueue::get_event_start_packet_it(
     packet = *(*it);
   }
 
-  // Check the packet at begin() - the loop above exits before counting it
-  if (pre_event_count and ((*it) == pktQueue.begin()) and
-      (packet->packet->stream_index == video_stream_id)) {
-    pre_event_count--;
-  }
-
   // it either points to beginning or we have seen pre_event_count video packets.
   // The loop above doesn't count the begin packet, so check it now.
   if (pre_event_count and (packet->packet->stream_index == video_stream_id)) {

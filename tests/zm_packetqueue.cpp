@@ -17,10 +17,16 @@
 
 #include "zm_catch2.h"
 
+#include "zm_logger.h"
 #include "zm_packet.h"
 #include "zm_packetqueue.h"
+#include "zm_utils.h"
 
+#include <cstdlib>
+#include <fstream>
 #include <memory>
+#include <sstream>
+#include <unistd.h>
 
 namespace {
 
@@ -126,4 +132,50 @@ TEST_CASE("PacketQueue: free_it unregisters an event start iterator") {
 
   queue.stop();
   queue.clear();
+}
+
+// The walk back from the snapshot stops on begin() without counting it, and
+// begin() was then counted twice by two consecutive checks. A queue one video
+// frame short of pre_event_count reported nothing, and every larger shortfall
+// was reported one frame low.
+TEST_CASE("PacketQueue: event start counts the begin packet once") {
+  std::string path = stringtf("/tmp/zm_test_pq_begin_%d.log", getpid());
+  unlink(path.c_str());
+  setenv("LOG_FLUSH", "1", 1);
+  Logger::Options options(Logger::NOLOG, Logger::NOLOG, Logger::DEBUG1, Logger::NOLOG);
+  options.mLogFile = path;
+  logInit("zm_test_pq_begin", options);
+  // Without ZM_LOG_DEBUG in the config initialise() caps every output at INFO.
+  Logger::fetch()->fileLevel(Logger::DEBUG1);
+  Logger::fetch()->level(Logger::DEBUG1);
+
+  PacketQueue queue;
+  queue.addStream();
+  queue.setKeepKeyframes(false);
+  queue.setMaxVideoPackets(0);
+  queue.setPreEventVideoPackets(2);
+
+  packetqueue_iterator *analysis_it = queue.get_video_it(false);
+  REQUIRE(analysis_it != nullptr);
+  for (int i = 0; i < 6; i++) {
+    REQUIRE(queue.queuePacket(video_packet(i == 0 ? 1 : 0)));
+  }
+  // Snapshot on the last packet, so all six are behind and including it.
+  while (queue.increment_it(analysis_it, false)) {}
+  (*analysis_it)--;
+
+  packetqueue_iterator *start_it = queue.get_event_start_packet_it(*analysis_it, 7);
+  REQUIRE(start_it != nullptr);
+  REQUIRE(*(*start_it) == *queue.begin());
+
+  std::ifstream in(path);
+  std::stringstream contents;
+  contents << in.rdbuf();
+  REQUIRE(contents.str().find("Needed 1 more video frames") != std::string::npos);
+
+  queue.free_it(start_it);
+  queue.stop();
+  queue.clear();
+  logTerm();
+  unlink(path.c_str());
 }
