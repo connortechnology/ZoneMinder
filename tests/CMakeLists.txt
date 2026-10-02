@@ -29,6 +29,7 @@ set(TEST_SOURCES
   zm_image_planes.cpp
   zm_monitor_shm.cpp
   zm_monitorstream.cpp
+  zm_mp4_sidx.cpp
   zm_netint_lpr.cpp
   zm_netint_yolo.cpp
   zm_object_classes.cpp
