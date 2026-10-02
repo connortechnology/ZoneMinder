@@ -139,6 +139,11 @@ class Event {
   // it is, WriteJpeg must hand the frame over untouched: there is nothing in
   // host memory for swscale to read.
   bool mJpegCodecIsHardware;
+  // Set once a device frame has failed to open a hardware jpeg encoder (none
+  // exists for the card, or it would not open). The software encoder cannot
+  // read a device surface, so further device frames are refused up front and
+  // the caller falls back to the host copy without tearing down the codec.
+  bool mJpegHwUnavailable;
   int OpenJpegCodec(const Image *, int quality);
   int OpenJpegCodec(AVFrame *frame, int quality);
 

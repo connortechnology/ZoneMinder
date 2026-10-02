@@ -68,9 +68,10 @@ Event::Event(
   videoStore(nullptr),
   mJpegCodecContext(nullptr),
   mJpegSwsContext(nullptr),
+  hw_device_ctx(nullptr),
   mJpegCodecQuality(-1),
   mJpegCodecIsHardware(false),
-  hw_device_ctx(nullptr),
+  mJpegHwUnavailable(false),
   //video_file(""),
   //video_path(""),
   last_db_frame(0),
@@ -269,6 +270,10 @@ int Event::OpenJpegCodec(AVFrame *frame, int quality) {
     }
   }
 
+  // The software encoder and swscale only read host memory. Handing them a
+  // device surface fails in sws_getContext at best.
+  if (frame->hw_frames_ctx) return -1;
+
   std::list<const CodecData *>codec_data = get_encoder_data("mjpeg", "");
   if (!codec_data.size()) {
     Error("No codecs for mjpeg found");
@@ -358,6 +363,7 @@ int Event::OpenJpegCodec(AVFrame *frame, int quality) {
         SWS_BICUBIC, nullptr, nullptr, nullptr);
     if (!mJpegSwsContext) {
       Error("Failure to get swscontext");
+      avcodec_free_context(&mJpegCodecContext);
       return -1;
     }
     zm_sws_set_ranges(mJpegSwsContext, orig_in_fmt, AV_PIX_FMT_YUVJ420P);
@@ -585,14 +591,22 @@ bool Event::WriteJpeg(AVFrame *in_frame, const std::string &filename, bool alarm
   // context only has to be rebuilt when the quality changes.
   // The hardware path never builds an sws context -- there is nothing to
   // convert -- so requiring one here would reopen the codec on every frame.
+  const bool device_frame = in_frame->hw_frames_ctx != nullptr;
+  if (device_frame and mJpegHwUnavailable) return false;
+
   if (!mJpegCodecContext
+      or (device_frame != mJpegCodecIsHardware)
       or (!mJpegCodecIsHardware and !mJpegSwsContext)
       or (mJpegCodecQuality != thisquality)) {
     Debug(1, "Opening jpeg codec at quality %d, ctx %p", thisquality, mJpegCodecContext);
-    OpenJpegCodec(in_frame, thisquality);
+    if (OpenJpegCodec(in_frame, thisquality) != 0) {
+      if (device_frame) {
+        Debug(1, "No usable jpeg encoder for device frames, using host frames for this event");
+        mJpegHwUnavailable = true;
+      }
+      return false;
+    }
   }
-
-  if (!mJpegCodecContext) return false;
 
   int raw_fd = open(filename.c_str(), O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
   if (raw_fd < 0) {
@@ -630,7 +644,8 @@ bool Event::WriteJpeg(AVFrame *in_frame, const std::string &filename, bool alarm
       Error("cannot do sw scale: inframe data 0x%lx, linesize %d/%d/%d/%d, height %d to %d linesize",
           (unsigned long)in_frame->data, in_frame->linesize[0], in_frame->linesize[1],
           in_frame->linesize[2], in_frame->linesize[3], in_frame->height, output_frame->linesize[0]);
-      return ret;
+      fclose(outfile);
+      return false;
     }
   }
 
@@ -717,6 +732,7 @@ bool Event::WriteFrameImage(Image *image, SystemTimePoint timestamp, const char 
   if (use_codec) {
     const int wanted_quality = thisquality ? thisquality : config.jpeg_file_quality;
     if (!mJpegCodecContext
+        or mJpegCodecIsHardware
         or (mJpegCodecQuality != wanted_quality)
         or (mJpegSwsContext and (mJpegCodecContext->sw_pix_fmt != image->AVPixFormat()))) {
       Debug(1, "Opening jpeg codec at quality %d, ctx %p", wanted_quality, mJpegCodecContext);
