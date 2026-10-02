@@ -34,6 +34,12 @@
 #include "zm_time.h"
 #include "zm_uri.h"
 
+#if HAVE_CUDA
+extern "C" {
+#include <libavutil/hwcontext_cuda.h>
+}
+#endif
+
 #define DEBUG_TIMING 1
 #define AI_IN_DECODE 0
 
@@ -2897,7 +2903,11 @@ int Monitor::Analyse() {
           analysis_image_buffer[index]->AVPixFormat(static_cast<AVPixelFormat>(packet->ai_frame->format));
           Debug(1, "ai_frame pixformat %d, for index %d, packet %d", packet->ai_frame->format, index, packet->image_index);
           analysis_image_buffer[index]->Assign(packet->ai_frame.get());
-          analysis_image_pixelformats[index] = static_cast<AVPixelFormat>(packet->ai_frame->format);
+          // Take the format the buffer actually adopted: a frame in a format
+          // Image cannot store (NV12 off a cuda/vaapi download) is converted by
+          // Assign, so recording the frame's own format here would publish a
+          // pixel format the shm bytes do not have.
+          analysis_image_pixelformats[index] = analysis_image_buffer[index]->AVPixFormat();
         } else if (packet->analysis_image) {
           analysis_image_buffer[index]->Assign(*packet->analysis_image);
           analysis_image_pixelformats[index] = packet->analysis_image->AVPixFormat();
@@ -2910,12 +2920,20 @@ int Monitor::Analyse() {
           analysis_image_buffer[index]->AVPixFormat(static_cast<AVPixelFormat>(packet->in_frame->format));
           Debug(1, "in_frame pixformat %d, for index %d, packet %d", packet->in_frame->format, index, packet->image_index);
           analysis_image_buffer[index]->Assign(packet->in_frame.get());
-          analysis_image_pixelformats[index] = static_cast<AVPixelFormat>(packet->in_frame->format);
+          // Take the format the buffer actually adopted: a frame in a format
+          // Image cannot store (NV12 off a cuda/vaapi download) is converted by
+          // Assign, so recording the frame's own format here would publish a
+          // pixel format the shm bytes do not have.
+          analysis_image_pixelformats[index] = analysis_image_buffer[index]->AVPixFormat();
         } else if (packet->out_frame) {
           analysis_image_buffer[index]->AVPixFormat(static_cast<AVPixelFormat>(packet->out_frame->format));
           Debug(1, "out_frame pixformat %d, for index %d, packet %d", packet->out_frame->format, index, packet->image_index);
           analysis_image_buffer[index]->Assign(packet->out_frame.get());
-          analysis_image_pixelformats[index] = static_cast<AVPixelFormat>(packet->out_frame->format);
+          // Take the format the buffer actually adopted: a frame in a format
+          // Image cannot store (NV12 off a cuda/vaapi download) is converted by
+          // Assign, so recording the frame's own format here would publish a
+          // pixel format the shm bytes do not have.
+          analysis_image_pixelformats[index] = analysis_image_buffer[index]->AVPixFormat();
         } else if (decoding == DECODING_ALWAYS) {
           Error("Unable to find an image to assign for index %d packet %d", index, packet->image_index);
         }
@@ -2932,12 +2950,20 @@ int Monitor::Analyse() {
           analysis_image_buffer[index]->AVPixFormat(static_cast<AVPixelFormat>(packet->in_frame->format));
           Debug(1, "in_frame pixformat %d, for index %d, packet %d", packet->in_frame->format, index, packet->image_index);
           analysis_image_buffer[index]->Assign(packet->in_frame.get());
-          analysis_image_pixelformats[index] = static_cast<AVPixelFormat>(packet->in_frame->format);
+          // Take the format the buffer actually adopted: a frame in a format
+          // Image cannot store (NV12 off a cuda/vaapi download) is converted by
+          // Assign, so recording the frame's own format here would publish a
+          // pixel format the shm bytes do not have.
+          analysis_image_pixelformats[index] = analysis_image_buffer[index]->AVPixFormat();
         } else if (packet->out_frame) {
           analysis_image_buffer[index]->AVPixFormat(static_cast<AVPixelFormat>(packet->out_frame->format));
           Debug(1, "out_frame pixformat %d, for index %d, packet %d", packet->out_frame->format, index, packet->image_index);
           analysis_image_buffer[index]->Assign(packet->out_frame.get());
-          analysis_image_pixelformats[index] = static_cast<AVPixelFormat>(packet->out_frame->format);
+          // Take the format the buffer actually adopted: a frame in a format
+          // Image cannot store (NV12 off a cuda/vaapi download) is converted by
+          // Assign, so recording the frame's own format here would publish a
+          // pixel format the shm bytes do not have.
+          analysis_image_pixelformats[index] = analysis_image_buffer[index]->AVPixFormat();
         } else {
           Debug(1, "Unable to find an image to assign for index %d packet %d", index, packet->image_index);
         }
@@ -3481,6 +3507,123 @@ std::pair<int, std::string> Monitor::Analyse_UVICORN(std::shared_ptr<ZMPacket> p
   return std::make_pair(motion_score, std::move(cause));
 }
 
+
+#if HAVE_CUDA
+bool Monitor::Analyse_MotionDetection_Cuda(const std::shared_ptr<ZMPacket> &packet,
+                                           Event::StringSet &zoneSet,
+                                           int &motion_score) {
+  if (cuda_motion_failed) return false;
+
+  // Only a frame still on the card, in a format whose first plane is the luma
+  // the CPU path would have analysed. Anything else goes the host way.
+  const AVFrame *frame = packet->hw_frame.get();
+  if (!frame or frame->format != AV_PIX_FMT_CUDA or !frame->hw_frames_ctx) return false;
+  if (analysis_image != ANALYSISIMAGE_YCHANNEL) return false;
+  if (zones.empty()) return false;
+
+  const AVHWFramesContext *frames_ctx =
+      reinterpret_cast<const AVHWFramesContext *>(frame->hw_frames_ctx->data);
+  if (frames_ctx->sw_format != AV_PIX_FMT_NV12 and frames_ctx->sw_format != AV_PIX_FMT_YUV420P) {
+    Debug(1, "CUDA motion detection needs an 8 bit luma plane, this frame is %s",
+          av_get_pix_fmt_name(frames_ctx->sw_format));
+    return false;
+  }
+  // The zone polygons are in monitor coordinates; a frame of another size would
+  // score against the wrong pixels.
+  if (frame->width != (int)camera_width or frame->height != (int)camera_height) {
+    Debug(1, "CUDA motion detection skipped: frame is %dx%d, monitor is %dx%d",
+          frame->width, frame->height, camera_width, camera_height);
+    return false;
+  }
+
+  const AVHWDeviceContext *device_ctx =
+      reinterpret_cast<const AVHWDeviceContext *>(frames_ctx->device_ctx);
+  const AVCUDADeviceContext *cuda_ctx =
+      reinterpret_cast<const AVCUDADeviceContext *>(device_ctx->hwctx);
+
+  if (!cuda_motion) {
+    if (!zm::cuda::MotionDetector::Available()) {
+      Info("No CUDA device available for motion detection, using the CPU path");
+      cuda_motion_failed = true;
+      return false;
+    }
+    cuda_motion = std::make_unique<zm::cuda::MotionDetector>();
+    if (!cuda_motion->Init(frame->width, frame->height, cuda_ctx->cuda_ctx)) {
+      Warning("Could not set up CUDA motion detection (%s), using the CPU path",
+              cuda_motion->LastError());
+      cuda_motion.reset();
+      cuda_motion_failed = true;
+      return false;
+    }
+    cuda_zones_uploaded = false;
+    Info("Motion detection for %s runs on the CUDA device", name.c_str());
+  }
+
+  if (!cuda_zones_uploaded) {
+    std::vector<zm::cuda::ZoneSpec> specs;
+    specs.reserve(zones.size());
+    for (Zone &zone : zones) specs.push_back(zone.CudaSpec());
+    if (!cuda_motion->SetZones(specs)) {
+      Warning("Could not upload zones to the CUDA device (%s), using the CPU path",
+              cuda_motion->LastError());
+      cuda_motion.reset();
+      cuda_motion_failed = true;
+      return false;
+    }
+    cuda_zones_uploaded = true;
+  }
+
+  const uint8_t *luma = frame->data[0];
+  const size_t luma_pitch = frame->linesize[0];
+
+  if (!cuda_motion->HasReference()) {
+    Debug(1, "Seeding the device reference plane instead of detecting");
+    if (!cuda_motion->AssignReference(luma, luma_pitch)) {
+      Warning("Could not seed the device reference plane (%s), using the CPU path",
+              cuda_motion->LastError());
+      cuda_motion.reset();
+      cuda_motion_failed = true;
+      return false;
+    }
+    return true;
+  }
+
+  if (!(shared_data->analysis_image_count % (motion_frame_skip+1))) {
+    std::vector<zm::cuda::ZoneResult> results;
+    if (!cuda_motion->Detect(luma, luma_pitch, results)) {
+      Warning("CUDA motion detection failed (%s), using the CPU path", cuda_motion->LastError());
+      cuda_motion.reset();
+      cuda_motion_failed = true;
+      return false;
+    }
+
+    motion_score += EvaluateZones(zoneSet, [this, &results](Zone &zone, size_t index) {
+      return (index < results.size())
+             and zone.CheckAlarmsCuda(results[index], cuda_motion.get(), index);
+    });
+
+    Debug(3, "After CUDA motion detection, last_motion_score(%d), new motion score(%d)",
+          last_motion_score, motion_score);
+    motion_frame_count += 1;
+    last_motion_score = motion_score;
+  } else {
+    Debug(1, "Skipped motion detection last motion score was %d", last_motion_score);
+  }
+
+  // The reference keeps up to date on the card too, so the plane never has to
+  // come back across PCIe.
+  if (!cuda_motion->BlendReference(luma, luma_pitch,
+                                   (state == ALARM ? alarm_ref_blend_perc : ref_blend_perc),
+                                   config.fast_image_blends)) {
+    Warning("CUDA reference blend failed (%s), using the CPU path", cuda_motion->LastError());
+    cuda_motion.reset();
+    cuda_motion_failed = true;
+    return false;
+  }
+  return true;
+}
+#endif  // HAVE_CUDA
+
 std::pair<int, std::string> Monitor::Analyse_MotionDetection(std::shared_ptr<ZMPacket> packet) {
   Event::StringSet zoneSet;
   int motion_score = 0;
@@ -3490,6 +3633,25 @@ std::pair<int, std::string> Monitor::Analyse_MotionDetection(std::shared_ptr<ZMP
     Debug(1, "no image so skipping motion detection");
     return std::make_pair(motion_score, cause);
   }  // end if has image
+
+#if HAVE_CUDA
+  // A frame that is still on the card can be analysed there, which saves
+  // building a y-image and walking every pixel on the CPU. Falls through to the
+  // host path whenever this frame or this monitor cannot be handled that way.
+  if (Analyse_MotionDetection_Cuda(packet, zoneSet, motion_score)) {
+    if (motion_score) {
+      packet->zone_stats.reserve(zones.size());
+      for (const Zone &zone : zones) {
+        packet->zone_stats.push_back(zone.GetStats());
+        if (zone.Alarmed() and !packet->alarm_cause.empty()) packet->alarm_cause += ",";
+        if (zone.Alarmed()) packet->alarm_cause += zone.Label();
+      }
+      int zone_index = 0;
+      for (const Zone &zone : zones) zone_scores[zone_index++] = zone.Score();
+    }
+    return std::make_pair(motion_score, std::move(cause));
+  }
+#endif
      
   if (analysis_image == ANALYSISIMAGE_YCHANNEL and !packet->y_image) {
     if (static_cast<AVPixelFormat>(packet->in_frame->format) == AV_PIX_FMT_YUV420P or static_cast<AVPixelFormat>(packet->in_frame->format) == AV_PIX_FMT_YUVJ420P) {
@@ -4802,9 +4964,6 @@ void Monitor::closeEvent() {
 
 unsigned int Monitor::DetectMotion(const Image &comp_image,
                                    Event::StringSet &zoneSet) {
-  bool alarm = false;
-  unsigned int score = 0;
-
   if (zones.empty()) {
     Warning("No zones to check!");
     return 0;
@@ -4819,23 +4978,47 @@ unsigned int Monitor::DetectMotion(const Image &comp_image,
     delta_image.WriteJpeg(diag_path_delta, config.record_diag_images_fifo);
   }
 
-  // Blank out all exclusion zones
+  // Blank out all exclusion zones. The clearing of previous alarm state belongs
+  // to every path and lives in EvaluateZones; only the delta blanking is the
+  // CPU pass's own, since the device path masks the delta in the kernel.
   for (Zone &zone : zones) {
-    // need previous alarmed state for preclusive zone, so don't clear just yet
-    if (!zone.IsPreclusive()) zone.ClearAlarm();
     if (!zone.IsInactive()) continue;
     Debug(3, "Blanking inactive zone %s", zone.Label());
     delta_image.Fill(kRGBBlack, zone.GetPolygon());
   }  // end foreach zone
 
+  return EvaluateZones(zoneSet, [this](Zone &zone, size_t) {
+    return zone.CheckAlarms(&delta_image);
+  });
+}  // end DetectMotion
+
+//
+// The order zones are checked in, and how their scores combine, split out so
+// the CUDA path cannot answer a differently shaped question than the CPU one.
+// check() applies whichever alarm test the caller has: pixels counted here, or
+// counts that came back from the card.
+//
+unsigned int Monitor::EvaluateZones(Event::StringSet &zoneSet,
+                                    const std::function<bool(Zone &, size_t)> &check) {
+  bool alarm = false;
+  unsigned int score = 0;
+
+  for (Zone &zone : zones) {
+    // need previous alarmed state for preclusive zone, so don't clear just yet
+    if (!zone.IsPreclusive()) zone.ClearAlarm();
+  }
+
+  size_t zone_index = 0;
+
   // Check preclusive zones first
   for (Zone &zone : zones) {
+    const size_t index = zone_index++;
     if (!zone.IsPreclusive()) continue;
     int old_zone_score = zone.Score();
     bool old_zone_alarmed = zone.Alarmed();
     Debug(3, "Checking preclusive zone %s - old score: %d, state: %s",
           zone.Label(), old_zone_score, zone.Alarmed() ? "alarmed" : "quiet");
-    if (zone.CheckAlarms(&delta_image)) {
+    if (check(zone, index)) {
       alarm = true;
       score += zone.Score();
       zone.SetAlarm();
@@ -4867,12 +5050,14 @@ unsigned int Monitor::DetectMotion(const Image &comp_image,
     score = 0;
   } else {
     // Find all alarm pixels in active zones
+    zone_index = 0;
     for (Zone &zone : zones) {
+      const size_t index = zone_index++;
       if (!zone.IsActive() || zone.IsPreclusive()) {
         continue;
       }
       Debug(3, "Checking active zone %s", zone.Label());
-      if (zone.CheckAlarms(&delta_image)) {
+      if (check(zone, index)) {
         alarm = true;
         score += zone.Score();
         zone.SetAlarm();
@@ -4888,12 +5073,14 @@ unsigned int Monitor::DetectMotion(const Image &comp_image,
     }  // end foreach zone
 
     if (alarm) {
+      zone_index = 0;
       for (Zone &zone : zones) {
+        const size_t index = zone_index++;
         if (!zone.IsInclusive()) {
           continue;
         }
         Debug(3, "Checking inclusive zone %s", zone.Label());
-        if (zone.CheckAlarms(&delta_image)) {
+        if (check(zone, index)) {
           score += zone.Score();
           zone.SetAlarm();
           Debug(3, "Zone is alarmed, zone score = %d", zone.Score());
@@ -4908,12 +5095,14 @@ unsigned int Monitor::DetectMotion(const Image &comp_image,
       }  // end foreach zone
     } else {
       // Find all alarm pixels in exclusive zones
+      zone_index = 0;
       for (Zone &zone : zones) {
+        const size_t index = zone_index++;
         if (!zone.IsExclusive()) {
           continue;
         }
         Debug(3, "Checking exclusive zone %s", zone.Label());
-        if (zone.CheckAlarms(&delta_image)) {
+        if (check(zone, index)) {
           alarm = true;
           score += zone.Score();
           zone.SetAlarm();
@@ -4939,7 +5128,7 @@ unsigned int Monitor::DetectMotion(const Image &comp_image,
   // This is a small and innocent hack to prevent scores of 0 being returned in
   // alarm state
   return score ? score : alarm;
-}  // end DetectMotion
+}  // end EvaluateZones
 
 unsigned int Monitor::AnalyseFrame(const Image &frame_image, Event::StringSet &zoneSet) {
   if (!ref_image.Buffer()) {

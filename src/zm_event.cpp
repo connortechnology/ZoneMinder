@@ -270,9 +270,17 @@ int Event::OpenJpegCodec(AVFrame *frame, int quality) {
     }
   }
 
-  // The software encoder and swscale only read host memory. Handing them a
-  // device surface fails in sws_getContext at best.
-  if (frame->hw_frames_ctx) return -1;
+  // Everything below encodes from host memory, which a frame sitting on the
+  // card has none of. There is a hardware jpeg encoder for VAAPI and for QSV
+  // but none for CUDA, so this is where an nvidia frame arrives: refuse it and
+  // let the caller fall through to the software frame it already has. Carrying
+  // on built an sws context from a device pixel format, which fails, and the
+  // caller then scaled through the null context it got back.
+  if (frame->hw_frames_ctx) {
+    Debug(1, "No jpeg encoder for %s frames; leaving this to the software frame",
+          av_get_pix_fmt_name(static_cast<AVPixelFormat>(frame->format)));
+    return -1;
+  }
 
   std::list<const CodecData *>codec_data = get_encoder_data("mjpeg", "");
   if (!codec_data.size()) {

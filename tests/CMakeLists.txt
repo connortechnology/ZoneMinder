@@ -64,6 +64,10 @@ set(TEST_SOURCES
   zm_ffmpeg_camera.cpp
   zm_ffmpeg_fallback.cpp)
 
+if(ZM_CUDA)
+  list(APPEND TEST_SOURCES zm_cuda_motion.cpp zm_cuda_zone_parity.cpp)
+endif()
+
 add_executable(tests ${TEST_SOURCES})
 
 target_link_libraries(tests

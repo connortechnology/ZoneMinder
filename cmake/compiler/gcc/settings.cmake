@@ -1,14 +1,17 @@
 target_compile_options(zm-warning-interface
   INTERFACE
     -Wall
-    $<$<VERSION_GREATER:$<CXX_COMPILER_VERSION>,5.0>:-Wconditionally-supported>
+    # C++ only. Handed to a C or CUDA compilation it is either rejected outright
+    # (gsoap's .c files warn about it on every build) or, under nvcc, fires on
+    # the launch stubs nvcc generates rather than on any code of ours.
+    $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<VERSION_GREATER:$<CXX_COMPILER_VERSION>,5.0>>:-Wconditionally-supported>
     -Wextra
     -Wformat-security
     -Wno-cast-function-type
     $<$<VERSION_LESS:$<CXX_COMPILER_VERSION>,11>:-Wno-clobbered>
     $<$<VERSION_LESS:$<CXX_COMPILER_VERSION>,5.1>:-Wno-missing-field-initializers>
     -Wno-unused-parameter
-    -Woverloaded-virtual
+    $<$<COMPILE_LANGUAGE:CXX>:-Woverloaded-virtual>
     -Wvla)
 
 if(ENABLE_WERROR)

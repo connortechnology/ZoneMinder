@@ -6397,7 +6397,12 @@ AVPixelFormat Image::AVPixFormat(AVPixelFormat new_pixelformat) {
     return imagePixFormat;
   }
   if (!zm_colours_from_pixformat(new_pixelformat, colours, subpixelorder)) {
-    Error("Unknown pixelformat %d %s", new_pixelformat, av_get_pix_fmt_name(new_pixelformat));
+    // Any other format Image cannot store natively gets the same treatment as
+    // the named ones above: keep the current format and let Assign() convert.
+    // Callers must take the returned format as the buffer's real format rather
+    // than assuming the one they asked for was adopted.
+    Debug(1, "%s input will be converted to %s on Assign",
+          av_get_pix_fmt_name(new_pixelformat), av_get_pix_fmt_name(imagePixFormat));
     return imagePixFormat;
   }
   Debug(4, "Old size: %d, old pixelformat %d", size, imagePixFormat);
