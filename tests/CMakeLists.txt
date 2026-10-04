@@ -36,7 +36,9 @@ set(TEST_SOURCES
   zm_packet.cpp
   zm_packetqueue.cpp
   zm_monitor_action.cpp
+  zm_onvif_alarm_termination.cpp
   zm_onvif_auth_error.cpp
+  zm_onvif_poll_wait.cpp
   zm_onvif_renewal.cpp
   zm_onvif_wsse.cpp
   zm_pixformat.cpp
@@ -54,6 +56,7 @@ set(TEST_SOURCES
   zm_time.cpp
   zm_device_frames.cpp
   zm_utils.cpp
+  zm_videostore_m3u8.cpp
   zm_vector2.cpp
   zm_yolov8_onnx_postprocess.cpp
   zm_zone.cpp
