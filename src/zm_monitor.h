@@ -248,6 +248,10 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
     int32_t  decoder_image_count;       /* +12   */
     int32_t  analysis_image_count;       /* +12  */
     uint32_t state;             /* +16   */
+    /* Explicit pad. x86-64 aligns double to 8 and inserts this implicitly, but
+     * the i386 SysV ABI aligns double to 4 and would not, shifting every later
+     * member by 4. Making it explicit keeps the layout identical on both. */
+    uint32_t epadding1;
     double      capture_fps;    /* +20   Current capturing fps */
     double      analysis_fps;   /* +28   Current analysis fps */
     double      latitude;       /* +36   */
@@ -285,6 +289,9 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
      *it's offset SHOULD be a multiple
      ** of 8. Add or delete epadding's to achieve this.
      */
+    /* Explicit pad, same reasoning as epadding1: the following union is
+     * 8-aligned on x86-64 but only 4-aligned on i386. */
+    uint32_t epadding2;
     union {                /* +112   */
       time_t startup_time; /* When the zmc process started.  zmwatch uses this
                               to see how long the process has been running
