@@ -42,6 +42,9 @@ unsigned int neonversion = 0;
 unsigned int our_cpu = 0;
 
 
+// sched_getcpu, cpu_set_t and pthread_setaffinity_np are GNU extensions. On
+// other platforms the threads are simply left wherever the scheduler puts them.
+#if defined(__linux__)
 unsigned int getcpu() {
   our_cpu = sched_getcpu();
   Debug(1, "Our CPU is %u", our_cpu);
@@ -61,6 +64,16 @@ bool set_cpu_affinity(std::thread &thread) {
   }
   return true;
 }
+#else
+unsigned int getcpu() {
+  return our_cpu;
+}
+
+bool set_cpu_affinity(std::thread &) {
+  Debug(1, "Thread cpu affinity is not supported on this platform");
+  return false;
+}
+#endif
 
 // Trim Both leading and trailing sets
 std::string Trim(const std::string &str, const std::string &char_set) {
