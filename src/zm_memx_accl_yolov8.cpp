@@ -161,7 +161,7 @@ void YOLOv8::GetDetection(
 {
   // process confidence score
   float best_label_score = -1.0;
-  int best_label;
+  int best_label = -1;
 
   // Force use of SIMD to calculate sigmoid.
   //
