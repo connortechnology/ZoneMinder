@@ -39,23 +39,23 @@ endif()
 #set(CMAKE_INSTALL_ALWAYS ON)
 
 # Default CLFAGS and CXXFLAGS:
-set(CMAKE_C_FLAGS_RELEASE "-O2 -fopenmp")
-set(CMAKE_CXX_FLAGS_RELEASE "-O2 -fopenmp")
-set(CMAKE_C_FLAGS_DEBUG "-g -fopenmp")
-set(CMAKE_CXX_FLAGS_DEBUG "-g -fopenmp")
+set(CMAKE_C_FLAGS_RELEASE "-O2")
+set(CMAKE_CXX_FLAGS_RELEASE "-O2")
+set(CMAKE_C_FLAGS_DEBUG "-g")
+set(CMAKE_CXX_FLAGS_DEBUG "-g")
 
 # Disable PIE for Debug builds so addr2line works with runtime addresses
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
   set(CMAKE_POSITION_INDEPENDENT_CODE OFF)
   add_link_options(-no-pie)
 endif()
-set(CMAKE_C_FLAGS_OPTIMISED "-O3 -fopenmp")
-set(CMAKE_CXX_FLAGS_OPTIMISED "-O3 -fopenmp")
+set(CMAKE_C_FLAGS_OPTIMISED "-O3")
+set(CMAKE_CXX_FLAGS_OPTIMISED "-O3")
 # Profile: release-level optimization, plus debug symbols and frame pointers
 # so perf/flamegraph can walk stacks accurately. Use with:
 #   cmake -DCMAKE_BUILD_TYPE=Profile ..
-set(CMAKE_C_FLAGS_PROFILE "-O2 -g -fno-omit-frame-pointer -fopenmp")
-set(CMAKE_CXX_FLAGS_PROFILE "-O2 -g -fno-omit-frame-pointer -fopenmp")
+set(CMAKE_C_FLAGS_PROFILE "-O2 -g -fno-omit-frame-pointer")
+set(CMAKE_CXX_FLAGS_PROFILE "-O2 -g -fno-omit-frame-pointer")
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
 set(CMAKE_CXX_STANDARD 17)

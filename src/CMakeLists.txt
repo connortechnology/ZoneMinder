@@ -101,6 +101,16 @@ set(ZM_BIN_SRC_FILES
   netint_network.cpp  ni_yolo_utils.cpp yolov4_postprocess.cpp  yolov5_postprocess.cpp yolov8_postprocess.cpp
 )
 
+# The MemryX yolov8 post-processing vectorises its loops with `#pragma omp simd`.
+# -fopenmp-simd honours those pragmas at compile time without linking an OpenMP
+# runtime. It is applied only where it is used, and only when the compiler
+# accepts it: Apple clang rejects -fopenmp outright.
+include(CheckCXXCompilerFlag)
+check_cxx_compiler_flag(-fopenmp-simd ZM_HAVE_OPENMP_SIMD)
+if(ZM_HAVE_OPENMP_SIMD)
+  set_source_files_properties(zm_memx_yolov8.cpp PROPERTIES COMPILE_OPTIONS -fopenmp-simd)
+endif()
+
 if(ZM_CUDA)
   set(ZM_BIN_SRC_FILES
     ${ZM_BIN_SRC_FILES}
