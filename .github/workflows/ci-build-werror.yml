@@ -45,6 +45,7 @@ jobs:
             libpcre2-dev libpolkit-gobject-1-dev libssl-dev zlib1g-dev \
             libv4l-dev libvlc-dev libvncserver-dev \
             libmosquitto-dev libmosquittopp-dev \
+            nlohmann-json3-dev \
             gsoap libgsoap-dev
 
       # Runs before the build: it is compile-only and takes about a second, so a
