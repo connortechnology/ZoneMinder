@@ -44,6 +44,10 @@ StreamBase::~StreamBase() {
   if (mJpegSwsContext) {
     sws_freeContext(mJpegSwsContext);
   }
+
+  // The monitor's zones each hold a shared_ptr back to it, so releasing ours
+  // alone never frees it. disconnect() clears the zones, as zmc does on exit.
+  if (monitor) monitor->disconnect();
 }
 
 bool StreamBase::initContexts(int in_width, int in_height, AVPixelFormat format,

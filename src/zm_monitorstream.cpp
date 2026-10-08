@@ -652,7 +652,7 @@ void MonitorStream::runStream() {
         buffered_playback = false;
       } else {
         Debug(2, "Assigning temporary buffer");
-        temp_image_buffer = new SwapImage[temp_image_buffer_count];
+        temp_image_buffer = std::make_unique<SwapImage[]>(temp_image_buffer_count);
         Debug(2, "Assigned temporary buffer");
       }
     }

@@ -27,6 +27,7 @@ set(TEST_SOURCES
   zm_image.cpp
   zm_image_jpeg_codec.cpp
   zm_image_planes.cpp
+  zm_image_annotate.cpp
   zm_monitor_shm.cpp
   zm_monitorstream.cpp
   zm_mp4_sidx.cpp

@@ -2890,6 +2890,9 @@ int Monitor::Analyse() {
       if (packetqueue.should_try_clear(packet->keyframe)) {
         packetqueue.clearPackets(packet);
       }
+      // Free decoded data of packets before the current pre-event window so a
+      // queued packet no longer pins a decoder pool buffer (refs #4860).
+      packetqueue.releaseDecoded();
 
       unsigned int index = (shared_data->last_analysis_index+1) % image_buffer_count;
       if (
@@ -3002,7 +3005,16 @@ int Monitor::Analyse() {
       }
       // Free up the decoded frame as well, we won't be using it for anything at this time.
       //packet->out_frame = nullptr;
-    } // end if !event
+    }
+
+    // The decoded frame has been written to shm and analysed (y_image points
+    // into it). From here on everything reads packet->image, so the frame is
+    // only still needed by an encoder that has no image to work from. Keeping
+    // it holds a decoder pool buffer for every queued packet (refs #4860).
+    if (packet->in_frame and (packet->image or videowriter == PASSTHROUGH
+                              or shared_data->recording == RECORDING_NONE)) {
+      packet->release_frames();
+    }
   }  // end scope for event_lock
   packet->analyzed = true;
   packet->notify_all();  // Wake up event thread waiting for analyzed
@@ -4061,7 +4073,8 @@ std::vector<std::shared_ptr<Monitor>> Monitor::LoadLocalMonitors(
     const char *device, Purpose purpose) {
   std::string where = "`Capturing` != 'None' AND `Type` = 'Local'";
 
-  if (device[0]) where += " AND `Device`='" + std::string(device) + "'";
+  if (device[0])
+    where += " AND `Device`='" + zmDbEscapeString(device) + "'";
   if (staticConfig.SERVER_ID)
     where += stringtf(" AND `ServerId`=%d", staticConfig.SERVER_ID);
   return LoadMonitors(where, purpose);
@@ -4075,17 +4088,17 @@ std::vector<std::shared_ptr<Monitor>> Monitor::LoadRemoteMonitors(
   if (staticConfig.SERVER_ID)
     where += stringtf(" AND `ServerId`=%d", staticConfig.SERVER_ID);
   if (protocol)
-    where += stringtf(
-        " AND `Protocol` = '%s' AND `Host` = '%s' AND `Port` = '%s' AND `Path` "
-        "= '%s'",
-        protocol, host, port, path);
+    where += stringtf(" AND `Protocol` = '%s' AND `Host` = '%s' AND `Port` = '%s' AND `Path` = '%s'",
+                      zmDbEscapeString(protocol).c_str(), zmDbEscapeString(host).c_str(),
+                      zmDbEscapeString(port).c_str(), zmDbEscapeString(path).c_str());
   return LoadMonitors(where, purpose);
 }
 
 std::vector<std::shared_ptr<Monitor>> Monitor::LoadFileMonitors(
     const char *file, Purpose purpose) {
   std::string where = "`Capturing` != 'None' AND `Type` = 'File'";
-  if (file[0]) where += " AND `Path`='" + std::string(file) + "'";
+  if (file[0])
+    where += " AND `Path`='" + zmDbEscapeString(file) + "'";
   if (staticConfig.SERVER_ID)
     where += stringtf(" AND `ServerId`=%d", staticConfig.SERVER_ID);
   return LoadMonitors(where, purpose);
@@ -4094,7 +4107,8 @@ std::vector<std::shared_ptr<Monitor>> Monitor::LoadFileMonitors(
 std::vector<std::shared_ptr<Monitor>> Monitor::LoadFfmpegMonitors(
     const char *file, Purpose purpose) {
   std::string where = "`Capturing` != 'None' AND `Type` = 'Ffmpeg'";
-  if (file[0]) where += " AND `Path` = '" + std::string(file) + "'";
+  if (file[0])
+    where += " AND `Path` = '" + zmDbEscapeString(file) + "'";
   if (staticConfig.SERVER_ID)
     where += stringtf(" AND `ServerId`=%d", staticConfig.SERVER_ID);
   return LoadMonitors(where, purpose);
