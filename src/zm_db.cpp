@@ -268,13 +268,6 @@ bool retry_after_contention(unsigned int err, const std::string &query, int &att
  * be due to external factors.
  */
 
-static constexpr int kMaxContentionRetries = 5;
-
-// 50ms * 2^attempt + up to 50ms jitter. attempt 1 ~= 100ms, attempt 5 ~= 1.6s.
-static useconds_t contention_backoff_us(int attempt) {
-  return 50000u * (1u << attempt) + (rand() % 50000);
-}
-
 int zmDbDo(const std::string &query) {
   std::lock_guard<std::mutex> lck(db_mutex);
   if (!zmDbConnected and !zmDbConnect())
@@ -432,44 +425,6 @@ void zmDbQueue::push(std::string &&sql) {
     mQueue.push(std::move(sql));
     mCondition.notify_all();
   }
-}
-
-// Simple fallback escaping when database connection is unavailable.
-// This handles the critical SQL injection characters without requiring
-// a MySQL connection (which mysql_real_escape_string needs for charset info).
-static std::string zmDbEscapeStringFallback(const std::string& to_escape) {
-  std::string escaped;
-  escaped.reserve(to_escape.length() * 2);
-
-  for (char c : to_escape) {
-    switch (c) {
-      case '\0':
-        escaped += "\\0";
-        break;
-      case '\n':
-        escaped += "\\n";
-        break;
-      case '\r':
-        escaped += "\\r";
-        break;
-      case '\\':
-        escaped += "\\\\";
-        break;
-      case '\'':
-        escaped += "\\'";
-        break;
-      case '"':
-        escaped += "\\\"";
-        break;
-      case '\x1a':  // Ctrl-Z (EOF on Windows)
-        escaped += "\\Z";
-        break;
-      default:
-        escaped += c;
-        break;
-    }
-  }
-  return escaped;
 }
 
 namespace {
