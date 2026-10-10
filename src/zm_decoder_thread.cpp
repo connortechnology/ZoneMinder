@@ -61,6 +61,13 @@ void DecoderThread::Run() {
     avcodec_free_context(&monitor_->mVideoCodecContext);
     monitor_->mVideoCodecContext = nullptr;
   }
+  // The next OpenDecoder() creates a fresh device; drop this one with the
+  // context that referenced it.
+  if (monitor_->decoder_hw_device_ctx) {
+    av_buffer_unref(&monitor_->decoder_hw_device_ctx);
+    monitor_->decoder_hw_device_ctx = nullptr;
+  }
+  monitor_->decoder_hw_pix_fmt = AV_PIX_FMT_NONE;
   if (monitor_->mAudioCodecContext) {
     avcodec_free_context(&monitor_->mAudioCodecContext);
     monitor_->mAudioCodecContext = nullptr;

@@ -57,6 +57,9 @@ if ($tab == 'display') {
           <form name="optionsForm" method="get" action="?">
             <input type="hidden" name="view" value="<?php echo $view ?>"/>
             <input type="hidden" name="tab" value="<?php echo $tab ?>"/>
+            <!-- #optionsContainer is a flex row, so this has to live inside the
+                 form rather than beside it, or the two share the width. -->
+            <div class="form-text text-muted mb-3"><?php echo translate('ThisSessionHint') ?></div>
             <div class="col button-block">
               <div id="contentButtons">
                 <button value="Save" type="submit"><?php echo translate('Save') ?></button>
@@ -181,16 +184,6 @@ else if ($tab == 'menu') {
   }
 
   if ($tab == 'web') {
-    $configCats[$tab]['ZM_WEB_HOMEVIEW']['Hint'] = [
-      'console'=>translate('Console'),
-      'events'=>'Events',
-      'map'   =>  'Map',
-      'montage'=>'Montage',
-      'montagereview'=>'Montage Review',
-      'watch' => 'Watch',
-    ];
-  } else if ($tab == 'system') {
-//    $configCats[$tab]['ZM_LANG_DEFAULT']['Hint'] = join('|', getLanguages());
     if (defined('ZM_FORCE_SKIN_DEFAULT'))
       $configCats[$tab]['ZM_SKIN_DEFAULT']['Hint'] = ZM_FORCE_SKIN_DEFAULT;
     else
@@ -208,9 +201,25 @@ else if ($tab == 'menu') {
     foreach ($languagecodelist as $language){
         $languageslist[$language] = translate($language);
        }
-
     $configCats[$tab]['ZM_LANG_DEFAULT']['Hint'] = $languageslist;
 
+    $configCats[$tab]['ZM_LOCALE_DEFAULT']['Hint'] = array(''=> translate('System Default'));
+    $locales = ResourceBundle::getLocales('');
+    if ($locales) {
+      foreach ( $locales as $locale) {
+        $configCats[$tab]['ZM_LOCALE_DEFAULT']['Hint'][$locale] = $locale;
+      }
+    }
+
+    $configCats[$tab]['ZM_WEB_HOMEVIEW']['Hint'] = [
+      'console'=>translate('Console'),
+      'events'=>'Events',
+      'map'   =>  'Map',
+      'montage'=>'Montage',
+      'montagereview'=>'Montage Review',
+      'watch' => 'Watch',
+    ];
+  } else if ($tab == 'system') {
 
     function timezone_list() {
       static $timezones = null;
@@ -244,13 +253,6 @@ else if ($tab == 'menu') {
       return $name;
     }
     $configCats[$tab]['ZM_TIMEZONE']['Hint'] = array(''=> translate('TZUnset')) + timezone_list();
-    $configCats[$tab]['ZM_LOCALE_DEFAULT']['Hint'] = array(''=> translate('System Default'));
-    $locales = ResourceBundle::getLocales('');
-    if ($locales) {
-      foreach ( $locales as $locale) {
-        $configCats[$tab]['ZM_LOCALE_DEFAULT']['Hint'][$locale] = $locale;
-      }
-    }
   } # end if tab == system
 ?>
       <form name="optionsForm" method="post" action="?">

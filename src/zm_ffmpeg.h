@@ -27,6 +27,8 @@
 #include <vector>
 #include <list>
 #include <memory>
+#include <string>
+#include <vector>
 
 extern "C" {
 #include <libswresample/swresample.h>
@@ -656,5 +658,38 @@ int libjpeg_to_ffmpeg_qv(int libjpeg_quality);
 // selection is unaffected by what we do for jpegs.
 const char *hw_jpeg_encoder_name(enum AVHWDeviceType device_type);
 enum AVPixelFormat get_hw_format(AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts);
+
+// The hwaccel device types a DecoderHWAccelName asks for, in the order they
+// should be tried.
+//
+// "auto" means every type this libavutil was built with, so the caller probes
+// them and takes the first the decoder supports and whose device opens.
+// Anything else is a comma-separated priority list; a single name is the
+// one-element case. Unknown names are dropped with a warning rather than
+// failing the lot, so one typo in a list does not cost the working entries.
+// An empty name yields nothing, which the caller reads as "no hwaccel asked
+// for".
+std::vector<enum AVHWDeviceType> hwaccel_candidate_types(const std::string &hwaccel_name);
+
+// Open a decoder for a video stream, with hardware acceleration if one was
+// asked for and can be had.
+//
+// hw_pix_fmt is taken by reference because the returned context points at it:
+// get_hw_format reads it back through ctx->opaque every time libavcodec picks
+// a format. Whatever the caller passes must therefore outlive the context, and
+// must not be a temporary or a local that goes out of scope first.
+//
+// hw_device_ctx receives the device the caller must unref once the context is
+// gone. label names the source in error messages. Returns nullptr if no
+// decoder could be opened at all.
+AVCodecContext *open_video_decoder(
+    AVStream *stream,
+    const std::string &decoder_name,
+    const std::string &hwaccel_name,
+    const std::string &hwaccel_device,
+    const std::string &options,
+    const std::string &label,
+    AVPixelFormat &hw_pix_fmt,
+    AVBufferRef *&hw_device_ctx);
 
 #endif // ZM_FFMPEG_H

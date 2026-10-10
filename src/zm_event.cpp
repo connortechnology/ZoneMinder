@@ -1278,7 +1278,6 @@ void Event::Run() {
       monitor->GetVideoStream(),
       video_ctx,
       ( monitor->RecordAudio() ? monitor->GetAudioStream() : nullptr ),
-      ( monitor->RecordAudio() ? monitor->GetAudioCodecContext() : nullptr ),
       monitor );
 
     if (!videoStore->open()) {

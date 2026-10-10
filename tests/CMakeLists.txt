@@ -25,6 +25,7 @@ set(TEST_SOURCES
   zm_ffmpeg_camera.cpp
   zm_event_hardlink.cpp
   zm_font.cpp
+  zm_hwaccel_candidates.cpp
   zm_image.cpp
   zm_image_jpeg_codec.cpp
   zm_image_planes.cpp

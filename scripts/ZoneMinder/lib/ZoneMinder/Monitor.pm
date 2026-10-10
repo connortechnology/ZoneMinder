@@ -119,7 +119,6 @@ $serial = $primary_key = 'Id';
   EncoderParameters
   RecordAudio
   RecordingSource
-  RTSPDescribe
   Brightness
   Contrast
   Hue
@@ -251,7 +250,6 @@ $fields{model} = undef;
     EncoderHWAccelDevice  =>  undef,
     RecordAudio=>0,
     RecordingSource  => q`'Primary'`,
-    RTSPDescribe=>0,
     Brightness  =>  -1,
     Contrast    =>  -1,
     Hue         =>  -1,

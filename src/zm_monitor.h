@@ -166,9 +166,7 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
     REMOTE,
     FILE,
     FFMPEG,
-    LIBVLC,
     LIBCURL,
-    NVSOCKET,
     VNC,
   } CameraType;
 
@@ -684,28 +682,34 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   int channel;
   int format;
 
-  int camera_width;
-  int camera_height;
-  unsigned int
-      width;  // Normally the same as the camera, but not if partly rotated
-  unsigned int
-      height;  // Normally the same as the camera, but not if partly rotated
-  bool v4l_multi_buffer;
-  unsigned int v4l_captures_per_frame;
-  Orientation orientation;  // Whether the image has to be rotated at all
-  unsigned int deinterlacing;
-  unsigned int deinterlacing_value;
-  std::string decoder_name;
-  std::string decoder_hwaccel_name;
-  // Hardware decode state, set up in OpenDecoder. hw_pix_fmt has to outlive the
-  // call because the codec context keeps a pointer to it in opaque and the
-  // get_format callback reads it on every decode.
-  AVBufferRef *decoder_hw_device_ctx = nullptr;
-  AVPixelFormat decoder_hw_pix_fmt = AV_PIX_FMT_NONE;
-  bool decoder_use_hwaccel = true;
-  std::string decoder_hwaccel_device;
-  bool videoRecording;
-  bool rtsp_describe;
+  int    camera_width;
+  int    camera_height;
+  unsigned int    width;              // Normally the same as the camera, but not if partly rotated
+  unsigned int    height;             // Normally the same as the camera, but not if partly rotated
+  bool            v4l_multi_buffer;
+  unsigned int    v4l_captures_per_frame;
+  Orientation     orientation;        // Whether the image has to be rotated at all
+  unsigned int    deinterlacing;
+  unsigned int    deinterlacing_value;
+  std::string     decoder_name;
+  std::string     decoder_hwaccel_name;
+  std::string     decoder_hwaccel_device;
+
+  // The decoder belongs here rather than to the camera: the camera's job is to
+  // produce packets, and the decoder thread runs against this context for as
+  // long as the monitor says so. It used to live in FfmpegCamera, where
+  // camera->PrimeCapture() freed and rebuilt it underneath a decoder thread
+  // still holding the pointer.
+  //
+  // decoder_hw_pix_fmt must outlive mVideoCodecContext: the context stores its
+  // address in opaque and get_hw_format reads it back on every format
+  // negotiation. Being a member of the same object gives it that lifetime.
+  AVCodecContext *mVideoCodecContext;
+  AVPixelFormat   decoder_hw_pix_fmt = AV_PIX_FMT_NONE;
+  AVBufferRef    *decoder_hw_device_ctx = nullptr;
+  // Cleared when hardware decoding fails so OpenDecoder() falls back to software.
+  bool            decoder_use_hwaccel = true;
+  bool            videoRecording;
 
   int             savejpegs;
   int             colours;
@@ -893,7 +897,6 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   std::unique_ptr<AnalysisThread> analysis_thread;
   packetqueue_iterator *decoder_it;
   std::unique_ptr<DecoderThread> decoder;
-  AVCodecContext *mVideoCodecContext;
   AVCodecContext *mAudioCodecContext;
   SwsContext   *convert_context;
   std::thread  close_event_thread;
@@ -1223,13 +1226,8 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   void SendStreamHealthEvent(uint16_t code, const std::string &message, int detail = 0);
 
   AVStream *GetAudioStream() const { return camera ? camera->getAudioStream() : nullptr; };
-  AVCodecContext *GetAudioCodecContext() const { return mAudioCodecContext; };
-  AVCodecContext *SetAudioCodecContext(AVCodecContext *pAudioCodecContext) {
-    return mAudioCodecContext = pAudioCodecContext; };
   AVStream *GetVideoStream() const { return camera ? camera->getVideoStream() : nullptr; };
   AVCodecContext *GetVideoCodecContext() const { return mVideoCodecContext; };
-  AVCodecContext *SetVideoCodecContext(AVCodecContext *pVideoCodecContext) {
-    return mVideoCodecContext = pVideoCodecContext; };
 
   std::string GetSecondPath() const { return second_path; };
   std::string GetStreamSocketPath() const { return shared_data ? shared_data->stream_socket_path : ""; };

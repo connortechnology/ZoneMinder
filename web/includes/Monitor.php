@@ -310,7 +310,6 @@ class Monitor extends ZM_Object {
     'AudioThreshold' => array('type'=>'integer', 'default'=>0),
     'AudioAlarmScore' => array('type'=>'integer', 'default'=>9),
     #'OutputSourceStream'  => 'Primary',
-    'RTSPDescribe'  =>  array('type'=>'boolean','default'=>0),
     'Brightness'  =>  -1,
     'Contrast'    =>  -1,
     'Hue'         =>  -1,
@@ -798,7 +797,7 @@ class Monitor extends ZM_Object {
       if ($this->{'Port'} != '5900') {
         $source .= ':'.$this->{'Port'};
       }
-    } else if ($this->{'Type'} == 'Ffmpeg' || $this->{'Type'} == 'Libvlc' || $this->{'Type'} == 'WebSite') {
+    } else if ($this->{'Type'} == 'Ffmpeg' || $this->{'Type'} == 'WebSite') {
       if ($this->{'Path'}) {
         $url_parts = parse_url($this->{'Path'});
         if (ZM_WEB_FILTER_SOURCE == 'Hostname') {

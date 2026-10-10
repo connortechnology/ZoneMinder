@@ -95,8 +95,6 @@ FfmpegCamera::FfmpegCamera(
   }
 
 #if HAVE_LIBAVUTIL_HWCONTEXT_H
-  hw_device_ctx = nullptr;
-  hw_pix_fmt = AV_PIX_FMT_NONE;
 #endif
 
   /* Has to be located inside the constructor so other components such as zma
@@ -140,7 +138,7 @@ int FfmpegCamera::PrimeCapture() {
   // Handle options
   AVDictionary *opts = nullptr;
   if (!mOptions.empty()) {
-    ret = av_dict_parse_string(&opts, mOptions.c_str(), "=", ",", 0);
+    ret = av_dict_parse_string(&opts, mOptions.c_str(), "=", kOptionSeparators, 0);
     if (ret < 0) {
       Warning("Could not parse ffmpeg input options '%s'", mOptions.c_str());
     }
@@ -211,6 +209,11 @@ int FfmpegCamera::PrimeCapture() {
   Debug(1, "Calling avformat_open_input for %s", mMaskedPath.c_str());
 
   mFormatContext = avformat_alloc_context();
+  if (!mFormatContext) {
+    Error("Unable to allocate format context");
+    av_dict_free(&opts);
+    return -1;
+  }
   mFormatContext->interrupt_callback.callback = FfmpegInterruptCallback;
   mFormatContext->interrupt_callback.opaque = this;
   mFormatContext->flags |= AVFMT_FLAG_NOBUFFER | AVFMT_FLAG_FLUSH_PACKETS;
@@ -306,6 +309,10 @@ int FfmpegCamera::PrimeCapture() {
 
   Debug(3, "Found video stream at index %d, audio stream at index %d",
         mVideoStreamId, mAudioStreamId);
+
+  // No decoder is opened here. The monitor opens one against this stream in
+  // Monitor::OpenDecoder() once PrimeCapture() returns, and owns it for as long
+  // as the decoder thread needs it. This camera's job is to produce packets.
 
   if (!monitor->GetSecondPath().empty()) {
     Debug(1, "Trying secondary stream at %s", mMaskedSecondPath.c_str());
