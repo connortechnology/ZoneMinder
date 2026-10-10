@@ -2984,11 +2984,11 @@ int Monitor::Analyse() {
     }
 
     // The decoded frame has been written to shm and analysed (y_image points
-    // into it). From here on everything reads packet->image, so the frame is
-    // only still needed by an encoder that has no image to work from. Keeping
-    // it holds a decoder pool buffer for every queued packet (refs #4860).
-    if (packet->in_frame and (packet->image or videowriter == PASSTHROUGH
-                              or shared_data->recording == RECORDING_NONE)) {
+    // into it). Keeping it holds a decoder pool buffer for every queued packet
+    // (refs #4860), so drop it now unless an encoder will read it. When one
+    // will, releaseDecoded() frees it once no event can reach the packet.
+    if (packet->in_frame and CanReleaseFramesAfterAnalysis(videowriter,
+                                                           static_cast<RecordingOption>(shared_data->recording))) {
       packet->release_frames();
     }
   }  // end scope for event_lock
@@ -3865,6 +3865,13 @@ std::string Monitor::RtspUrlFromRemote(
     url += path;
   }
   return url;
+}
+
+bool Monitor::CanReleaseFramesAfterAnalysis(VideoWriter writer, RecordingOption recording) {
+  // Passthrough records the compressed packet. Upstream encodes from the
+  // Image, but here VideoStore uses hw_frame or in_frame (its Image path is
+  // off since 4ed4ad6c1), so an encoder needs the frame even with an Image.
+  return writer != ENCODE or recording == RECORDING_NONE;
 }
 
 const char *Monitor::ActionCommandName(const std::string &action_type) {
