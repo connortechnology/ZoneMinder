@@ -2016,6 +2016,21 @@ void Monitor::UpdateFPS() {
 #endif
 
     }  // end if fps_report_interval
+
+    // Packetqueue depth is logged alongside because it bounds how long a frame
+    // would have to stay on the card to avoid the round trip: the encode happens
+    // on the event thread, behind analysis.
+    const uint64_t downloads = hw_frame_downloads_.load();
+    const uint64_t uploads = hw_frame_uploads_.load();
+    if (downloads != last_hw_frame_downloads_ or uploads != last_hw_frame_uploads_) {
+      Debug(2, "HW frames: %.1f downloads/s, %.1f uploads/s (%" PRIu64 ", %" PRIu64 " total), packetqueue depth %u",
+          (downloads - last_hw_frame_downloads_) / elapsed.count(),
+          (uploads - last_hw_frame_uploads_) / elapsed.count(),
+          downloads, uploads, packetqueue.size());
+    }
+    last_hw_frame_downloads_ = downloads;
+    last_hw_frame_uploads_ = uploads;
+
     shared_data->capture_fps = new_capture_fps;
     last_capture_image_count = shared_data->image_count;
     shared_data->analysis_fps = new_analysis_fps;
@@ -3406,6 +3421,7 @@ bool Monitor::Decode() {
       auto front_packet = front_lock.packet_;
 
       int ret = front_packet->receive_frame(context);
+      if (ret == ZMPacket::kDownloadedFromDevice) hw_frame_downloads_++;
       if (ret > 0) {
         // Success - got a decoded frame, take ownership and process it
         packet_lock = std::move(decoder_queue.front());
@@ -3573,6 +3589,7 @@ bool Monitor::Decode() {
   if (packet->in_frame) {
     // Handle hardware-accelerated frames
     int hw_ret = packet->transfer_hwframe(context);
+    if (hw_ret == ZMPacket::kDownloadedFromDevice) hw_frame_downloads_++;
     if (hw_ret < 0) {
       // Hardware transfer failed - frame is unusable
       Debug(1, "Hardware frame transfer failed for packet %d", packet->image_index);

@@ -176,7 +176,7 @@ int ZMPacket::receive_frame(AVCodecContext *ctx) {
     // receive_frame goes out of scope here and releases the surface
     in_frame = std::move(sw_frame);
     zm_dump_video_frame(in_frame.get(), "After immediate hwtransfer");
-    return 1;
+    return kDownloadedFromDevice;
   }
 #endif
 #endif
@@ -260,6 +260,7 @@ int ZMPacket::transfer_hwframe(AVCodecContext *ctx) {
 
     in_frame = std::move(new_frame);
     zm_dump_video_frame(in_frame.get(), "After hwtransfer");
+    return kDownloadedFromDevice;
   } else
     Debug(3, "Same pix format %s so not hwtransferring. sw_pix_fmt is %s",
         av_get_pix_fmt_name(ctx->pix_fmt),

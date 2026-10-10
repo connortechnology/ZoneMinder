@@ -88,9 +88,15 @@ class ZMPacket {
 
   int is_keyframe() { return keyframe; };
   int send_packet(AVCodecContext *ctx);
+  // Returned by receive_frame and transfer_hwframe when they copied the frame
+  // from the device into system memory, so callers can count the crossing.
+  // Any other success is 1.
+  static constexpr int kDownloadedFromDevice = 2;
+  // < 0 on error, 0 for go again, 1 or kDownloadedFromDevice for a frame.
   int receive_frame(AVCodecContext *ctx);
 
   bool needs_hw_transfer(AVCodecContext *ctx);
+  // < 0 on error, kDownloadedFromDevice if it copied the frame down, else 1.
   int transfer_hwframe(AVCodecContext *ctx);
 
   explicit ZMPacket(Image *image, SystemTimePoint tv);

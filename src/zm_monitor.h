@@ -708,6 +708,15 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
 
   int        event_count;
   int        last_capture_image_count; // last value of image_count when calculating capture fps
+  // Frames crossing between the card and system memory, reported once a second
+  // by UpdateFPS. A download per decoded frame is what hardware decoding costs
+  // today; an upload on top of it is the round trip that keeping frames on the
+  // card would remove. Atomic because the decoder thread counts downloads and
+  // the event thread counts uploads.
+  std::atomic<uint64_t> hw_frame_downloads_{0};
+  std::atomic<uint64_t> hw_frame_uploads_{0};
+  uint64_t last_hw_frame_downloads_ = 0;
+  uint64_t last_hw_frame_uploads_ = 0;
   int        analysis_image_count;    // How many frames have been processed by analysis thread.
   int        decoding_image_count;    // How many frames have been processed by analysis thread.
   int        motion_frame_count;      // How many frames have had motion detection performed on them.
@@ -1056,6 +1065,8 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   AVStream *GetAudioStream() const { return camera ? camera->getAudioStream() : nullptr; };
   AVStream *GetVideoStream() const { return camera ? camera->getVideoStream() : nullptr; };
   AVCodecContext *GetVideoCodecContext() const { return mVideoCodecContext; };
+  // Called by VideoStore after copying a frame onto the card for the encoder.
+  void CountHwFrameUpload() { hw_frame_uploads_++; }
 
   std::string GetSecondPath() const { return second_path; };
   std::string GetStreamSocketPath() const { return shared_data ? shared_data->stream_socket_path : ""; };

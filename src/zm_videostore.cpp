@@ -1337,6 +1337,10 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
         Error("Error while transferring frame data to surface: %s.", av_err2str(ret));
         return ret;
       }
+      // When the frame was decoded on the card this is the second half of a
+      // round trip: brought down so the pipeline could look at it, now going
+      // back up to be encoded.
+      monitor->CountHwFrameUpload();
 
       frame = std::move(hw_frame);
     }  // end if hwaccel
