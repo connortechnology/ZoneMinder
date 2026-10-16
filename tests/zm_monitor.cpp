@@ -39,3 +39,41 @@ TEST_CASE("Analysis keeps decoded frames an encoder will read", "[Monitor]") {
     REQUIRE(Monitor::CanReleaseFramesAfterAnalysis(Monitor::DISABLED, Monitor::RECORDING_ALWAYS));
   }
 }
+
+// The Quadra decoder has only a few spare output buffers, and every decoded
+// frame Analyse() holds is one of them. Holding them through motion detection
+// left the decoder blocked in send_packet waiting for one back (refs #123), so
+// the frame is dropped once object detection is done with it.
+TEST_CASE("Analysis returns Quadra frames once object detection is done", "[Monitor]") {
+  av_frame_ptr frame{av_frame_alloc()};
+  REQUIRE(frame);
+
+  SECTION("no frame") {
+    REQUIRE_FALSE(Monitor::CanReleaseDeviceFrameAfterAI(nullptr, Monitor::PASSTHROUGH,
+                                                        Monitor::RECORDING_ALWAYS));
+  }
+
+  SECTION("CUDA motion detection reads a CUDA frame after object detection") {
+    frame->format = AV_PIX_FMT_CUDA;
+    REQUIRE_FALSE(Monitor::CanReleaseDeviceFrameAfterAI(frame.get(), Monitor::PASSTHROUGH,
+                                                        Monitor::RECORDING_ALWAYS));
+  }
+
+#if HAVE_QUADRA
+  SECTION("a Quadra frame nothing else reads") {
+    frame->format = AV_PIX_FMT_NI_QUAD;
+    REQUIRE(Monitor::CanReleaseDeviceFrameAfterAI(frame.get(), Monitor::PASSTHROUGH,
+                                                  Monitor::RECORDING_ALWAYS));
+    REQUIRE(Monitor::CanReleaseDeviceFrameAfterAI(frame.get(), Monitor::ENCODE,
+                                                  Monitor::RECORDING_NONE));
+  }
+
+  SECTION("a Quadra frame the encoder will read") {
+    frame->format = AV_PIX_FMT_NI_QUAD;
+    REQUIRE_FALSE(Monitor::CanReleaseDeviceFrameAfterAI(frame.get(), Monitor::ENCODE,
+                                                        Monitor::RECORDING_ALWAYS));
+    REQUIRE_FALSE(Monitor::CanReleaseDeviceFrameAfterAI(frame.get(), Monitor::ENCODE,
+                                                        Monitor::RECORDING_ONMOTION));
+  }
+#endif
+}

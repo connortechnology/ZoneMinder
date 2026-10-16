@@ -2547,6 +2547,13 @@ int Monitor::Analyse() {
                   // ground, which is the thing the lag is made of.
                   const double frame_us = get_capture_fps() > 0 ? 1e6 / get_capture_fps() : 0;
                   if (frame_us > 0 and quadra_us > frame_us) quadra_analyse_over_++;
+                  // Object detection, LPR and the drawbox are done with the
+                  // frame. Holding it through motion detection kept the
+                  // decoder out of buffers (refs #123).
+                  if (CanReleaseDeviceFrameAfterAI(packet->hw_frame.get(), videowriter,
+                                                   static_cast<RecordingOption>(shared_data->recording))) {
+                    packet->hw_frame = nullptr;
+                  }
                   if (++quadra_analyse_count_ % 500 == 0) {
                     Info("Quadra analyse over %ju frames: mean %.1fms, max %.1fms, "
                          "%ju took longer than the %.1fms frame interval",
@@ -3872,6 +3879,20 @@ bool Monitor::CanReleaseFramesAfterAnalysis(VideoWriter writer, RecordingOption 
   // Image, but here VideoStore uses hw_frame or in_frame (its Image path is
   // off since 4ed4ad6c1), so an encoder needs the frame even with an Image.
   return writer != ENCODE or recording == RECORDING_NONE;
+}
+
+bool Monitor::CanReleaseDeviceFrameAfterAI(const AVFrame *hw_frame, VideoWriter writer,
+                                           RecordingOption recording) {
+#if HAVE_QUADRA
+  // In out=hw mode the decoder's pool is what the stream needs plus three
+  // spare buffers, so every frame held here can leave send_packet waiting for
+  // one back. Past object detection only an encoder sharing the decoder's
+  // pool reads it: motion detection and event jpegs use the software copy.
+  return hw_frame and hw_frame->format == AV_PIX_FMT_NI_QUAD
+         and CanReleaseFramesAfterAnalysis(writer, recording);
+#else
+  return false;
+#endif
 }
 
 const char *Monitor::ActionCommandName(const std::string &action_type) {

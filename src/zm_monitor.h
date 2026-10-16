@@ -1427,6 +1427,12 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   // Whether Analyse() can drop a packet's decoded frames once it is done with
   // them. VideoStore encodes from hw_frame or in_frame, never the Image.
   static bool CanReleaseFramesAfterAnalysis(VideoWriter writer, RecordingOption recording);
+  // Whether Analyse() can drop a packet's hardware frame as soon as object
+  // detection is done with it, rather than after motion detection. Only for
+  // a Quadra frame: its decoder has few spare buffers, and CUDA motion
+  // detection reads a CUDA frame later on.
+  static bool CanReleaseDeviceFrameAfterAI(const AVFrame *hw_frame, VideoWriter writer,
+                                           RecordingOption recording);
   static const char *ActionCommandName(const std::string &action_type);
   static std::string ActionMessage(const EventAction &action);
   static const char *ActionTriggerName(EventAction::TriggerOn trigger);
