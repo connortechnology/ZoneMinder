@@ -1327,6 +1327,9 @@ None: No frames will be decoded, live view and thumbnails will not be available~
   'ANALYSIS_IMAGE_OPACITY' => array(
     'Help' => 'Controls the transparency of zone overlays on analysis images. Lower values are more transparent, higher values are more opaque. A value around 50 is recommended for a good balance between seeing the zones and the underlying image.'
   ),
+  'MOTION_FRAME_WIDTH' => array(
+    'Help' => 'Width of the frame motion detection runs on. Each frame is scaled down to this width before it is compared with the reference image, and the height follows the camera\'s aspect ratio. Motion detection rarely needs full resolution, and on a high resolution camera a smaller frame makes it much cheaper: 1280 on a 3840x2160 camera checks a ninth of the pixels. Zones, thresholds and the alarm statistics are adjusted to match, and stay as you drew them. 0 uses the full capture resolution. Ignored when motion detection runs on an NVIDIA card through CUDA, which works on the full frame.'
+  ),
 );
 
 ?>

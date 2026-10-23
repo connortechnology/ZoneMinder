@@ -1100,6 +1100,11 @@ echo htmlSelect('newMonitor[Decoder]', $decoders, $monitor->Decoder());
                      min="0" max="255" step="1"/>
               <span id="AnalysisImageOpacityValue"><?php echo validHtmlStr($monitor->AnalysisImageOpacity()); ?></span>
             </li>
+            <li id="MotionFrameWidth" class="MotionFrameWidth">
+              <label><?php echo translate('Motion Frame Width') ?><?php echo makeHelpLink('MOTION_FRAME_WIDTH') ?></label>
+              <input type="number" name="newMonitor[MotionFrameWidth]" value="<?php echo validHtmlStr($monitor->MotionFrameWidth()) ?>" min="0" step="2"/>
+              <?php echo translate('Pixels') ?>
+            </li>
 <?php
       }
 ?>

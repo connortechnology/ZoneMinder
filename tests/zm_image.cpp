@@ -563,3 +563,39 @@ TEST_CASE("Image::ReadJpeg reallocates for a larger JPEG", "[image]") {
   CHECK(small.Size() >= small.LineSize() * big_h);
   CHECK(small.Size() > small_size);
 }
+
+// Motion detection scales each frame down before the reference blend and the
+// delta. AssignScaled does that in one pass, rather than copying the full frame
+// with Assign and then scaling the copy.
+TEST_CASE("Image::AssignScaled makes a scaled copy of another image", "[image]") {
+  Image src(64, 36, ZM_COLOUR_GRAY8, ZM_SUBPIX_ORDER_NONE);
+  for (unsigned int y = 0; y < src.Height(); y++)
+    memset(src.Buffer(0, y), 100, src.Width());
+
+  SECTION("smaller") {
+    Image dst;
+    REQUIRE(dst.AssignScaled(src, 32, 18));
+    REQUIRE(dst.Width() == 32);
+    REQUIRE(dst.Height() == 18);
+    REQUIRE(dst.Colours() == ZM_COLOUR_GRAY8);
+    for (unsigned int y = 0; y < dst.Height(); y++)
+      for (unsigned int x = 0; x < dst.Width(); x++)
+        REQUIRE(*dst.Buffer(x, y) == 100);
+  }
+
+  SECTION("the same size is a plain copy") {
+    Image dst;
+    REQUIRE(dst.AssignScaled(src, 64, 36));
+    REQUIRE(dst.Width() == 64);
+    REQUIRE(dst.Height() == 36);
+    REQUIRE(*dst.Buffer(63, 35) == 100);
+  }
+
+  SECTION("a second frame of the same size reuses the buffer") {
+    Image dst;
+    REQUIRE(dst.AssignScaled(src, 32, 18));
+    const uint8_t *first = dst.Buffer();
+    REQUIRE(dst.AssignScaled(src, 32, 18));
+    REQUIRE(dst.Buffer() == first);
+  }
+}

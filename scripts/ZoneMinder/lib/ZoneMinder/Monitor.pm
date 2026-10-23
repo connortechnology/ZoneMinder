@@ -139,6 +139,7 @@ $serial = $primary_key = 'Id';
   SectionLengthWarn
   MinSectionLength
   MotionFrameSkip
+  MotionFrameWidth
   AnalysisFPSLimit
   AnalysisUpdateDelay
   MaxFPS
@@ -270,6 +271,7 @@ $fields{model} = undef;
     SectionLengthWarn => 1,
     MinSectionLength    =>  10,
     MotionFrameSkip     =>  0,
+    MotionFrameWidth    =>  0,
     AnalysisFPSLimit  =>  undef,
     AnalysisUpdateDelay  =>  0,
     MaxFPS => undef,
