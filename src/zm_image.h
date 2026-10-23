@@ -323,6 +323,10 @@ SwsContext *sws_convert_context;
   void Flip( bool leftright );
   void Scale( unsigned int factor );
   void Scale(unsigned int x, unsigned int y);
+  // Make this a copy of image scaled to new_width x new_height in one pass,
+  // rather than an Assign() of the full size image followed by a Scale().
+  // Keeps the buffer from the last call when the size has not changed.
+  bool AssignScaled(const Image &image, unsigned int new_width, unsigned int new_height);
 
   void Deinterlace_Discard();
   void Deinterlace_Linear();

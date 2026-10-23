@@ -4006,6 +4006,50 @@ void Image::Scale(const unsigned int new_width, const unsigned int new_height) {
   AssignDirect(new_width, new_height, colours, subpixelorder, scale_buffer, scale_buffer_size, ZM_BUFTYPE_ZM);
 }
 
+bool Image::AssignScaled(const Image &image, const unsigned int new_width, const unsigned int new_height) {
+  if (image.width == new_width and image.height == new_height) {
+    Assign(image);
+    return buffer != nullptr;
+  }
+  if (!image.buffer or image.imagePixFormat == AV_PIX_FMT_NONE) {
+    Error("AssignScaled: source image has no buffer or no pixel format");
+    return false;
+  }
+
+  const AVPixelFormat format = image.imagePixFormat;
+  const int new_size = av_image_get_buffer_size(format, new_width, new_height, 32);
+  if (new_size < 0) {
+    Error("AssignScaled: av_image_get_buffer_size failed for %s %ux%u",
+          av_get_pix_fmt_name(format), new_width, new_height);
+    return false;
+  }
+
+  // As in Scale(): one SWScale, and so one cached sws context, per thread.
+  static thread_local SWScale swscale;
+  static thread_local const bool swscale_ready = swscale.init();
+  if (!swscale_ready) {
+    Error("AssignScaled: failed to initialise SWScale");
+    return false;
+  }
+
+  // Scale straight into the buffer from the last call when it is already this
+  // size and format, which it is for every frame after the first.
+  const bool reuse = buffer and !holdbuffer and width == new_width and height == new_height
+                     and imagePixFormat == format and allocation >= static_cast<size_t>(new_size);
+  uint8_t *out_buffer = reuse ? buffer : AllocBuffer(new_size);
+  const size_t out_size = reuse ? allocation : static_cast<size_t>(new_size);
+  if (swscale.Convert(image.buffer, image.size, out_buffer, out_size,
+                      format, format, image.width, image.height, new_width, new_height, 32, 32) < 0) {
+    Error("AssignScaled: sws_scale conversion failed (%ux%u %s -> %ux%u)",
+          image.width, image.height, av_get_pix_fmt_name(format), new_width, new_height);
+    if (!reuse) DumpBuffer(out_buffer, ZM_BUFTYPE_ZM);
+    return false;
+  }
+  if (!reuse)
+    AssignDirect(new_width, new_height, image.colours, image.subpixelorder, out_buffer, new_size, ZM_BUFTYPE_ZM);
+  return true;
+}
+
 void Image::Scale(const unsigned int factor) {
   if (!factor) {
     Error("Bogus scale factor %d found", factor);
