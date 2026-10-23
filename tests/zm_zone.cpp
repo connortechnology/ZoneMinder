@@ -19,6 +19,10 @@
 
 #include "zm_zone.h"
 
+#include "zm_monitor.h"
+
+#include <memory>
+
 TEST_CASE("Zone::ParsePercentagePolygon: full-frame zone at 1920x1080", "[Zone]") {
   Polygon polygon;
   bool result = Zone::ParsePercentagePolygon(
@@ -357,4 +361,132 @@ TEST_CASE("Zone::ClampPolygon: zone inside the monitor is unchanged", "[Zone]") 
 
   REQUIRE(Zone::ClampPolygon(polygon, 640, 360) == false);
   REQUIRE(polygon.GetVertices()[2] == Vector2(639, 359));
+}
+
+namespace {
+
+// The Monitor constructor strcmp()s config.event_close_mode and Image reads
+// config.font_file_location; both are null without a database.
+void EnsureMotionConfig() {
+  if (!config.font_file_location) config.font_file_location = "";
+  if (!config.event_close_mode) config.event_close_mode = "idle";
+}
+
+// A capture size and a motion frame width, without a database.
+class MotionMonitor : public Monitor {
+ public:
+  MotionMonitor(unsigned int w, unsigned int h, unsigned int motion_w) : Monitor() {
+    width = w;
+    height = h;
+    colours = ZM_COLOUR_GRAY8;
+    motion_frame_width = motion_w;
+    // >1 is what has CheckAlarms build the alarm highlight.
+    savejpegs = 2;
+  }
+};
+
+std::shared_ptr<Monitor> MakeMotionMonitor(unsigned int w, unsigned int h, unsigned int motion_w) {
+  return std::static_pointer_cast<Monitor>(std::make_shared<MotionMonitor>(w, h, motion_w));
+}
+
+Polygon Rect(int lo_x, int lo_y, int hi_x, int hi_y) {
+  return Polygon({Vector2(lo_x, lo_y), Vector2(hi_x, lo_y), Vector2(hi_x, hi_y), Vector2(lo_x, hi_y)});
+}
+
+}  // namespace
+
+// Zones stored in pixels were drawn against the capture. On a monitor that
+// detects motion on a smaller frame, their corners move to the same place in
+// that frame.
+TEST_CASE("Zone::ScalePolygon maps capture pixels onto the motion frame", "[Zone]") {
+  const Polygon scaled = Zone::ScalePolygon(Rect(0, 0, 3839, 2159), 3840, 2160, 1280, 720);
+  const std::vector<Vector2> &v = scaled.GetVertices();
+  REQUIRE(v.size() == 4);
+  REQUIRE(v[0] == Vector2(0, 0));
+  REQUIRE(v[1] == Vector2(1279, 0));
+  REQUIRE(v[2] == Vector2(1279, 719));
+  REQUIRE(v[3] == Vector2(0, 719));
+
+  const Polygon middle = Zone::ScalePolygon(Rect(1920, 1080, 2879, 1619), 3840, 2160, 1280, 720);
+  REQUIRE(middle.GetVertices()[0] == Vector2(640, 360));
+  REQUIRE(middle.GetVertices()[2] == Vector2(959, 539));
+}
+
+// Pixel thresholds scale with area and the filter box with length. A threshold
+// that was set stays set: rounding it down to 0 would turn it off.
+TEST_CASE("Zone thresholds scale with the motion frame", "[Zone]") {
+  SECTION("pixel counts scale by area") {
+    REQUIRE(Zone::ScalePixelCount(900, 1.0 / 9) == 100);
+    REQUIRE(Zone::ScalePixelCount(0, 1.0 / 9) == 0);
+    REQUIRE(Zone::ScalePixelCount(5, 1.0 / 9) == 1);
+  }
+
+  SECTION("lengths scale by width") {
+    REQUIRE(Zone::ScaleLength(9, 1.0 / 3) == 3);
+    REQUIRE(Zone::ScaleLength(0, 1.0 / 3) == 0);
+    REQUIRE(Zone::ScaleLength(3, 1.0 / 3) == 1);
+    REQUIRE(Zone::ScaleLength(2, 1.0 / 3) == 1);
+  }
+}
+
+TEST_CASE("Zones are checked at the monitor's motion frame size", "[Zone]") {
+  EnsureMotionConfig();
+  auto monitor = MakeMotionMonitor(3840, 2160, 1280);
+  REQUIRE(monitor->MotionWidth() == 1280);
+  REQUIRE(monitor->MotionHeight() == 720);
+
+  SECTION("an active zone's mask is built at the motion size") {
+    Zone zone(monitor, 1, "yard", Zone::ACTIVE, Rect(0, 0, 1279, 719), kRGBRed, Zone::ALARMED_PIXELS);
+    REQUIRE(zone.getPgImage()->Width() == 1280);
+    REQUIRE(zone.getPgImage()->Height() == 720);
+  }
+
+  SECTION("a privacy zone stays at the capture size") {
+    Zone zone(monitor, 2, "privacy", Zone::PRIVACY, Rect(0, 0, 3839, 2159));
+    REQUIRE(zone.getPgImage()->Width() == 3840);
+    REQUIRE(zone.getPgImage()->Height() == 2160);
+  }
+}
+
+// Stats rows, PTZ tracking and the analysis image all work in capture
+// coordinates, so what a zone reports comes back to that size however small a
+// frame it checked.
+TEST_CASE("Zone stats are reported at the capture size", "[Zone]") {
+  EnsureMotionConfig();
+  auto monitor = MakeMotionMonitor(3840, 2160, 1280);
+
+  Image delta(1280, 720, ZM_COLOUR_GRAY8, ZM_SUBPIX_ORDER_NONE);
+  for (unsigned int y = 0; y < delta.Height(); y++)
+    memset(delta.Buffer(0, y), 255, delta.Width());
+
+  SECTION("pixel counts") {
+    Zone zone(monitor, 1, "yard", Zone::ACTIVE, Rect(0, 0, 1279, 719), kRGBRed, Zone::ALARMED_PIXELS,
+              /*min_pixel_threshold*/ 10, /*max_pixel_threshold*/ 0,
+              /*min_alarm_pixels*/ 1, /*max_alarm_pixels*/ 0);
+    REQUIRE(zone.CheckAlarms(&delta));
+    REQUIRE(zone.GetStats().alarm_pixels_ == 3840u * 2160u);
+
+    // The highlight is laid over the full size analysis image.
+    REQUIRE(zone.AlarmImage() != nullptr);
+    REQUIRE(zone.AlarmImage()->Width() == 3840);
+    REQUIRE(zone.AlarmImage()->Height() == 2160);
+  }
+
+  // Only the blob check works out where in the zone the alarm is.
+  SECTION("alarm box and centre") {
+    Zone zone(monitor, 1, "yard", Zone::ACTIVE, Rect(0, 0, 1279, 719), kRGBRed, Zone::BLOBS,
+              /*min_pixel_threshold*/ 10, /*max_pixel_threshold*/ 0,
+              /*min_alarm_pixels*/ 1, /*max_alarm_pixels*/ 0, Vector2(3, 3),
+              /*min_filter_pixels*/ 1, /*max_filter_pixels*/ 0,
+              /*min_blob_pixels*/ 1, /*max_blob_pixels*/ 0);
+    REQUIRE(zone.CheckAlarms(&delta));
+    const ZoneStats &stats = zone.GetStats();
+    REQUIRE(stats.alarm_blobs_ == 1);
+    REQUIRE(stats.alarm_box_.Lo() == Vector2(0, 0));
+    REQUIRE(stats.alarm_box_.Hi() == Vector2(3839, 2159));
+    REQUIRE(stats.alarm_centre_.x_ >= 1918);
+    REQUIRE(stats.alarm_centre_.x_ <= 1921);
+    REQUIRE(stats.alarm_centre_.y_ >= 1078);
+    REQUIRE(stats.alarm_centre_.y_ <= 1081);
+  }
 }

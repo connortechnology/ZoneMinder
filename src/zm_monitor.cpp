@@ -55,6 +55,7 @@ extern "C" {
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -110,7 +111,7 @@ std::string load_monitor_sql =
   "`ImageBufferCount`, `MaxImageBufferCount`, `WarmupCount`, `PreEventCount`, "
   "`PostEventCount`, `StreamReplayBuffer`, `AlarmFrameCount`, "
   "`SectionLength`, `SectionLengthWarn`, `MinSectionLength`, `EventCloseMode`+0, "
-  "`MotionFrameSkip`, "
+  "`MotionFrameSkip`, `MotionFrameWidth`, "
   "`FPSReportInterval`, `RefBlendPerc`, `AlarmRefBlendPerc`, `TrackMotion`, `Exif`, "
   "`Latitude`, `Longitude`, "
   "`RTSPServer`, `RTSPStreamName`, `SOAP_wsa_compl`, `ONVIF_Alarm_Text`,"
@@ -242,6 +243,8 @@ Monitor::Monitor() :
   startstop_on_section_length(false),
   adaptive_skip(false),
   motion_frame_skip(0),
+  motion_frame_width(0),
+  motion_full_res(false),
   analysis_fps_limit(0),
   analysis_update_delay(0),
   capture_delay(0),
@@ -683,6 +686,8 @@ void Monitor::Load(MYSQL_ROW dbrow, bool load_zones = true, Purpose p = QUERY) {
   }
 
   motion_frame_skip = atoi(dbrow[col]);
+  col++;
+  motion_frame_width = dbrow[col] ? atoi(dbrow[col]) : 0;
   col++;
 
   /* "FPSReportInterval, RefBlendPerc, AlarmRefBlendPerc, TrackMotion, Exif," */
@@ -2484,13 +2489,17 @@ int Monitor::Analyse() {
           if (shared_data->analysing != ANALYSING_NONE) {
             if  (analysis_image == ANALYSISIMAGE_YCHANNEL) {
               Image *y_image = packet->get_y_image();
-              if (y_image) {
+              const Image *motion = y_image ? MotionImage(*y_image) : nullptr;
+              if (motion) {
                 Debug(1, "assigning refimage from y-channel");
-                ref_image.Assign(*y_image);
+                ref_image.Assign(*motion);
               }
             } else if (packet->image) {
-              Debug(1, "assigning refimage from packet->image");
-              ref_image.Assign(*(packet->image));
+              const Image *motion = MotionImage(*(packet->image));
+              if (motion) {
+                Debug(1, "assigning refimage from packet->image");
+                ref_image.Assign(*motion);
+              }
             }  // end if y-image or full image
           }  // end if doing analysing
         }
@@ -3610,6 +3619,15 @@ bool Monitor::Analyse_MotionDetection_Cuda(const std::shared_ptr<ZMPacket> &pack
     }
     cuda_zones_uploaded = false;
     Info("Motion detection for %s runs on the CUDA device", name.c_str());
+    // The kernels read the full frame on the card, so the zones have to be
+    // built for it rather than for a scaled down motion frame.
+    if (MotionWidth() != width or MotionHeight() != height) {
+      Info("Motion detection for %s runs at the capture size %ux%u on the CUDA device, "
+           "not the %ux%u motion frame size", name.c_str(), width, height,
+           MotionWidth(), MotionHeight());
+      motion_full_res = true;
+      ReloadZones();
+    }
   }
 
   if (!cuda_zones_uploaded) {
@@ -3720,25 +3738,30 @@ std::pair<int, std::string> Monitor::Analyse_MotionDetection(std::shared_ptr<ZMP
     }
   } // end if need y_image
      
-  // decoder may not have been able to provide an image
+  // The reference, the blend and the delta all work on the motion frame: the
+  // y-channel or the colour image, scaled down when the monitor asks for a
+  // smaller one. The decoder may not have been able to provide an image.
+  const Image *source = (analysis_image == ANALYSISIMAGE_YCHANNEL) ? packet->y_image : packet->image;
+  const Image *motion = source ? MotionImage(*source) : nullptr;
+
+  // A reload, or the CUDA path taking over, can change the motion size under a
+  // reference built at the old one.
+  if (motion and ref_image.Buffer()
+      and (ref_image.Width() != motion->Width() or ref_image.Height() != motion->Height())) {
+    Debug(1, "Motion frame is now %ux%u, dropping the %ux%u reference",
+          motion->Width(), motion->Height(), ref_image.Width(), ref_image.Height());
+    ref_image.DumpImgBuffer();
+  }
+
   if (!ref_image.Buffer()) {
     Debug(1, "Assigning instead of Detecting");
-    if (analysis_image == ANALYSISIMAGE_YCHANNEL) {
-      if (packet->y_image) ref_image.Assign(*(packet->y_image));
-    } else if (packet->image) {
-      // image should always be scaled
-      ref_image.Assign(*(packet->image));
-    }
+    if (motion) ref_image.Assign(*motion);
   } else {
     // didn't assign, do motion detection maybe and blending definitely
-    if (!(shared_data->analysis_image_count % (motion_frame_skip+1))) {
-      Debug(1, "Detecting motion on image %d, image %p", packet->image_index, packet->image);
+    if (motion and !(shared_data->analysis_image_count % (motion_frame_skip+1))) {
+      Debug(1, "Detecting motion on image %d at %ux%u", packet->image_index, motion->Width(), motion->Height());
       // Get new score.
-      if ((analysis_image == ANALYSISIMAGE_YCHANNEL) && packet->y_image) {
-        motion_score += DetectMotion(*(packet->y_image), zoneSet);
-      } else {
-        motion_score += DetectMotion(*(packet->image), zoneSet);
-      }
+      motion_score += DetectMotion(*motion, zoneSet);
       if (!packet->analysis_image) {
         packet->analysis_image = new Image(packet->in_frame.get(), Width(), Height()); // TODO SHOULD COPY
         Debug(1, "Populate analysis_image %s", packet->analysis_image->toString().c_str());
@@ -3788,18 +3811,11 @@ std::pair<int, std::string> Monitor::Analyse_MotionDetection(std::shared_ptr<ZMP
     // suspect for this thread falling behind and turned out to use 23% of the
     // frame interval, so this gets the same treatment before anything changes.
     SystemTimePoint blend_start = std::chrono::system_clock::now();
-    if (analysis_image == ANALYSISIMAGE_YCHANNEL) {
-      Debug(1, "Blending from y-channel");
-      if (packet->y_image)
-        ref_image.Blend(*(packet->y_image), ( state==ALARM ? alarm_ref_blend_perc : ref_blend_perc ));
-    } else if (packet->image) {
-      Debug(1, "Blending full colour image because analysis_image = %d, in_frame=%p and format %d != %d, %d",
-          analysis_image, packet->in_frame.get(),
-          (packet->in_frame ? packet->in_frame->format : -1),
-          AV_PIX_FMT_YUV420P,
-          AV_PIX_FMT_YUVJ420P
-          );
-      ref_image.Blend(*(packet->image), ( state==ALARM ? alarm_ref_blend_perc : ref_blend_perc ));
+    if (motion) {
+      Debug(1, "Blending %s at %ux%u",
+            analysis_image == ANALYSISIMAGE_YCHANNEL ? "y-channel" : "full colour image",
+            motion->Width(), motion->Height());
+      ref_image.Blend(*motion, ( state==ALARM ? alarm_ref_blend_perc : ref_blend_perc ));
     } else {
       Debug(1, "Not able to blend");
     }
@@ -3965,6 +3981,35 @@ std::string Monitor::RtspUrlFromRemote(
     url += path;
   }
   return url;
+}
+
+std::pair<unsigned int, unsigned int> Monitor::MotionFrameSize(
+    unsigned int motion_frame_width, unsigned int width, unsigned int height) {
+  if (!motion_frame_width or motion_frame_width >= width or !width)
+    return {width, height};
+  // Even sizes, so a scaled YUV420P frame keeps whole chroma samples.
+  const unsigned int motion_width = std::max(2u, motion_frame_width & ~1u);
+  const unsigned int motion_height = std::max(2u, static_cast<unsigned int>(
+      std::lround(static_cast<double>(height) * motion_width / width)) & ~1u);
+  return {motion_width, motion_height};
+}
+
+unsigned int Monitor::MotionWidth() const {
+  if (motion_full_res) return width;
+  return MotionFrameSize(motion_frame_width, width, height).first;
+}
+
+unsigned int Monitor::MotionHeight() const {
+  if (motion_full_res) return height;
+  return MotionFrameSize(motion_frame_width, width, height).second;
+}
+
+const Image *Monitor::MotionImage(const Image &image) {
+  const unsigned int motion_width = MotionWidth();
+  const unsigned int motion_height = MotionHeight();
+  if (image.Width() == motion_width and image.Height() == motion_height) return &image;
+  if (!motion_image.AssignScaled(image, motion_width, motion_height)) return nullptr;
+  return &motion_image;
 }
 
 bool Monitor::CanReleaseFramesAfterAnalysis(VideoWriter writer, RecordingOption recording) {

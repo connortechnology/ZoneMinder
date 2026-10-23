@@ -760,6 +760,10 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   bool adaptive_skip;  // Whether to use the newer adaptive algorithm for this
                        // monitor
   int motion_frame_skip;      // How many frames to skip in motion detection
+  unsigned int motion_frame_width;  // Width of the frame motion detection runs
+                                    // on, 0 for the capture's own size
+  bool motion_full_res;  // The CUDA path checks the full frame on the card, so
+                         // zones are built at the capture size while it runs
   double analysis_fps_limit;  // Target framerate for video analysis
   Microseconds analysis_update_delay;  //  How long we wait before updating
                                        //  analysis parameters
@@ -959,6 +963,7 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   // it lasts, which can be shorter than reopening the camera takes, so the wake
   // has to be remembered until the first packet acts on it.
   std::atomic<int64_t> linked_wake_until_{0};
+  Image        motion_image;   // The frame scaled to the motion size, reused
   Image        write_image;    // Used when creating snapshot images
   std::string diag_path_ref;
   std::string diag_path_delta;
@@ -1212,6 +1217,9 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
 
   unsigned int Width() const { return width; }
   unsigned int Height() const { return height; }
+  // The size of the frame motion detection and its zones work on.
+  unsigned int MotionWidth() const;
+  unsigned int MotionHeight() const;
   unsigned int Colours() const;
   unsigned int SubpixelOrder() const;
 
@@ -1353,6 +1361,9 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   void CheckAction();
 
   unsigned int DetectMotion( const Image &comp_image, Event::StringSet &zoneSet );
+  // The image motion detection reads: image itself when it is already the
+  // motion size, otherwise a scaled copy held in motion_image.
+  const Image *MotionImage(const Image &image);
   // Zone ordering and score combination, shared by the CPU and CUDA paths.
   unsigned int EvaluateZones(Event::StringSet &zoneSet,
                              const std::function<bool(Zone &, size_t)> &check);
@@ -1469,6 +1480,12 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   // Whether Analyse() can drop a packet's decoded frames once it is done with
   // them. VideoStore encodes from hw_frame or in_frame, never the Image.
   static bool CanReleaseFramesAfterAnalysis(VideoWriter writer, RecordingOption recording);
+  // The motion frame size for a MotionFrameWidth setting on a width x height
+  // capture: the setting's width, rounded down to even, with the height that
+  // keeps the capture's aspect ratio. 0, or a width not smaller than the
+  // capture, gives the capture size.
+  static std::pair<unsigned int, unsigned int> MotionFrameSize(
+      unsigned int motion_frame_width, unsigned int width, unsigned int height);
   static const char *ActionCommandName(const std::string &action_type);
   static std::string ActionMessage(const EventAction &action);
   static const char *ActionTriggerName(EventAction::TriggerOn trigger);

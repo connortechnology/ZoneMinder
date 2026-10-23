@@ -71,6 +71,10 @@ class Zone {
   std::string label;
   ZoneType    type;
   Polygon     polygon;
+  // The frame the polygon, mask and thresholds are in: the monitor's motion
+  // frame, or the capture for a privacy zone, which masks the capture itself.
+  unsigned int frame_width;
+  unsigned int frame_height;
   Rgb         alarm_rgb;
   CheckMethod    check_method;
 
@@ -138,6 +142,11 @@ class Zone {
   bool ScoreFilteredPixels();
   bool ScoreBlobs();
   void AdjustScoreForType();
+
+  // CheckAlarms on a delta at this zone's frame size; CheckAlarms then brings
+  // what it reports back to the capture size.
+  bool CheckAlarmsInFrame(const Image *delta_image);
+  void ScaleStatsToCapture();
 
  public:
   Zone(
@@ -243,6 +252,13 @@ class Zone {
   static bool ClampPolygon(Polygon &polygon, unsigned int width, unsigned int height);
   static bool ParseZoneString( const char *zone_string, unsigned int &zone_id, int &colour, Polygon &polygon );
   static std::vector<Zone> Load(const std::shared_ptr<Monitor> &monitor);
+  // Moving a zone stored in capture pixels onto a smaller motion frame.
+  // Corners keep their place in the frame; pixel counts scale by area and
+  // lengths by width, and neither drops to 0 unless it was 0.
+  static Polygon ScalePolygon(const Polygon &polygon, unsigned int from_width, unsigned int from_height,
+                              unsigned int to_width, unsigned int to_height);
+  static int ScalePixelCount(int count, double area_ratio);
+  static int ScaleLength(int length, double ratio);
   //=================================================
   bool CheckOverloadCount();
   int GetOverloadCount();

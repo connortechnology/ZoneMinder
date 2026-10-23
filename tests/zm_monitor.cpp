@@ -39,3 +39,35 @@ TEST_CASE("Analysis keeps decoded frames an encoder will read", "[Monitor]") {
     REQUIRE(Monitor::CanReleaseFramesAfterAnalysis(Monitor::DISABLED, Monitor::RECORDING_ALWAYS));
   }
 }
+
+// Motion detection runs on a frame MotionFrameWidth wide, with the height
+// following the capture's aspect ratio. 0, or a width that is not smaller than
+// the capture, means the capture's own size.
+TEST_CASE("Motion frame size follows the capture aspect ratio", "[Monitor]") {
+  using Size = std::pair<unsigned int, unsigned int>;
+
+  SECTION("0 means the capture size") {
+    REQUIRE(Monitor::MotionFrameSize(0, 3840, 2160) == Size(3840, 2160));
+  }
+
+  SECTION("never larger than the capture") {
+    REQUIRE(Monitor::MotionFrameSize(3840, 3840, 2160) == Size(3840, 2160));
+    REQUIRE(Monitor::MotionFrameSize(5000, 3840, 2160) == Size(3840, 2160));
+  }
+
+  SECTION("scaled down") {
+    REQUIRE(Monitor::MotionFrameSize(1280, 3840, 2160) == Size(1280, 720));
+    REQUIRE(Monitor::MotionFrameSize(640, 1920, 1080) == Size(640, 360));
+    REQUIRE(Monitor::MotionFrameSize(540, 1080, 1920) == Size(540, 960));
+  }
+
+  SECTION("rounded down to even") {
+    // 1278 * 2160 / 3840 = 718.9, so 719 before rounding to even.
+    REQUIRE(Monitor::MotionFrameSize(1279, 3840, 2160) == Size(1278, 718));
+    REQUIRE(Monitor::MotionFrameSize(641, 1920, 1080) == Size(640, 360));
+  }
+
+  SECTION("never smaller than 2x2") {
+    REQUIRE(Monitor::MotionFrameSize(1, 3840, 2160) == Size(2, 2));
+  }
+}

@@ -23,6 +23,8 @@
 #include "zm_fifo_debug.h"
 #include "zm_monitor.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>
 
 void Zone::Setup(
@@ -73,9 +75,13 @@ void Zone::Setup(
   overload_count = 0;
   extend_alarm_count = 0;
 
+  // A privacy zone masks the capture itself. Everything else is checked on
+  // the motion frame, which is the capture unless the monitor scales it down.
+  frame_width = IsPrivacy() ? monitor->Width() : monitor->MotionWidth();
+  frame_height = IsPrivacy() ? monitor->Height() : monitor->MotionHeight();
   // Doing this to reduce shared_ptr accesses which apparently Setup does 16million times because we were using it in forloop
-  unsigned int width = monitor->Width();
-  unsigned int height = monitor->Height();
+  unsigned int width = frame_width;
+  unsigned int height = frame_height;
 
   pg_image = new Image(width, height, ZM_COLOUR_GRAY8, ZM_SUBPIX_ORDER_NONE);
   pg_image->Clear();
@@ -310,6 +316,49 @@ void Zone::AdjustScoreForType() {
 }
 
 bool Zone::CheckAlarms(const Image *delta_image) {
+  const bool in_alarm = CheckAlarmsInFrame(delta_image);
+  ScaleStatsToCapture();
+  return in_alarm;
+}
+
+// What a zone reports is read in capture coordinates: Stats rows, the alarm
+// centre PTZ tracking follows, and the highlight laid over the analysis image.
+void Zone::ScaleStatsToCapture() {
+  const unsigned int capture_width = monitor->Width();
+  const unsigned int capture_height = monitor->Height();
+  if (frame_width == capture_width and frame_height == capture_height) return;
+
+  const double sx = static_cast<double>(capture_width) / frame_width;
+  const double sy = static_cast<double>(capture_height) / frame_height;
+  const double area = sx * sy;
+  auto count = [area](unsigned int n) { return static_cast<unsigned int>(std::lround(n * area)); };
+  stats.alarm_pixels_ = count(stats.alarm_pixels_);
+  stats.alarm_filter_pixels_ = count(stats.alarm_filter_pixels_);
+  stats.alarm_blob_pixels_ = count(stats.alarm_blob_pixels_);
+  stats.min_blob_size_ = count(stats.min_blob_size_);
+  stats.max_blob_size_ = count(stats.max_blob_size_);
+
+  if (stats.score_) {
+    // A frame pixel covers sx by sy capture pixels, so a box takes in all of
+    // the ones its corner pixels cover, and the centre sits mid pixel.
+    const Vector2 lo = stats.alarm_box_.Lo();
+    const Vector2 hi = stats.alarm_box_.Hi();
+    stats.alarm_box_ = Box(
+        Vector2(static_cast<int>(lo.x_ * sx), static_cast<int>(lo.y_ * sy)),
+        Vector2(static_cast<int>((hi.x_ + 1) * sx) - 1, static_cast<int>((hi.y_ + 1) * sy) - 1));
+    stats.alarm_centre_ = Vector2(static_cast<int>((stats.alarm_centre_.x_ + 0.5) * sx),
+                                  static_cast<int>((stats.alarm_centre_.y_ + 0.5) * sy));
+  }
+
+  // The highlight is only built for an alarmed zone; otherwise image is the
+  // GRAY8 working mask, which stays at the frame size for the next check.
+  if (stats.score_ and image and image->Width() == frame_width and image->Height() == frame_height
+      and monitor->GetOptSaveJPEGs() > 1 and type < PRECLUSIVE) {
+    image->Scale(capture_width, capture_height);
+  }
+}
+
+bool Zone::CheckAlarmsInFrame(const Image *delta_image) {
   ResetStats();
 
   if (overload_count) {
@@ -1081,13 +1130,23 @@ std::vector<Zone> Zone::Load(const std::shared_ptr<Monitor> &monitor) {
     /* HTML colour code is actually BGR in memory, we want RGB */
     AlarmRGB = rgb_convert(AlarmRGB, ZM_SUBPIX_ORDER_BGR);
 
+    // Zones are stored against the capture. A privacy zone masks the capture
+    // itself; every other zone is checked on the motion frame, which is
+    // smaller when the monitor asks for it, so its geometry moves there.
+    const unsigned int capture_width = monitor->Width();
+    const unsigned int capture_height = monitor->Height();
+    const bool privacy = (Type == Zone::PRIVACY);
+    const unsigned int frame_width = privacy ? capture_width : monitor->MotionWidth();
+    const unsigned int frame_height = privacy ? capture_height : monitor->MotionHeight();
+    const bool scaled = (frame_width != capture_width) or (frame_height != capture_height);
+
     // Auto-detect coordinate format: decimal points mean percentages,
     // integer-only means legacy pixel values. Units field is not trusted.
     Debug(5, "Parsing polygon %s (Units=%s)", Coords, Units);
     Polygon polygon;
     if (strchr(Coords, '.')) {
       // Decimal values present — treat as percentages regardless of Units field
-      if (!ParsePercentagePolygon(Coords, monitor->Width(), monitor->Height(), polygon)) {
+      if (!ParsePercentagePolygon(Coords, frame_width, frame_height, polygon)) {
         Error("Unable to parse polygon string '%s' for zone %d/%s for monitor %s, ignoring",
               Coords, Id, Name, monitor->Name());
         continue;
@@ -1106,6 +1165,8 @@ std::vector<Zone> Zone::Load(const std::shared_ptr<Monitor> &monitor) {
         Warning("Zone %d/%s for monitor %s has coordinates '%s' outside %ux%u, clamping",
                 Id, Name, monitor->Name(), Coords, monitor->Width(), monitor->Height());
       }
+      if (scaled)
+        polygon = ScalePolygon(polygon, capture_width, capture_height, frame_width, frame_height);
     }
 
     // Convert threshold values from DB format to pixel counts for runtime use.
@@ -1121,12 +1182,20 @@ std::vector<Zone> Zone::Load(const std::shared_ptr<Monitor> &monitor) {
       MinBlobPixels = MinBlobPixels_pct > 0 ? static_cast<int>(MinBlobPixels_pct * zpa / 100.0 + 0.5) : 0;
       MaxBlobPixels = MaxBlobPixels_pct > 0 ? static_cast<int>(MaxBlobPixels_pct * zpa / 100.0 + 0.5) : 0;
     } else {
-      MinAlarmPixels = static_cast<int>(MinAlarmPixels_pct);
-      MaxAlarmPixels = static_cast<int>(MaxAlarmPixels_pct);
-      MinFilterPixels = static_cast<int>(MinFilterPixels_pct);
-      MaxFilterPixels = static_cast<int>(MaxFilterPixels_pct);
-      MinBlobPixels = static_cast<int>(MinBlobPixels_pct);
-      MaxBlobPixels = static_cast<int>(MaxBlobPixels_pct);
+      // Counted in capture pixels, so they shrink with the frame.
+      const double area_ratio = static_cast<double>(frame_width) * frame_height
+                                / (static_cast<double>(capture_width) * capture_height);
+      MinAlarmPixels = ScalePixelCount(static_cast<int>(MinAlarmPixels_pct), area_ratio);
+      MaxAlarmPixels = ScalePixelCount(static_cast<int>(MaxAlarmPixels_pct), area_ratio);
+      MinFilterPixels = ScalePixelCount(static_cast<int>(MinFilterPixels_pct), area_ratio);
+      MaxFilterPixels = ScalePixelCount(static_cast<int>(MaxFilterPixels_pct), area_ratio);
+      MinBlobPixels = ScalePixelCount(static_cast<int>(MinBlobPixels_pct), area_ratio);
+      MaxBlobPixels = ScalePixelCount(static_cast<int>(MaxBlobPixels_pct), area_ratio);
+    }
+    // The filter box is in capture pixels however the zone is stored.
+    if (scaled) {
+      FilterX = ScaleLength(FilterX, static_cast<double>(frame_width) / capture_width);
+      FilterY = ScaleLength(FilterY, static_cast<double>(frame_height) / capture_height);
     }
 
     if (atoi(dbrow[2]) == Zone::INACTIVE) {
@@ -1146,6 +1215,31 @@ std::vector<Zone> Zone::Load(const std::shared_ptr<Monitor> &monitor) {
   mysql_free_result(result);
   return zones;
 } // end std::vector<Zone> Zone::Load(Monitor *monitor)
+
+Polygon Zone::ScalePolygon(const Polygon &polygon, unsigned int from_width, unsigned int from_height,
+                           unsigned int to_width, unsigned int to_height) {
+  // Pixel centres map to pixel centres, so the last column lands on the last
+  // column and the middle stays in the middle.
+  auto scale = [](int v, unsigned int from, unsigned int to) {
+    const long scaled = std::lround((v + 0.5) * to / from - 0.5);
+    return static_cast<int>(std::clamp(scaled, 0L, static_cast<long>(to) - 1));
+  };
+  std::vector<Vector2> vertices;
+  vertices.reserve(polygon.GetVertices().size());
+  for (const Vector2 &v : polygon.GetVertices())
+    vertices.emplace_back(scale(v.x_, from_width, to_width), scale(v.y_, from_height, to_height));
+  return Polygon(vertices);
+}
+
+int Zone::ScalePixelCount(int count, double area_ratio) {
+  if (count <= 0) return count;
+  return std::max(1, static_cast<int>(std::lround(count * area_ratio)));
+}
+
+int Zone::ScaleLength(int length, double ratio) {
+  if (length <= 0) return length;
+  return std::max(1, static_cast<int>(std::lround(length * ratio)));
+}
 
 std::string Zone::DumpSettings(bool /*verbose*/) const {
   std::string result;
@@ -1266,6 +1360,8 @@ Zone::Zone(const Zone &z) :
   label(z.label),
   type(z.type),
   polygon(z.polygon),
+  frame_width(z.frame_width),
+  frame_height(z.frame_height),
   alarm_rgb(z.alarm_rgb),
   check_method(z.check_method),
   min_pixel_threshold(z.min_pixel_threshold),
@@ -1289,8 +1385,8 @@ Zone::Zone(const Zone &z) :
   diag_path(z.diag_path) {
   std::copy(z.blob_stats, z.blob_stats+256, blob_stats);
   pg_image = z.pg_image ? new Image(*z.pg_image) : nullptr;
-  ranges = new Range[monitor->Height()];
-  std::copy(z.ranges, z.ranges+monitor->Height(), ranges);
+  ranges = new Range[frame_height];
+  std::copy(z.ranges, z.ranges+frame_height, ranges);
   image = z.image ? new Image(*z.image) : nullptr;
   //z.stats.debug("Copy Source");
   stats.DumpToLog("Copy dest");
@@ -1298,7 +1394,7 @@ Zone::Zone(const Zone &z) :
 
 #if HAVE_CUDA
 zm::cuda::ZoneSpec Zone::CudaSpec() {
-  const int height = static_cast<int>(monitor->Height());
+  const int height = static_cast<int>(frame_height);
 
   // ranges[] is an array of structs; the kernels want two flat arrays, so keep
   // a copy in that shape. Rebuilt here rather than cached against a dirty flag
@@ -1450,8 +1546,8 @@ bool Zone::CheckAlarmsCuda(const zm::cuda::ZoneResult &result,
       // The one frame in the run where the mask has to come back: something is
       // being saved that shows the alarmed pixels. The kernels already zero
       // everything outside the polygon, so there is nothing to mask out here.
-      const int width = static_cast<int>(monitor->Width());
-      const int height = static_cast<int>(monitor->Height());
+      const int width = static_cast<int>(frame_width);
+      const int height = static_cast<int>(frame_height);
       if (!image || image->Colours() != 1 || (int)image->Width() != width || (int)image->Height() != height) {
         delete image;
         image = new Image(width, width, height, 1, ZM_SUBPIX_ORDER_NONE);
