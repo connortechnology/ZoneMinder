@@ -1486,6 +1486,12 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   // capture, gives the capture size.
   static std::pair<unsigned int, unsigned int> MotionFrameSize(
       unsigned int motion_frame_width, unsigned int width, unsigned int height);
+  // Whether Analyse() can drop a packet's hardware frame as soon as object
+  // detection is done with it, rather than after motion detection. Only for
+  // a Quadra frame: its decoder has few spare buffers, and CUDA motion
+  // detection reads a CUDA frame later on.
+  static bool CanReleaseDeviceFrameAfterAI(const AVFrame *hw_frame, VideoWriter writer,
+                                           RecordingOption recording);
   static const char *ActionCommandName(const std::string &action_type);
   static std::string ActionMessage(const EventAction &action);
   static const char *ActionTriggerName(EventAction::TriggerOn trigger);
