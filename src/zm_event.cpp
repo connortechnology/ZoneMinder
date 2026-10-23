@@ -485,16 +485,16 @@ Event::~Event() {
   }
 
   // endtime is set in AddFrame, so SHOULD be set to the value of the last frame timestamp.
-  if (end_time.time_since_epoch() == Seconds(0)) {
+  if (end_time.load().time_since_epoch() == Seconds(0)) {
     Warning("Empty endtime for event. Should not happen. Setting to now.");
     end_time = std::chrono::system_clock::now();
   }
 
-  FPSeconds delta_time = end_time - start_time;
+  FPSeconds delta_time = end_time.load() - start_time;
   Debug(2, "start_time: %.2f end_time: %.2f, duration: %.2f",
         std::chrono::duration_cast<FPSeconds>(start_time.time_since_epoch()).count(),
-        std::chrono::duration_cast<FPSeconds>(end_time.time_since_epoch()).count(),
-        std::chrono::duration_cast<FPSeconds>(end_time.time_since_epoch() - start_time.time_since_epoch()).count()
+        std::chrono::duration_cast<FPSeconds>(end_time.load().time_since_epoch()).count(),
+        std::chrono::duration_cast<FPSeconds>(end_time.load().time_since_epoch() - start_time.time_since_epoch()).count()
         );
 
   if (frame_data.size()) WriteDbFrames();
@@ -534,13 +534,11 @@ Event::~Event() {
       " WHERE Id = %" PRIu64,
       zmDbEscapeString(notes).c_str(),
       monitor->Substitute(monitor->EventPrefix(), start_time).c_str(), id,
-      static_cast<intmax_t>(std::chrono::system_clock::to_time_t(end_time)),
+      static_cast<intmax_t>(std::chrono::system_clock::to_time_t(end_time.load())),
       delta_time.count(),
-      frames, alarm_frames,
+      frames.load(), alarm_frames.load(),
       tot_score, static_cast<uint32>(alarm_frames ? (tot_score / alarm_frames) : 0),
-      // max_score is initialised to -1 as an "uninitialised" sentinel; the
-      // DB column is smallint unsigned and rejects negatives, so clamp here.
-      max_score < 0 ? 0 : max_score, max_score_frame_id,
+      EventMaxScoreForDb(max_score), max_score_frame_id,
       video_file.c_str(), // defaults to ""
       video_size,
       id);
@@ -869,7 +867,7 @@ void Event::AddPacket_(const std::shared_ptr<ZMPacket>packet) {
   packet->hw_frame = nullptr;
 #if ZM_HAS_NLOHMANN_JSON
   if (packet->detections.size()) {
-    std::string sql = stringtf("INSERT INTO Event_Data (EventId,MonitorId,FrameId,Timestamp,Data) VALUES (%" PRId64 ", %d, %d, NOW(), '%s')", id, monitor->Id(), frames, zmDbEscapeString(packet->detections.dump()).c_str());
+    std::string sql = stringtf("INSERT INTO Event_Data (EventId,MonitorId,FrameId,Timestamp,Data) VALUES (%" PRId64 ", %d, %d, NOW(), '%s')", id, monitor->Id(), frames.load(), zmDbEscapeString(packet->detections.dump()).c_str());
     dbQueue.push(std::move(sql));
 
     for (auto it = packet->detections.begin(); it != packet->detections.end(); ++it) {
@@ -983,14 +981,14 @@ void Event::AddFrame(const std::shared_ptr<ZMPacket>&packet) {
   if (frame_type == ALARM) alarm_frames++;
 
   Debug(1, "Have frame type %s from score(%d) state %d frames %d bulk frame interval %d and mod%d",
-        frame_type_names[frame_type], score, monitor_state, frames, config.bulk_frame_interval, (frames % config.bulk_frame_interval));
+        frame_type_names[frame_type], score, monitor_state, frames.load(), config.bulk_frame_interval, (frames.load() % config.bulk_frame_interval));
 
   if (score < 0) score = 0;
   tot_score += score;
 
   if (save_jpegs & 1) {
-    std::string event_file = stringtf(staticConfig.capture_file_format.c_str(), path.c_str(), frames);
-    Debug(1, "Writing capture frame %d to %s", frames, event_file.c_str());
+    std::string event_file = stringtf(staticConfig.capture_file_format.c_str(), path.c_str(), frames.load());
+    Debug(1, "Writing capture frame %d to %s", frames.load(), event_file.c_str());
     if (
         (packet->ai_frame and WriteJpeg(packet->ai_frame.get(), event_file.c_str()))
         or
@@ -1002,14 +1000,14 @@ void Event::AddFrame(const std::shared_ptr<ZMPacket>&packet) {
         or
         (packet->image and WriteFrameImage(packet->image, packet->timestamp, event_file.c_str()))
        ) {
-      Debug(1, "Wrote capture frame %d to %s", frames, event_file.c_str());
+      Debug(1, "Wrote capture frame %d to %s", frames.load(), event_file.c_str());
       // Success
     } else {
       Error("Failed to write frame image");
     }
   }  // end if save_jpegs
 
-  Debug(1, "frames %d, score %d max_score %d", frames, score, max_score);
+  Debug(1, "frames %d, score %d max_score %d", frames.load(), score, max_score);
   // If this is the first frame, we should add a thumbnail to the event directory
   if ((frames == 1) || (score > max_score) || (!snapshot_file_written)) {
     write_to_db = true; // web ui might show this as thumbnail, so db needs to know about it.
@@ -1028,7 +1026,7 @@ void Event::AddFrame(const std::shared_ptr<ZMPacket>&packet) {
       Warning("Fail to write snapshot");
     }
   } else {
-    Debug(1, "Not Writing snapshot because frames %d score %d > max %d", frames, score, max_score);
+    Debug(1, "Not Writing snapshot because frames %d score %d > max %d", frames.load(), score, max_score);
   }
 
   // We are writing an Alarm frame
@@ -1060,8 +1058,8 @@ void Event::AddFrame(const std::shared_ptr<ZMPacket>&packet) {
 
   if (save_jpegs & 2) {
     if (packet->analysis_image) {
-      std::string event_file = stringtf(staticConfig.analyse_file_format.c_str(), path.c_str(), frames);
-      Debug(1, "Writing analysis frame %d to %s", frames, event_file.c_str());
+      std::string event_file = stringtf(staticConfig.analyse_file_format.c_str(), path.c_str(), frames.load());
+      Debug(1, "Writing analysis frame %d to %s", frames.load(), event_file.c_str());
       if (!WriteFrameImage(packet->analysis_image, packet->timestamp, event_file.c_str(), true)) {
         Error("Failed to write analysis frame image to %s", event_file.c_str());
       }
@@ -1098,7 +1096,7 @@ void Event::AddFrame(const std::shared_ptr<ZMPacket>&packet) {
     const int audio_level = monitor->TakeAudioPeak();
 
     // The idea is to write out 1/sec
-    frame_data.push(new Frame(id, frames, frame_type, packet->timestamp, delta_time, score, audio_level, packet->zone_stats));
+    frame_data.push(new Frame(id, frames.load(), frame_type, packet->timestamp, delta_time, score, audio_level, packet->zone_stats));
     double fps = monitor->get_capture_fps();
     if (write_to_db
         or
@@ -1118,8 +1116,8 @@ void Event::AddFrame(const std::shared_ptr<ZMPacket>&packet) {
                           "UPDATE Events SET Notes='%s', Length = %.2f, Frames = %d, AlarmFrames = %d, TotScore = %d, AvgScore = %d, MaxScore = %d, MaxScoreFrameId=%d WHERE Id = %" PRIu64,
                           zmDbEscapeString(notes).c_str(),
                           FPSeconds(delta_time).count(),
-                          frames,
-                          alarm_frames,
+                          frames.load(),
+                          alarm_frames.load(),
                           tot_score,
                           static_cast<uint32>(alarm_frames ? (tot_score / alarm_frames) : 0),
                           max_score < 0 ? 0 : max_score,

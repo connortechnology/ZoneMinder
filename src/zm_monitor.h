@@ -25,6 +25,7 @@
 #include <atomic>
 #include <list>
 #include <functional>
+#include <map>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -409,7 +410,6 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
     volatile int *zone_scores;
 
     int last_state;
-    uint64_t last_event_id;
     std::vector<Zone> zones;
 
    public:
@@ -821,12 +821,17 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   // figure that moves with session opens, not with frames.
   static constexpr Seconds kCardUsageSampleInterval{30};
   SystemTimePoint last_card_usage_sample_;
-  int        motion_frame_count;      // How many frames have had motion detection performed on them.
+  // Written by the analysis thread, read by UpdateFPS on the capture thread.
+  std::atomic<int> motion_frame_count;      // How many frames have had motion detection performed on them.
   int        last_motion_frame_count; // last value of motion_frame_count when calculating fps
   int        ready_count;
   int        first_alarm_count;
   int        last_alarm_count;
   bool       last_signal;
+  // Capture assumes signal on the first packet after connect() cleared it,
+  // even when the decoder measures it, so Analyse doesn't see a signal loss
+  // before the first decoded frame. Capture thread only.
+  bool       assume_signal_on_next_packet;
   int        buffer_count;
   State      state;
   SystemTimePoint start_time;
@@ -891,6 +896,17 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
 
   VideoStore *videoStore;
   PacketQueue packetqueue;
+  // Stream timestamps kept going forward across a jump back in the camera's
+  // clock: an offset (microseconds) added to every packet's dts and pts, and
+  // each stream's last dts with the offset applied and its last step.
+  int64_t dts_offset_ = 0;
+  std::map<int, int64_t> last_dts_;
+  std::map<int, int64_t> last_dts_step_;
+  // A step back of more than this in a stream's dts is a jump in the camera's
+  // clock, not reordering jitter.
+  static constexpr int64_t kDtsStepBack = 1000000;
+  // Moves the packet onto the continuous timeline; returns the offset applied.
+  int64_t KeepDtsContinuous(AVPacket *packet, AVRational time_base);
   std::unique_ptr<PollThread> Poller;
   std::list<ZMPacketLock> decoder_queue;
   packetqueue_iterator  *analysis_it;
@@ -937,6 +953,12 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   // stale reference itself on its next pass. Prevents a use-after-free/null
   // deref race in Image::Delta (refs #4983).
   std::atomic<bool> ref_image_reset_{false};
+  // Set by CheckOndemand() when a linked monitor's alarm wakes this on-demand
+  // monitor from its pause: steady_clock nanoseconds until which Analyse()
+  // counts the link as alarmed, 0 for none. The link only reports an alarm while
+  // it lasts, which can be shorter than reopening the camera takes, so the wake
+  // has to be remembered until the first packet acts on it.
+  std::atomic<int64_t> linked_wake_until_{0};
   Image        write_image;    // Used when creating snapshot images
   std::string diag_path_ref;
   std::string diag_path_delta;
@@ -1001,6 +1023,8 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   uint8_t green_val;
   uint8_t blue_val;
   uint8_t grayscale_val; /* 8bit grayscale color */
+  uint8_t luma_val;      /* luma of the RGB colour, limited range */
+  uint8_t luma_full_val; /* luma of the RGB colour, full range */
   Rgb colour_val;        /* RGB32 color */
   int usedsubpixorder;
 
@@ -1118,6 +1142,20 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
           std::chrono::duration_cast<Seconds>(new_time.time_since_epoch())
               .count());
   }
+  // What zmc's capture loop does with an on-demand monitor on this pass.
+  enum class OndemandStep { CAPTURE, PLAY, PAUSE, SLEEP };
+  // viewed: watched in the last 10 s. has_image: an image has been written, so
+  // thumbnails have something to show. primed: the camera is open. busy:
+  // alarmed, in its post-event frames, or woken by a link that Analyse() hasn't
+  // acted on yet. link_alarmed is asked only while the camera is closed, when
+  // the analysis thread that otherwise reads the links is stopped.
+  static OndemandStep DecideOndemand(bool viewed, bool has_image, bool primed, bool busy,
+                                     const std::function<bool()> &link_alarmed);
+  OndemandStep CheckOndemand();
+  bool LinkedWakePending() const;
+  // How long a link wake waits for the camera to reopen and a packet to act on it.
+  static constexpr std::chrono::seconds kLinkedWakeTimeout{30};
+
   bool hasViewers() {
     if (shared_data && shared_data->valid) {
       SystemTimePoint now = std::chrono::system_clock::now();
@@ -1336,6 +1374,10 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   // DetectBlack seems to be unused. Check it on zm_monitor.cpp for more info.
   //unsigned int DetectBlack( const Image &comp_image, Event::StringSet &zoneSet );
   bool CheckSignal( const Image *image );
+  // True when the decoder measures shared_data->signal (SignalCheckPoints)
+  // for the packets it decodes; Capture then leaves the flag to it, so the
+  // two threads don't overwrite each other's value. Pure, for tests.
+  static bool DecoderChecksSignal(DecodingOption decoding, int signal_check_points, bool has_viewers);
   int Analyse();
   std::pair<int, std::string> Analyse_Quadra(std::shared_ptr<ZMPacket> packet);
 #if HAVE_MX_ACCL_H

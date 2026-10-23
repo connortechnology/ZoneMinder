@@ -15,7 +15,9 @@ set(TEST_SOURCES
   zm_config.cpp
   zm_db_contention.cpp
   zm_db_contention_live.cpp
+  zm_db_logging_live.cpp
   zm_db_schema.cpp
+  zm_monitor_dts.cpp
   zm_box.cpp
   zm_buffer.cpp
   zm_audio_detector.cpp
@@ -24,6 +26,7 @@ set(TEST_SOURCES
   zm_ffmpeg.cpp
   zm_ffmpeg_camera.cpp
   zm_event_hardlink.cpp
+  zm_event_score.cpp
   zm_font.cpp
   zm_hwaccel_candidates.cpp
   zm_image.cpp
@@ -31,21 +34,30 @@ set(TEST_SOURCES
   zm_image_planes.cpp
   zm_image_annotate.cpp
   zm_monitor_shm.cpp
+  zm_monitor_check_action.cpp
+  zm_monitor_ondemand.cpp
+  zm_monitorlink_expression.cpp
   zm_monitorstream.cpp
+  zm_monitorlink_token.cpp
+  zm_monitorlink_score.cpp
   zm_mp4_sidx.cpp
   zm_netint_lpr.cpp
   zm_netint_yolo.cpp
   zm_object_classes.cpp
   zm_packet.cpp
   zm_packetqueue.cpp
+  zm_packet_lock.cpp
   zm_monitor_action.cpp
   zm_monitor.cpp
+  zm_monitor_signal.cpp
+  zm_onvif_alarm_latch.cpp
   zm_onvif_alarm_termination.cpp
   zm_onvif_auth_error.cpp
   zm_onvif_poll_wait.cpp
   zm_onvif_renewal.cpp
   zm_onvif_wsse.cpp
   zm_pixformat.cpp
+  zm_rgb_luma.cpp
   zm_rtsp_deprecation.cpp
   zm_rtsp_server_session_tracker.cpp
   zm_stream.cpp
@@ -53,12 +65,14 @@ set(TEST_SOURCES
   zm_swscale_range.cpp
   zm_poly.cpp
   zm_quadra.cpp
+  zm_poll_thread.cpp
   zm_stream_socket.cpp
   zm_stream_socket_bench.cpp
   zm_stream_socket_client.cpp
   zm_stream_socket_protocol.cpp
   zm_time.cpp
   zm_device_frames.cpp
+  zm_user_default_password.cpp
   zm_utils.cpp
   zm_videostore_m3u8.cpp
   zm_vector2.cpp
@@ -68,6 +82,7 @@ set(TEST_SOURCES
   zm_zone_highlight.cpp
   zm_image_linesize.cpp
   zm_logger_rotate.cpp
+  zm_logger_reload.cpp
   zm_ffmpeg_camera.cpp
   zm_ffmpeg_fallback.cpp)
 
