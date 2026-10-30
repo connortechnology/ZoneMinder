@@ -257,26 +257,25 @@ function changeScale() {
   /*!!! Because of this, the Scale is not correct. For example, when recording in 4k, Capture Resolution = FHD, the image with a width of 600px looks terrible! */
 
   let newSize;
+  let streamOverflow = 'hidden';
   if (scaleSel == '100') {
     //Actual, 100% of original size
     newWidth = eventDataWidth;
     newHeight = eventDataHeight;
     currentScale = 100;
-    stream.style.overflow = 'auto';
+    streamOverflow = 'auto hidden';
   } else if (scaleSel == '0') {
     //Auto, Width is calculated based on the occupied height so that the image and control buttons occupy the visible part of the screen.
     newSize = scaleToFit(eventDataWidth, eventDataHeight, eventViewer, bottomEl, $j('#wrapperEventVideo'));
     newWidth = newSize.width;
     newHeight = newSize.height;
     currentScale = newSize.autoScale ? newSize.autoScale : 100;
-    stream.style.overflow = 'unset';
   } else if (scaleSel == 'fit_to_width') {
     //Fit to screen width
     newSize = scaleToFit(eventDataWidth, eventDataHeight, eventViewer, false, $j('#wrapperEventVideo'));
     newWidth = newSize.width;
     newHeight = newSize.height;
     currentScale = newSize.autoScale ? newSize.autoScale : 100;
-    stream.style.overflow = 'unset';
   } else if (scaleSel.indexOf("px") > -1) {
     newSize = scaleToFit(eventDataWidth, eventDataHeight, eventViewer, false, $j('#wrapperEventVideo')); // Only for calculating the maximum width!
     let w = 0;
@@ -291,8 +290,12 @@ function changeScale() {
     newWidth = parseInt(w);
     newHeight = parseInt(h);
     currentScale = parseInt(w / eventDataWidth * 100);
-    stream.style.overflow = 'unset';
   }
+
+  // videoFeedStream is absent when the player is sized before the page DOM is
+  // built (gapless playback sizes on DOMContentLoaded), so guard the element
+  // rather than dereferencing a null style.
+  if (stream) stream.style.overflow = streamOverflow;
 
   console.log(`Real dimensions: ${eventDataWidth} X ${eventDataHeight}, Scale: ${currentScale}, deltaScale: ${deltaScale()}, New dimensions: ${newWidth} X ${newHeight}`);
 
@@ -309,7 +312,7 @@ function changeScale() {
   }
   if (cueFrames) {
     //just re-render alarmCues.  skip ajax call
-    alarmCue.html(renderAlarmCues(videoFeed));
+    alarmCue.html(renderAlarmCues(eventViewer));
   }
 
   setButtonSizeOnStream();
@@ -1947,14 +1950,19 @@ function formatTag(tag) {
   const tagElement = $j('<div>', {class: 'tag'});
   tagElement.data('tag', tag);
   tagElement.append($j('<span>', {class: 'tag-text', text: tagName}));
-  tagElement.append($j('<span>', {class: 'tag-remove', text: '\u00D7'}));
+  // Removing a tag needs Events edit; don't offer it to users who can't.
+  if (canEdit.Events) tagElement.append($j('<span>', {class: 'tag-remove', text: '\u00D7'}));
   $j('.tag-dropdown').before(tagElement);
 }
 
 function addTag(tag, buttonPressed = null) {
-  if (tag && (tag.Name.trim() !== '') && !isDup(tag.Name)) {
+  if (canEdit.Events && tag && (tag.Name.trim() !== '') && !isDup(tag.Name)) {
     $j.getJSON(thisUrl + '?request=event&action=addtag&tid=' + tag.Id + '&id=' + eventData.Id)
         .done(function(data) {
+          if (data.result != 'Ok') {
+            console.error('addtag refused', data.message);
+            return;
+          }
           formatTag(tag);
           selectedTags.push(tag);
 
@@ -1972,8 +1980,13 @@ function addTag(tag, buttonPressed = null) {
 }
 
 function removeTag(tag) {
+  if (!canEdit.Events) return;
   $j.getJSON(thisUrl + '?request=event&action=removetag&tid=' + tag.Id + '&id=' + eventData.Id)
       .done(function(data) {
+        if (data.result != 'Ok') {
+          console.error('removetag refused', data.message);
+          return;
+        }
         $j('.tag-text').filter(function() {
           return $j(this).text() === tag.Name;
         }).parent().remove();
@@ -1985,8 +1998,13 @@ function removeTag(tag) {
 }
 
 function createTag(tagName, buttonPressed = null) {
+  if (!canEdit.Events) return;
   $j.getJSON(thisUrl + '?request=tags&action=createtag&tname=' + tagName)
       .done(function(data) {
+        if (data.result != 'Ok') {
+          console.error('createtag refused', data.message);
+          return;
+        }
         if (data.response.length > 0) {
           var tag = data.response[0];
           if (availableTags) {

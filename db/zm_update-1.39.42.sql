@@ -1,29 +1,47 @@
 --
 -- This updates a 1.39.41 database to 1.39.42
 --
--- Add MotionFrameWidth to Monitors: the width of the frame motion detection
--- runs on, with the height following the capture's aspect ratio.
+-- Let a monitor action run at a time of day as well as on an event.
 --
--- Motion detection does not need full resolution. On a 3840x2160 camera the
--- zone check took a median of 139ms a frame even with almost nothing moving,
--- because the cost is the pass over every pixel; at 1280 it checks a ninth of
--- them. Zones are stored against the capture and are moved onto the smaller
--- frame when they are loaded, so nothing already drawn needs changing.
+-- MonitorActions already says what to do (LightOn, AudioPlay, ...) and to
+-- which device; all that was missing was "at 22:30" alongside the existing
+-- EventStart/Alarm/Manual triggers. So this adds a trigger rather than a
+-- table: a scheduled action is an ordinary action whose TriggerOn is
+-- 'Schedule' and whose Schedule column holds a five field cron spec.
 --
--- 0 means the capture resolution, which is how every existing monitor
--- carries on.
+-- The spec is written into the web user's own crontab, which runs
+-- zmcontrol.pl exactly as the web ui does for a manual action. Nothing
+-- validates it on the way in from the database, so whatever writes here must
+-- have passed it through cronScheduleIsValid() first -- see
+-- web/includes/CronTab.php.
 --
 
-SELECT 'Checking for MotionFrameWidth in Monitors';
+SELECT 'Checking for Schedule in MonitorActions';
 SET @s = (SELECT IF(
   (SELECT COUNT(*)
   FROM INFORMATION_SCHEMA.COLUMNS
-  WHERE table_name = 'Monitors'
+  WHERE table_name = 'MonitorActions'
   AND table_schema = DATABASE()
-  AND column_name = 'MotionFrameWidth'
+  AND column_name = 'Schedule'
   ) > 0,
-"SELECT 'Column MotionFrameWidth already exists in Monitors'",
-"ALTER TABLE `Monitors` ADD COLUMN `MotionFrameWidth` smallint(5) unsigned NOT NULL default '0' AFTER `MotionFrameSkip`"
+"SELECT 'Column Schedule already exists in MonitorActions'",
+"ALTER TABLE `MonitorActions` ADD COLUMN `Schedule` varchar(64) NOT NULL default '' AFTER `TriggerOn`"
+));
+
+PREPARE stmt FROM @s;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SELECT 'Checking for Schedule in the MonitorActions.TriggerOn enum';
+SET @s = (SELECT IF(
+  (SELECT LOCATE('Schedule', COLUMN_TYPE)
+  FROM INFORMATION_SCHEMA.COLUMNS
+  WHERE table_name = 'MonitorActions'
+  AND table_schema = DATABASE()
+  AND column_name = 'TriggerOn'
+  ) > 0,
+"SELECT 'TriggerOn already offers Schedule'",
+"ALTER TABLE `MonitorActions` MODIFY `TriggerOn` enum('EventStart','EventEnd','Alarm','AlarmEnd','Manual','Schedule') NOT NULL default 'EventStart'"
 ));
 
 PREPARE stmt FROM @s;

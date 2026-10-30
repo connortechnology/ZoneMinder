@@ -457,6 +457,20 @@ bool VideoStore::open() {
         if (chosen_codec_data->hwdevice_type == AV_HWDEVICE_TYPE_CUDA)
           rewrites_frames = false;
         AVBufferRef *const decoder_pool = decoder_ctx ? decoder_ctx->hw_frames_ctx : nullptr;
+#if HAVE_LIBAVUTIL_HWCONTEXT_H && LIBAVCODEC_VERSION_CHECK(57, 107, 0, 107, 0)
+        // Borrow the monitor's shared encoder device context rather than
+        // letting setup_hwaccel open the render node again for this event.
+        // Creating and destroying a VAAPI device per event leaked a
+        // /dev/dri/renderD128 fd each time on some drivers (refs #5300). If
+        // the monitor can't provide one, hw_device_ctx stays null and
+        // setup_hwaccel falls back to creating its own.
+        if (chosen_codec_data->hwdevice_type != AV_HWDEVICE_TYPE_NONE) {
+          std::string hw_device = monitor->EncoderHWAccelDevice();
+          if (hw_device.empty() and chosen_codec_data->hwdevice_default)
+            hw_device = chosen_codec_data->hwdevice_default;
+          hw_device_ctx = monitor->GetEncoderHWDeviceContext(chosen_codec_data->hwdevice_type, hw_device);
+        }
+#endif
         if (setup_hwaccel(video_out_ctx,
               chosen_codec_data, hw_device_ctx, monitor->EncoderHWAccelDevice(), monitor->Width(), monitor->Height(),
               encoder_share_pool(decoder_pool, rewrites_frames))) {

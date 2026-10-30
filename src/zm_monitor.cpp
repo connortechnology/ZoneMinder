@@ -122,7 +122,7 @@ std::string load_monitor_sql =
     ", `MQTT_Enabled`, `MQTT_Subscriptions`"
 #endif
   ", `StartupDelay`"
-  ", `AudioDetection`, `AudioThreshold`, `AudioAlarmScore`"
+  ", `AudioDetection`, `AudioThreshold`, `AudioAlarmScore`, `DeviceClass`"
   " FROM `Monitors`";
 
 // Indexed by Monitor::CameraType, which starts at 1, so entry 0 covers the
@@ -789,6 +789,8 @@ void Monitor::Load(MYSQL_ROW dbrow, bool load_zones = true, Purpose p = QUERY) {
   audio_threshold = dbrow[col] ? atoi(dbrow[col]) : 0;
   col++;
   audio_alarm_score = dbrow[col] ? atoi(dbrow[col]) : 0;
+  col++;
+  device_class = dbrow[col] ? dbrow[col] : "Camera";
   col++;
 
   // How many frames we need to have before we start analysing.
@@ -1524,6 +1526,13 @@ Monitor::~Monitor() {
     curl_easy_cleanup(curl);
     curl = nullptr;
   }
+
+  // Release the shared encoder device contexts now that no VideoStore can be
+  // borrowing them (refs #5300).
+  for (auto &entry : encoder_hw_device_ctxs) {
+    if (entry.second) av_buffer_unref(&entry.second);
+  }
+  encoder_hw_device_ctxs.clear();
 }  // end Monitor::~Monitor()
 
 void Monitor::AddPrivacyBitmask() {
@@ -4100,6 +4109,13 @@ void Monitor::LoadActions() {
     else if (trigger == "Alarm") action.trigger = EventAction::ALARM;
     else if (trigger == "AlarmEnd") action.trigger = EventAction::ALARM_END;
     else if (trigger == "Manual") action.trigger = EventAction::MANUAL;
+    else if (trigger == "Schedule") {
+      // Run by cron, which calls zmcontrol.pl the same way the web ui does
+      // for a manual action. Recognised here only so that having one does not
+      // warn on every reload; it is never fired from this process.
+      Debug(1, "Monitor %u: skipping scheduled action, cron owns it", id);
+      continue;
+    }
     else {
       Warning("Monitor %u: ignoring action with unknown trigger '%s'", id, trigger.c_str());
       continue;
@@ -5587,6 +5603,35 @@ void Monitor::SendStreamHealthEvent(uint16_t code, const std::string &message, i
   stream_socket->SendMonitorEvent(zm::stream_socket::BuildEvent(ev));
   RefreshStreamSnapshot();
 }
+
+#if HAVE_LIBAVUTIL_HWCONTEXT_H && LIBAVCODEC_VERSION_CHECK(57, 107, 0, 107, 0)
+AVBufferRef *Monitor::GetEncoderHWDeviceContext(AVHWDeviceType type, const std::string &device) {
+  if (type == AV_HWDEVICE_TYPE_NONE) return nullptr;
+
+  std::lock_guard<std::mutex> lck(encoder_hw_device_ctx_mutex);
+
+  // One cached context per (type, device). A failed probe of another encoder
+  // type never drops the one a previous probe created, so the device survives
+  // for the monitor's life and is not reopened per event (refs #5300).
+  auto key = std::make_pair(static_cast<int>(type), device);
+  auto it = encoder_hw_device_ctxs.find(key);
+  if (it == encoder_hw_device_ctxs.end()) {
+    AVBufferRef *ctx = nullptr;
+    int ret = av_hwdevice_ctx_create(&ctx, type,
+        device.empty() ? nullptr : device.c_str(), nullptr, 0);
+    if (ret < 0) {
+      Error("Failed to create encoder hwdevice_ctx %s", av_make_error_string(ret).c_str());
+      return nullptr;
+    }
+    Debug(1, "Created shared encoder hwdevice_ctx type %d device %s",
+        static_cast<int>(type), device.c_str());
+    it = encoder_hw_device_ctxs.emplace(key, ctx).first;
+  }
+
+  // Hand out a reference the caller owns; the cached context stays with us.
+  return av_buffer_ref(it->second);
+}  // end AVBufferRef *Monitor::GetEncoderHWDeviceContext()
+#endif
 
 int Monitor::PrimeCapture() {
   // Stop the decoder before tearing the codec context down. The decoder thread
