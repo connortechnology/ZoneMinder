@@ -219,7 +219,7 @@ int Monitor::MonitorLink::score() {
   }
 
   if (shared_data->state == ALARM) {
-    Debug(1, "Checking all zones score is %d", shared_data->last_frame_score);
+    Debug(1, "Checking all zones score is %d", shared_data->last_frame_score.load());
     return shared_data->last_frame_score;
   }
   if (shared_data->state == ALERT) {
@@ -230,7 +230,7 @@ int Monitor::MonitorLink::score() {
     Debug(1, "Linked monitor in ALERT, returning sentinel to keep event open");
     return 1;
   }
-  Debug(1, "not alarmed. %d", shared_data->state);
+  Debug(1, "not alarmed. %d", shared_data->state.load());
   return 0;
 }
 

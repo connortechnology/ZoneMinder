@@ -122,7 +122,7 @@ std::string load_monitor_sql =
     ", `MQTT_Enabled`, `MQTT_Subscriptions`"
 #endif
   ", `StartupDelay`"
-  ", `AudioDetection`, `AudioThreshold`, `AudioAlarmScore`, `DeviceClass`"
+  ", `AudioDetection`, `AudioThreshold`, `AudioAlarmScore`, `DeviceClass`, `Go2RTCDisableBackChannel`"
   " FROM `Monitors`";
 
 // Indexed by Monitor::CameraType, which starts at 1, so entry 0 covers the
@@ -178,6 +178,7 @@ Monitor::Monitor() :
   RTSP2Web_enabled(false),
   RTSP2Web_type(WEBRTC),
   Go2RTC_enabled(false),
+  Go2RTC_disable_backchannel(true),
   janus_enabled(false),
   janus_audio_enabled(false),
   janus_profile_override(""),
@@ -791,6 +792,8 @@ void Monitor::Load(MYSQL_ROW dbrow, bool load_zones = true, Purpose p = QUERY) {
   audio_alarm_score = dbrow[col] ? atoi(dbrow[col]) : 0;
   col++;
   device_class = dbrow[col] ? dbrow[col] : "Camera";
+  col++;
+  Go2RTC_disable_backchannel = dbrow[col] && atoi(dbrow[col]);
   col++;
 
   // How many frames we need to have before we start analysing.
@@ -2087,7 +2090,7 @@ void Monitor::CheckAction() {
     // Can there be more than 1 bit set in the action?  Shouldn't these be
     // elseifs?
     if (shared_data->action & RELOAD) {
-      Info("Received reload indication at count %d", shared_data->capture_image_count);
+      Info("Received reload indication at count %d", shared_data->capture_image_count.load());
       shared_data->action &= ~RELOAD;
       // Not Reload() here: this runs on zmc's capture thread while the
       // decoder and analysis threads read the settings Load() rewrites. Ask
@@ -2097,10 +2100,10 @@ void Monitor::CheckAction() {
     }
     if (shared_data->action & SUSPEND) {
       if (Active()) {
-        Info("Received suspend indication at count %d", shared_data->capture_image_count);
+        Info("Received suspend indication at count %d", shared_data->capture_image_count.load());
         shared_data->analysing = ANALYSING_NONE;
       } else {
-        Info("Received suspend indication at count %d, but wasn't active", shared_data->capture_image_count);
+        Info("Received suspend indication at count %d, but wasn't active", shared_data->capture_image_count.load());
       }
       if (config.max_suspend_time) {
         SystemTimePoint now = std::chrono::system_clock::now();
@@ -2109,7 +2112,7 @@ void Monitor::CheckAction() {
       shared_data->action &= ~SUSPEND;
     } else if (shared_data->action & RESUME) {
       if ( Enabled() && !Active() ) {
-        Info("Received resume indication at count %d", shared_data->capture_image_count);
+        Info("Received resume indication at count %d", shared_data->capture_image_count.load());
         shared_data->analysing = analysing;
         // Analysis thread owns ref_image; ask it to drop the pre-suspend
         // reference rather than freeing the buffer under it here (refs #4983).
@@ -2123,7 +2126,7 @@ void Monitor::CheckAction() {
   if (auto_resume_time.time_since_epoch() != Seconds(0)) {
     SystemTimePoint now = std::chrono::system_clock::now();
     if (now >= auto_resume_time) {
-      Info("Auto resuming at count %d", shared_data->capture_image_count);
+      Info("Auto resuming at count %d", shared_data->capture_image_count.load());
       auto_resume_time = {};
       shared_data->analysing = analysing;
       // See RESUME above: defer the reference-image reset to the analysis thread.
@@ -2156,7 +2159,7 @@ void Monitor::UpdateFPS() {
     double new_analysis_fps = (shared_data->analysis_image_count <= 0) ? 0 : (shared_data->analysis_image_count - last_motion_frame_count) / elapsed.count();
 
     Debug(4, "FPS: capture count %d - last capture count %d = %d now:%lf, last %lf, elapsed %lf = capture: %lf (sample %lf) fps analysis: %lf fps",
-        shared_data->capture_image_count,
+        shared_data->capture_image_count.load(),
         last_capture_image_count,
         shared_data->capture_image_count - last_capture_image_count,
         FPSeconds(now.time_since_epoch()).count(),
@@ -2174,7 +2177,7 @@ void Monitor::UpdateFPS() {
         )
        ) {
       Info("%s: %d - Capturing at %.2lf fps, capturing bandwidth %ubytes/sec Analysing at %.2lf fps",
-          name.c_str(), shared_data->capture_image_count, new_capture_fps, new_capture_bandwidth, new_analysis_fps);
+          name.c_str(), shared_data->capture_image_count.load(), new_capture_fps, new_capture_bandwidth, new_analysis_fps);
 
 #if MOSQUITTOPP_FOUND
       if (mqtt)
@@ -2392,7 +2395,7 @@ int Monitor::Analyse() {
   last_signal = signal;
 
   Debug(3, "Motion detection is enabled?(%d) signal(%d) signal_change(%d) trigger state(%s) image index %d",
-        shared_data->analysing, signal, signal_change, TriggerState_Strings[trigger_data->trigger_state].c_str(), packet->image_index);
+        shared_data->analysing.load(), signal, signal_change, TriggerState_Strings[trigger_data->trigger_state].c_str(), packet->image_index);
 
   { // scope for event lock
     // Need to guard around event creation/deletion from Reload()
@@ -2453,7 +2456,7 @@ int Monitor::Analyse() {
       if (audio_detection and shared_data->audio_alarm) {
         score += audio_alarm_score;
         Debug(4, "Triggered on AUDIO level %d >= %d, score += %d",
-              shared_data->audio_level, audio_threshold, audio_alarm_score);
+              shared_data->audio_level.load(), audio_threshold, audio_alarm_score);
         Event::StringSet noteSet;
         // A constant, like the ONVIF and Amcrest notes above. Event::updateNotes
         // only ever inserts into the set and rewrites the Notes column on each
@@ -2624,7 +2627,7 @@ int Monitor::Analyse() {
                   // frame. Holding it through motion detection kept the
                   // decoder out of buffers (refs #123).
                   if (CanReleaseDeviceFrameAfterAI(packet->hw_frame.get(), videowriter,
-                                                   static_cast<RecordingOption>(shared_data->recording))) {
+                                                   static_cast<RecordingOption>(shared_data->recording.load()))) {
                     packet->hw_frame = nullptr;
                   }
                   if (++quadra_analyse_count_ % 500 == 0) {
@@ -2662,7 +2665,7 @@ int Monitor::Analyse() {
 
             // Ready means that we have captured the warmup # of frames
             if (shared_data->analysing > ANALYSING_NONE) {
-              Debug(3, "signal and capturing and doing motion detection %d", shared_data->analysing);
+              Debug(3, "signal and capturing and doing motion detection %d", shared_data->analysing.load());
 
               std::pair<int, std::string> results = Analyse_MotionDetection(packet);
               int motion_score = results.first;
@@ -2674,7 +2677,7 @@ int Monitor::Analyse() {
                 score += motion_score;
               } // end if motion_score
             } else {
-              Debug(1, "Not analysing %d", shared_data->analysing);
+              Debug(1, "Not analysing %d", shared_data->analysing.load());
             } // end if doing motion detection
           } // end if Ready
           // The device frame used to be released here, which meant the
@@ -2907,7 +2910,7 @@ int Monitor::Analyse() {
                       event->Id(), event->AlarmFrames(), alarm_frame_count);
               }
             } else {
-              Warning("Recording mode unknown %d", shared_data->recording);
+              Warning("Recording mode unknown %d", shared_data->recording.load());
             }
           }  // end if event->Duration > min_section_length
         }  // end if event
@@ -3078,7 +3081,7 @@ int Monitor::Analyse() {
     // (refs #4860), so drop it now unless an encoder will read it. When one
     // will, releaseDecoded() frees it once no event can reach the packet.
     if (packet->in_frame and CanReleaseFramesAfterAnalysis(videowriter,
-                                                           static_cast<RecordingOption>(shared_data->recording))) {
+                                                           static_cast<RecordingOption>(shared_data->recording.load()))) {
       packet->release_frames();
     }
   }  // end scope for event_lock
@@ -3862,7 +3865,7 @@ void Monitor::Reload() {
   {
     std::lock_guard<std::mutex> lck(event_mutex);
     if (event) {
-      Info("%s: %03d - Closing event %" PRIu64 ", reloading", name.c_str(), shared_data->capture_image_count, event->Id());
+      Info("%s: %03d - Closing event %" PRIu64 ", reloading", name.c_str(), shared_data->capture_image_count.load(), event->Id());
       closeEvent();
     }
   }
@@ -4351,12 +4354,20 @@ int Monitor::Capture() {
   shared_data->heartbeat_time =
       std::chrono::system_clock::to_time_t(packet->timestamp);
   int captureResult = camera->Capture(packet);
-  Debug(4, "Back from capture result=%d image count %d timestamp %" PRId64, captureResult, shared_data->capture_image_count,
+  Debug(4, "Back from capture result=%d image count %d timestamp %" PRId64, captureResult, shared_data->capture_image_count.load(),
       static_cast<int64>(std::chrono::duration_cast<Microseconds>(packet->timestamp.time_since_epoch()).count())
       );
 
   if (captureResult < 0) {
-    // Unable to capture image
+    // Unable to capture image. zmc closes the monitor and reconnects, and
+    // connect() clears the image ring.
+    shared_data->signal = false;
+    // With a decoder thread running, it is the ring's only writer: it picks
+    // its slot from last_write_index, this thread from image_count, so both
+    // could write the same slot or move last_write_index backwards. Viewers
+    // keep its last frame until the reconnect. refs #5237
+    if (decoding != DECODING_NONE) return -1;
+
     // Fake a signal loss image
     // Not sure what to do here.  We will close monitor and kill analysis_thread
     // but what about rtsp server?
@@ -4397,7 +4408,7 @@ int Monitor::Capture() {
       packet->notify_all();
     }
     Debug(2, "Have packet stream_index:%d ?= videostream_id: %d q.vpktcount %d event? %d image_count %d",
-          packet->packet->stream_index, video_stream_id, packetqueue.packet_count(video_stream_id), ( event ? 1 : 0 ), shared_data->capture_image_count);
+          packet->packet->stream_index, video_stream_id, packetqueue.packet_count(video_stream_id), ( event ? 1 : 0 ), shared_data->capture_image_count.load());
 
     if (packet->codec_type == AVMEDIA_TYPE_VIDEO) {
       packet->packet->stream_index = video_stream_id; // Convert to packetQueue's index
@@ -4974,8 +4985,8 @@ bool Monitor::applyDeinterlacing(std::shared_ptr<ZMPacket> &packet, Image *captu
 // Monitor::Decode() is defined in zm_decoder_thread.cpp
 
 void Monitor::flushDecoderQueue() {
-  // Called from DecoderThread::Run() as the decoder thread exits, so no
-  // concurrent access to decoder_queue: the thread that mutates it is us.
+  // Called on the decoder thread (as it exits, and from Decode() when the
+  // queue is full), so no concurrent access to decoder_queue.
   decoder_requires_next_packet = false;
   if (decoder_queue.empty()) return;
   Debug(1, "Flushing %zu in-flight entries from decoder_queue", decoder_queue.size());
@@ -5358,7 +5369,7 @@ unsigned int Monitor::EvaluateZones(Event::StringSet &zoneSet,
       shared_data->alarm_y = alarm_centre.y_;
 
       Info("Got alarm centre at %d,%d, at count %d",
-          shared_data->alarm_x, shared_data->alarm_y, shared_data->analysis_image_count);
+          shared_data->alarm_x.load(), shared_data->alarm_y.load(), shared_data->analysis_image_count.load());
     } else {
       shared_data->alarm_x = shared_data->alarm_y = -1;
     }
@@ -5815,7 +5826,7 @@ int Monitor::Pause() {
   {
     std::lock_guard<std::mutex> lck(event_mutex);
     if (event) {
-      Info("%s: image_count:%d - Closing event %" PRIu64 ", shutting down", name.c_str(), shared_data->capture_image_count, event->Id());
+      Info("%s: image_count:%d - Closing event %" PRIu64 ", shutting down", name.c_str(), shared_data->capture_image_count.load(), event->Id());
       closeEvent();
     }
   }
@@ -5931,7 +5942,7 @@ void Monitor::get_ref_image() {
     and !zm_terminate) {
 
     Debug(1, "Waiting for capture daemon lastwriteindex(%d) lastwritetime(%" PRIi64 ")",
-          shared_data->last_decoder_index, static_cast<int64>(shared_data->last_write_time));
+          shared_data->last_decoder_index.load(), static_cast<int64>(shared_data->last_write_time));
     if (packet_lock.packet_ and ! packet_lock.packet_->image) {
       packet_lock.unlock();
       // can't analyse it anyways, incremement

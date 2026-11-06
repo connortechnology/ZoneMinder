@@ -1071,8 +1071,8 @@ void MonitorStream::runStream() {
     } else { // ahead of writer
       Debug(1, "Waiting for capture last_analysis_index=%u, count %d == last_read_index=%u",
           //last_decoder_index,
-            monitor->shared_data->last_analysis_index,
-            monitor->shared_data->analysis_image_count,
+            monitor->shared_data->last_analysis_index.load(),
+            monitor->shared_data->analysis_image_count.load(),
             new_count);
 
       if (now - last_frame_sent.load() > Seconds(5)) {
@@ -1088,8 +1088,8 @@ void MonitorStream::runStream() {
           }
         } else {
           sendTextFrame(stringtf("Waiting for capture/analysis index %d, count %d our last read index %d, current %d",
-                monitor->shared_data->last_analysis_index,
-                monitor->shared_data->analysis_image_count,
+                monitor->shared_data->last_analysis_index.load(),
+                monitor->shared_data->analysis_image_count.load(),
                 last_read_index, new_count).c_str());
         }
       }
@@ -1218,7 +1218,7 @@ void MonitorStream::SingleImage(int scale) {
   int count = 10; // Give it 1 second to connect or else send text frame.
   while (count and (monitor->shared_data->last_decoder_index >= monitor->image_buffer_count) and !zm_terminate) {
     Debug(1, "Waiting for capture to begin. last decoder index %d >=? %d",
-          monitor->shared_data->last_decoder_index, monitor->image_buffer_count);
+          monitor->shared_data->last_decoder_index.load(), monitor->image_buffer_count);
     std::this_thread::sleep_for(Milliseconds(100));
     count--;
   }
@@ -1231,7 +1231,7 @@ void MonitorStream::SingleImage(int scale) {
   count = 10; // Give it 1 second to connect or else send text frame.
   while (count and (monitor->image_pixelformats[index]<=AV_PIX_FMT_NONE) and !zm_terminate) {
     Debug(1, "Waiting for analysis to begin. last write index %d >=? %d",
-          monitor->shared_data->last_analysis_index, monitor->image_buffer_count);
+          monitor->shared_data->last_analysis_index.load(), monitor->image_buffer_count);
     std::this_thread::sleep_for(Milliseconds(1));
     count--;
   }
