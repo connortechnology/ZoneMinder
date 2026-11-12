@@ -1435,7 +1435,7 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
 #if HAVE_CUDA
   // Motion detection against a frame that never leaves the card. Returns false
   // when this frame cannot be handled that way and the caller should fall back
-  // to the host path.
+  // to the host path. motion_score is set only on frames it detects on.
   bool Analyse_MotionDetection_Cuda(const std::shared_ptr<ZMPacket> &packet,
                                     Event::StringSet &zoneSet,
                                     int &motion_score);
@@ -1473,6 +1473,8 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   static size_t WriteCallback(void *contents, size_t size, size_t nmemb, void *userp);
 
   std::pair<int, std::string> Analyse_UVICORN(std::shared_ptr<ZMPacket> packet);
+  // The motion score for this frame, or -1 when motion detection did not look
+  // at it (motion_frame_skip, or the frame seeded the reference).
   std::pair<int, std::string> Analyse_MotionDetection(std::shared_ptr<ZMPacket> packet);
 
   bool setupConvertContext(const AVFrame *input_frame, const Image *image);
@@ -1545,6 +1547,10 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   // Whether Analyse() can drop a packet's decoded frames once it is done with
   // them. VideoStore encodes from hw_frame or in_frame, never the Image.
   static bool CanReleaseFramesAfterAnalysis(VideoWriter writer, RecordingOption recording);
+  // Whether a frame with no score counts toward leaving ALARM. motion_score is
+  // what Analyse_MotionDetection() returned: -1 when it did not look at the
+  // frame (skipped, or seeding the reference), otherwise the score.
+  static bool QuietFrameCounts(int motion_score, AnalysingOption analysing);
   // The motion frame size for a MotionFrameWidth setting on a width x height
   // capture: the setting's width, rounded down to even, with the height that
   // keeps the capture's aspect ratio. 0, or a width not smaller than the

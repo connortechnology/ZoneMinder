@@ -2654,11 +2654,9 @@ int Monitor::Analyse() {
 #endif
                 if (objectdetection == OBJECT_DETECTION_UVICORN) {
                   std::pair<int, std::string> results = Analyse_UVICORN(packet);
-                  int motion_score = results.first;
-                  std::string motion_cause = results.second;
-                  if (motion_score) {
-                    score += motion_score;
-                  } 
+                  if (results.first) {
+                    score += results.first;
+                  }
                 }
               }  // end if objectdetection
             }  // end if has in_frame
@@ -2668,9 +2666,12 @@ int Monitor::Analyse() {
               Debug(3, "signal and capturing and doing motion detection %d", shared_data->analysing.load());
 
               std::pair<int, std::string> results = Analyse_MotionDetection(packet);
-              int motion_score = results.first;
+              // The outer motion_score, which decides below whether a quiet
+              // frame can end an alarm. Declaring a new one here left that at
+              // -1 and kept Analysing=Always monitors in ALARM (refs #128).
+              motion_score = results.first;
               std::string motion_cause = results.second;
-              if (motion_score) {
+              if (motion_score > 0) {
                 if (!cause.empty()) cause += ", ";
                 cause += MOTION_CAUSE + std::string(":") + motion_cause;
                 //noteSetMap[MOTION_CAUSE] = zoneSet;
@@ -2739,7 +2740,7 @@ int Monitor::Analyse() {
         } else {
           Debug(1, "!score state=%s, packet->score %d", State_Strings[state].c_str(), packet->score);
           // We only go out of alarm if we actually did motion detection or aren't doing any.
-          if ((motion_score >= 0) or (shared_data->analysing != ANALYSING_ALWAYS)) {
+          if (QuietFrameCounts(motion_score, static_cast<AnalysingOption>(shared_data->analysing.load()))) {
             alert_to_alarm_frame_count = alarm_frame_count; // load same value configured for alarm_frame_count
 
             if (state == ALARM) {
@@ -3687,7 +3688,7 @@ bool Monitor::Analyse_MotionDetection_Cuda(const std::shared_ptr<ZMPacket> &pack
       return false;
     }
 
-    motion_score += EvaluateZones(zoneSet, [this, &results](Zone &zone, size_t index) {
+    motion_score = EvaluateZones(zoneSet, [this, &results](Zone &zone, size_t index) {
       return (index < results.size())
              and zone.CheckAlarmsCuda(results[index], cuda_motion.get(), index);
     });
@@ -3716,7 +3717,10 @@ bool Monitor::Analyse_MotionDetection_Cuda(const std::shared_ptr<ZMPacket> &pack
 
 std::pair<int, std::string> Monitor::Analyse_MotionDetection(std::shared_ptr<ZMPacket> packet) {
   Event::StringSet zoneSet;
-  int motion_score = 0;
+  // -1 until motion detection actually looks at a frame. Skipped frames and
+  // the one that seeds the reference say nothing about motion, and must not
+  // end an alarm (refs #128).
+  int motion_score = -1;
   std::string cause = "";
 
   if (!(packet->in_frame or packet->image)) {
@@ -3729,7 +3733,7 @@ std::pair<int, std::string> Monitor::Analyse_MotionDetection(std::shared_ptr<ZMP
   // building a y-image and walking every pixel on the CPU. Falls through to the
   // host path whenever this frame or this monitor cannot be handled that way.
   if (Analyse_MotionDetection_Cuda(packet, zoneSet, motion_score)) {
-    if (motion_score) {
+    if (motion_score > 0) {
       packet->zone_stats.reserve(zones.size());
       for (const Zone &zone : zones) {
         packet->zone_stats.push_back(zone.GetStats());
@@ -3780,7 +3784,7 @@ std::pair<int, std::string> Monitor::Analyse_MotionDetection(std::shared_ptr<ZMP
     if (motion and !(shared_data->analysis_image_count % (motion_frame_skip+1))) {
       Debug(1, "Detecting motion on image %d at %ux%u", packet->image_index, motion->Width(), motion->Height());
       // Get new score.
-      motion_score += DetectMotion(*motion, zoneSet);
+      motion_score = DetectMotion(*motion, zoneSet);
       if (!packet->analysis_image) {
         packet->analysis_image = new Image(packet->in_frame.get(), Width(), Height()); // TODO SHOULD COPY
         Debug(1, "Populate analysis_image %s", packet->analysis_image->toString().c_str());
@@ -4036,6 +4040,10 @@ bool Monitor::CanReleaseFramesAfterAnalysis(VideoWriter writer, RecordingOption 
   // Image, but here VideoStore uses hw_frame or in_frame (its Image path is
   // off since 4ed4ad6c1), so an encoder needs the frame even with an Image.
   return writer != ENCODE or recording == RECORDING_NONE;
+}
+
+bool Monitor::QuietFrameCounts(int motion_score, AnalysingOption analysing) {
+  return motion_score >= 0 or analysing != ANALYSING_ALWAYS;
 }
 
 bool Monitor::CanReleaseDeviceFrameAfterAI(const AVFrame *hw_frame, VideoWriter writer,

@@ -40,6 +40,26 @@ TEST_CASE("Analysis keeps decoded frames an encoder will read", "[Monitor]") {
   }
 }
 
+// A frame with no score only moves the state machine out of ALARM when it
+// tells us something: motion detection looked at it and found nothing, or the
+// monitor is not doing motion detection at all. Frames motion detection
+// skipped (motion_frame_skip) or used to seed the reference report -1 and must
+// not end an alarm. Analyse() used to leave the value it checked at -1 for
+// every frame, so an Analysing=Always monitor never left ALARM (refs #128).
+TEST_CASE("Which quiet frames can end an alarm", "[Monitor]") {
+  SECTION("motion detection ran and found nothing") {
+    REQUIRE(Monitor::QuietFrameCounts(0, Monitor::ANALYSING_ALWAYS));
+  }
+
+  SECTION("motion detection did not run on this frame") {
+    REQUIRE_FALSE(Monitor::QuietFrameCounts(-1, Monitor::ANALYSING_ALWAYS));
+  }
+
+  SECTION("no motion detection at all") {
+    REQUIRE(Monitor::QuietFrameCounts(-1, Monitor::ANALYSING_NONE));
+  }
+}
+
 // Motion detection runs on a frame MotionFrameWidth wide, with the height
 // following the capture's aspect ratio. 0, or a width that is not smaller than
 // the capture, means the capture's own size.
