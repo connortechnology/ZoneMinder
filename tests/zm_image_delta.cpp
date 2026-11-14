@@ -41,15 +41,13 @@ namespace {
 // Image::Initialise() dereferences config.font_file_location; also select the
 // SIMD delta helpers so these cases exercise the block-aligned fast path (and
 // reproduce the crash on the unfixed code) rather than the always-safe scalar
-// fallback. Must run before the first Image is constructed, as Initialise()
-// latches on first use.
+// fallback. Initialise() runs again so that holds whichever test constructed
+// the first Image.
 void EnsureImageInit() {
-  static bool done = false;
-  if (done) return;
   if (!config.font_file_location) config.font_file_location = "";
   config.cpu_extensions = 1;
   HwCapsDetect();  // sets the global sse_version / neonversion
-  done = true;
+  Image::Initialise();
 }
 
 // Fill a freshly allocated (self-owned, aligned buffer + aligned linesize)
