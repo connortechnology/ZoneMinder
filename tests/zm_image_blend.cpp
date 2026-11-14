@@ -71,6 +71,32 @@ void RequireBlended(const std::vector<uint8_t> &col1, const std::vector<uint8_t>
 }
 }  // namespace
 
+TEST_CASE("Image::Blend of a caller's buffer whose size is not a multiple of 16", "[Image][Blend]") {
+  FastBlends fast;
+
+  // 12x3 RGB24 over a caller's buffer: linesize 36, size 108 (108 % 16 == 12),
+  // pixels 36 % 4 == 0.
+  constexpr unsigned int kW = 12;
+  constexpr unsigned int kH = 3;
+  constexpr unsigned int kSize = kW * kH * 3;
+  std::vector<uint8_t> col1(kSize), col2(kSize);
+  for (unsigned int i = 0; i < kSize; i++) {
+    col1[i] = Pattern(i, 1);
+    col2[i] = Pattern(i, 7);
+  }
+  std::vector<uint8_t> buf1(col1), buf2(col2);
+
+  Image a(kW, kH, ZM_COLOUR_RGB24, ZM_SUBPIX_ORDER_RGB, buf1.data());
+  Image b(kW, kH, ZM_COLOUR_RGB24, ZM_SUBPIX_ORDER_RGB, buf2.data());
+  REQUIRE(a.Size() == kSize);
+  a.Blend(b, 12);  // unfixed code runs the SSE2/NEON loop off the end here
+
+  RequireBlended(col1, col2, a.Buffer());
+  // The result is written into the caller's buffer, not swapped for one the
+  // image would later free with zm_freealigned().
+  REQUIRE(a.Buffer() == buf1.data());
+}
+
 TEST_CASE("Image::Blend of an aligned image whose size is not a multiple of 64", "[Image][Blend]") {
   FastBlends fast;
 

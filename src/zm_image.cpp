@@ -2518,11 +2518,16 @@ void Image::Blend( const Image &image, int transparency ) {
         mil_pixels);
 #endif
 
-  if (holdbuffer) {
+  // Only a buffer from AllocBuffer() can become the blend buffer, which is freed
+  // with zm_freealigned(). A caller's buffer, or one from malloc or new, gets
+  // the result copied in instead.
+  if (holdbuffer or buffertype != ZM_BUFTYPE_ZM) {
     (*fptr_imgbufcpy)(buffer, blend_buffer_, size);
   } else {
     std::swap(buffer, blend_buffer_);
-    buffertype = ZM_BUFTYPE_ZM;
+    const unsigned long buffer_allocation = allocation;
+    allocation = blend_buffer_size_;
+    blend_buffer_size_ = buffer_allocation;
   }
 }
 
