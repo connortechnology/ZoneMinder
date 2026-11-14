@@ -2639,15 +2639,19 @@ bool Image::Delta(const Image &image, Image* targetimage) const {
   const unsigned int dst_linesize = targetimage->LineSize();
 
   // The delta8_* helpers consume whole blocks per iteration: 16 pixels for the
-  // gray8 unrolled/SSE2/NEON variants, 4 pixels for the rgb32 ones. The SSE2 and
-  // NEON variants require the pixel count to be an exact multiple of that block
-  // (a shorter count wraps the loop counter past zero and runs off the end of
-  // memory -> SIGSEGV), and the unrolled C variants overrun by up to a block.
+  // gray8 unrolled/SSE2 variants and 64 for NEON, 4 pixels for the rgb32
+  // unrolled/SSE2/SSSE3 ones and 16 for NEON. The SIMD variants require the
+  // pixel count to be an exact multiple of their block (a shorter count wraps
+  // the loop counter past zero and runs off the end of memory -> SIGSEGV or
+  // SIGBUS), and the unrolled C variants overrun by up to a block. The blocks
+  // below are the largest of these, which every variant divides.
   // update_function_pointers() only guards on total pixels % 4, which does not
   // imply the per-row width is block-aligned, so run the block-aligned bulk of
   // each row through the fast/SIMD helper and finish the remaining tail pixels
   // with the matching 1-pixel-at-a-time scalar helper (the GRAY8 target advances
   // one byte per pixel; the sources advance bpp bytes per pixel).
+  constexpr unsigned int kGray8Block = 64;
+  constexpr unsigned int kRgb32Block = 16;
   auto delta_row = [&](delta_fptr_t vec_fn, delta_fptr_t scalar_fn,
                        unsigned int block, unsigned int bpp) {
     const unsigned int bulk = width - (width % block);  // pixels for the vector helper
@@ -2663,24 +2667,24 @@ bool Image::Delta(const Image &image, Image* targetimage) const {
 
   if (imagePixFormat == AV_PIX_FMT_BGR24) {
     /* BGR subpixel order */
-    delta_row(delta8_bgr, &std_delta8_bgr, 4, 3);
+    delta_row(delta8_bgr, &std_delta8_bgr, kRgb32Block, 3);
   } else if (zm_is_rgb24(imagePixFormat)) {
     /* Assume RGB subpixel order */
-    delta_row(delta8_rgb, &std_delta8_rgb, 4, 3);
+    delta_row(delta8_rgb, &std_delta8_rgb, kRgb32Block, 3);
   } else if (imagePixFormat == AV_PIX_FMT_ARGB) {
     /* ARGB subpixel order */
-    delta_row(delta8_argb, &std_delta8_argb, 4, 4);
+    delta_row(delta8_argb, &std_delta8_argb, kRgb32Block, 4);
   } else if (imagePixFormat == AV_PIX_FMT_ABGR) {
     /* ABGR subpixel order */
-    delta_row(delta8_abgr, &std_delta8_abgr, 4, 4);
+    delta_row(delta8_abgr, &std_delta8_abgr, kRgb32Block, 4);
   } else if (imagePixFormat == AV_PIX_FMT_BGRA) {
     /* BGRA subpixel order */
-    delta_row(delta8_bgra, &std_delta8_bgra, 4, 4);
+    delta_row(delta8_bgra, &std_delta8_bgra, kRgb32Block, 4);
   } else if (zm_is_rgb32(imagePixFormat)) {
     /* Assume RGBA subpixel order */
-    delta_row(delta8_rgba, &std_delta8_rgba, 4, 4);
+    delta_row(delta8_rgba, &std_delta8_rgba, kRgb32Block, 4);
   } else if (zm_bytes_per_pixel(imagePixFormat) == 1) {
-    delta_row(delta8_gray8, &std_delta8_gray8, 16, 1);
+    delta_row(delta8_gray8, &std_delta8_gray8, kGray8Block, 1);
   } else {
     Panic("Delta called with unexpected pixel format %d (%s); legacy colours=%d",
           imagePixFormat, zm_get_pix_fmt_name(imagePixFormat), colours);
