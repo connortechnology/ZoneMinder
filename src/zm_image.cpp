@@ -2486,8 +2486,26 @@ void Image::Blend( const Image &image, int transparency ) {
   TimePoint start = std::chrono::steady_clock::now();
 #endif
 
-  /* Do the blending */
-  (*blend)(buffer, image.buffer, blend_buffer_, size, transparency);
+  // The fast blend helpers consume whole blocks per iteration: 16 bytes for the
+  // unrolled C and SSE2 variants, 64 for NEON. The SIMD variants require the
+  // count to be an exact multiple of their block (a shorter count wraps the loop
+  // counter past zero and runs off the end of memory), and the unrolled C one
+  // overruns by up to a block. size is not always a multiple of 64: images built
+  // over a caller's buffer use an unaligned linesize, and an aligned one is only
+  // a multiple of 32. Blend the 64-byte bulk in place and the rest through
+  // zero-padded block-sized copies, so every byte goes through the same helper.
+  constexpr unsigned int kBlendBlock = 64;
+  const unsigned int bulk = size - (size % kBlendBlock);
+  if (bulk) (*blend)(buffer, image.buffer, blend_buffer_, bulk, transparency);
+  if (const unsigned int tail = size - bulk) {
+    alignas(64) uint8_t tail1[kBlendBlock] = {};
+    alignas(64) uint8_t tail2[kBlendBlock] = {};
+    alignas(64) uint8_t tail_result[kBlendBlock];
+    memcpy(tail1, buffer + bulk, tail);
+    memcpy(tail2, image.buffer + bulk, tail);
+    (*blend)(tail1, tail2, tail_result, kBlendBlock, transparency);
+    memcpy(blend_buffer_ + bulk, tail_result, tail);
+  }
 
 #ifdef ZM_IMAGE_PROFILING
   TimePoint end = std::chrono::steady_clock::now();
