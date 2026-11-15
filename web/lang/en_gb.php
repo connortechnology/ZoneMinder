@@ -143,6 +143,8 @@ $SLANG = array(
     'AttrArchiveStatus'     => 'Archive Status',
     'AttrAvgScore'          => 'Avg. Score',
     'AttrCause'             => 'Cause',
+    'AttrDate'              => 'Date',
+    'AttrDateTime'          => 'Date/Time',
     'AttrStartDate'         => 'Start Date',
     'AttrEndDate'           => 'End Date',
     'AttrStartDateTime'     => 'Start Date/Time',
@@ -348,6 +350,10 @@ $SLANG = array(
     'ConfiguredFor'         => 'Configured for',
     'ConfigURL'             => 'Config Base URL',
     'ConfirmAction'         => 'Action Confirmation',
+    'ClearAllLogs'          => 'Clear ALL Logs',
+    'ClearFilteredLogs'     => 'Clear Filtered Logs',
+    'ConfirmClearAllLogs'   => 'No rows are selected, so this will delete all log entries. Are you sure?',
+    'ConfirmClearFilteredLogs' => 'No rows are selected, so this will delete every log entry matching the current filter. Are you sure?',
     'ConfirmClearLogs'      => 'Are you sure you wish to delete the selected log entries?',
     'ConfirmClearLogsTitle' => 'Clear Logs Confirmation',
     'ConfirmDeleteControl'  => 'Warning, deleting a control will reset all monitors that use it to be uncontrollable.<br><br>Are you sure you wish to delete?',
@@ -373,7 +379,7 @@ $SLANG = array(
     'ConfirmUnarchiveEvents'=> 'Are you sure you wish to unarchive the selected events?',
     'ConjAnd'               => 'and',
     'ConjOr'                => 'or',
-    'ContactAdmin'          => 'Please contact your adminstrator for details.',
+    'ContactAdmin'          => 'Please contact your administrator for details.',
     'ControlAddress'        => 'Control Address',
     'ControlCap'            => 'Control Capability',
     'ControlCaps'           => 'Control Capabilities',
@@ -518,7 +524,9 @@ $SLANG = array(
     'ImagesPerClass'        => 'Images per class',
     'InsufficientPermissionsUser'=> 'Insufficient permissions for user',
     'MaxImageBufferCount'   => 'Maximum Image Buffer Size (frames)',
+    'IntelGpu'              => 'Intel GPU',
     'InvalidateTokens'      => 'Invalidate all generated tokens',
+    'IPAddress'             => 'IP Address',
     'KeyString'             => 'Key String',
     'LimitResultsPost'      => 'results only', // This is used at the end of the phrase 'Limit to first N results only'
     'LimitResultsPre'       => 'Limit to first', // This is used at the beginning of the phrase 'Limit to first N results only'
@@ -797,6 +805,7 @@ $SLANG = array(
     'Roles'                 => 'Roles',
     'RotateLeft'            => 'Rotate Left',
     'RotateRight'           => 'Rotate Right',
+    'RTSPServer'            => 'RTSP Server',
     'RTSPStreamName'        => 'RTSP Stream Name',
     'RTSPTransport'         => 'RTSP Transport Protocol',
     'RunAudit'              => 'Run Audit Process',
@@ -981,7 +990,7 @@ $SLANG = array(
     'es_ar' => 'Spanish Argentina',
     'es_es' => 'Spanish Spain',
     'en_gb' => 'British English',
-    'en_us' => 'Us English',
+    'en_us' => 'US English',
     'fr_fr' => 'French',
     'cs_cz' => 'Czech',
     'zh_cn' => 'Simplified Chinese',
@@ -1000,6 +1009,9 @@ $SLANG = array(
     'dk_dk' => 'Danish',
     'ro_ro' => 'Romanian',
     'no_nb' => 'Norwegian',
+    'ba_ba' => 'Bosnian',
+    'big5_big5' => 'Traditional Chinese (Big5)',
+    'tr_tr' => 'Turkish',
   'option:router' => 'Gateway',
 );
 
@@ -1366,6 +1378,32 @@ None: No frames will be decoded, live view and thumbnails will not be available~
   'ZM_TRAINING_DETECT_SCRIPT' => array(
     'Prompt' => 'Object detection script location',
     'Help' => 'Full path to the object detection script (e.g. /var/lib/zmeventnotification/bin/zm_detect.py).~~When set, a Detect button appears in the annotation editor that runs detection on the current frame.~~The script is called as: script -f image -m monitor_id~~Leave empty to disable automatic detection.'
+  ),
+  'OPTIONS_IMPORTANCE' => array(
+    'Help' => 'How much you care about this monitor being available.~~
+Normal: problems such as failing to connect to the camera are logged at their usual severity.~~
+Less important and Not important: those messages are logged at a lower severity, so a camera that is often switched off or out of range does not fill the log with errors.'
+  ),
+  'ZM_WEB_HOMEVIEW' => array(
+    'Help' => 'The page shown after logging in: the console, events, map, montage, montage review or watch.~~A user\'s own Home View setting overrides this.'
+  ),
+  'ZM_WEB_NAVBAR_LINKS' => array(
+    'Help' => 'Extra links to add to the navigation bar.~~Enter complete HTML a tags separated by commas, for example <a href="https://zoneminder.com">ZoneMinder</a>.'
+  ),
+  'ZM_OPT_ALS_PORT' => array(
+    'Help' => 'The port the alarm server listens on for alarms sent by a camera or other device.'
+  ),
+  'ZM_OPT_ALS_LOGENTRY' => array(
+    'Help' => 'When the alarm server receives a Human Detected alarm, add an entry to the ZoneMinder log.'
+  ),
+  'ZM_OPT_ALS_ALARM' => array(
+    'Help' => 'When the alarm server receives a Human Detected alarm, pass it on to ZoneMinder as an alarm.~~This does not work together with Trigger an event on Human Detected.'
+  ),
+  'ZM_OPT_ALS_TRIGGEREVENT' => array(
+    'Help' => 'When the alarm server receives a Human Detected alarm, trigger an event in ZoneMinder.~~Requires the zmTrigger option to be enabled.'
+  ),
+  'ZM_TELEMETRY_LAST_UPLOAD' => array(
+    'Help' => 'The time of the last telemetry upload, as a Unix timestamp. It is set by ZoneMinder after each upload and cannot be edited.'
   ),
 
 //    'LANG_DEFAULT' => array(

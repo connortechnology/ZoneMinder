@@ -60,6 +60,7 @@ possible, this should run at more or less constant speed.
 #include "zm_time.h"
 #include "zm_utils.h"
 
+#include <algorithm>
 #include <getopt.h>
 #include <unistd.h>
 
@@ -278,6 +279,7 @@ int main(int argc, char *argv[], char **envp) {
   // per-edge events ride the monitor stream socket (no-op until it exists,
   // which is after the first successful prime; observable on every reconnect).
   std::vector<bool> monitor_faulted(monitors.size(), false);
+  Seconds reconnect_delay = Seconds(0);
 
   while (!zm_terminate) {
     result = 0;
@@ -347,6 +349,7 @@ int main(int argc, char *argv[], char **envp) {
         monitor->SetHeartbeatTime(std::chrono::system_clock::now());
       }
       if (zm_terminate) break;
+      monitor->ResetFPSBaseline();
       if (priming_failed)
         monitor->SendStreamHealthEvent(zm::stream_socket::kEventPrimeCaptureRestored,
                                        "Capture priming restored");
@@ -366,6 +369,8 @@ int main(int argc, char *argv[], char **envp) {
     // and the Close()/disconnect() loop after it must, or the monitors started
     // so far keep their threads and are never freed (their zones hold them).
 
+    TimePoint connect_time = std::chrono::steady_clock::now();
+    int failed_monitor_id = monitors[0]->Id();
     std::vector<SystemTimePoint> last_capture_times = std::vector<SystemTimePoint>(monitors.size());
     Microseconds sleep_time = Microseconds(0);
 
@@ -383,13 +388,17 @@ int main(int argc, char *argv[], char **envp) {
           const Monitor::OndemandStep step = monitors[i]->CheckOndemand();
           if (step == Monitor::OndemandStep::PAUSE) monitors[i]->Pause();
           if (step == Monitor::OndemandStep::PAUSE or step == Monitor::OndemandStep::SLEEP) {
+            monitors[i]->UpdateFPS();
             std::this_thread::sleep_for(Microseconds(100000));
             result = 0;
             continue;
           }
           if (step == Monitor::OndemandStep::PLAY) {
-            if (1 > (result = monitors[i]->Play())) {
+            const int play_result = monitors[i]->Play();
+            if (1 > play_result) {
+              result = play_result;
               Debug(1, "Failed to play");
+              failed_monitor_id = monitors[i]->Id();
               break;
             }
           }
@@ -401,6 +410,7 @@ int main(int argc, char *argv[], char **envp) {
           monitors[i]->SendStreamHealthEvent(zm::stream_socket::kEventCaptureFailed,
                                              "Pre-capture failed");
           monitor_faulted[i] = true;
+          failed_monitor_id = monitors[i]->Id();
           result = -1;
           break;
         }
@@ -411,6 +421,7 @@ int main(int argc, char *argv[], char **envp) {
           monitors[i]->SendStreamHealthEvent(zm::stream_socket::kEventCaptureFailed,
                                              "Capture failed");
           monitor_faulted[i] = true;
+          failed_monitor_id = monitors[i]->Id();
           result = -1;
           break;
         }
@@ -420,6 +431,7 @@ int main(int argc, char *argv[], char **envp) {
           monitors[i]->SendStreamHealthEvent(zm::stream_socket::kEventCaptureFailed,
                                              "Post-capture failed");
           monitor_faulted[i] = true;
+          failed_monitor_id = monitors[i]->Id();
           result = -1;
           break;
         }
@@ -428,6 +440,10 @@ int main(int argc, char *argv[], char **envp) {
 
         SystemTimePoint now = std::chrono::system_clock::now();
         monitors[i]->SetHeartbeatTime(now);
+
+        if (reconnect_delay > Seconds(0) and (std::chrono::steady_clock::now() - connect_time >= Seconds(10))) {
+          reconnect_delay = Seconds(0);
+        }
 
         // capture_delay is the amount of time we should sleep in useconds to achieve the desired framerate.
         Microseconds delay = (monitors[i]->GetState() == Monitor::ALARM) ? monitors[i]->GetAlarmCaptureDelay()
@@ -469,11 +485,34 @@ int main(int argc, char *argv[], char **envp) {
       }
     }  // end while ! zm_terminate and connected
 
+    FPSeconds capture_duration = std::chrono::steady_clock::now() - connect_time;
+
     for (std::shared_ptr<Monitor> & monitor : monitors) {
       monitor->SetHeartbeatTime(std::chrono::system_clock::now());
       monitor->Close();
       monitor->SetHeartbeatTime(std::chrono::system_clock::now());
       monitor->disconnect();
+    }
+
+    if ((result < 0) and !zm_reload and !zm_terminate) {
+      if (capture_duration < Seconds(10)) {
+        Seconds max_delay = std::max(Seconds(1), Seconds(static_cast<int>(config.watch_max_delay)));
+        if (reconnect_delay == Seconds(0)) {
+          reconnect_delay = Seconds(1);
+        } else {
+          reconnect_delay = std::min(reconnect_delay * 2, max_delay);
+        }
+        Warning("Monitor %d capture failed %.1fs after connecting, waiting %ds before reconnecting",
+                failed_monitor_id, capture_duration.count(), static_cast<int>(reconnect_delay.count()));
+
+        auto wait_until = std::chrono::steady_clock::now() + reconnect_delay;
+        while (!zm_terminate and !zm_reload and (std::chrono::steady_clock::now() < wait_until)) {
+          std::this_thread::sleep_for(std::min<std::chrono::steady_clock::duration>(
+              Milliseconds(100), wait_until - std::chrono::steady_clock::now()));
+        }
+      } else {
+        reconnect_delay = Seconds(0);
+      }
     }
 
     if (zm_reload) {

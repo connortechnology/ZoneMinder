@@ -36,6 +36,12 @@ extern "C" {
 #include <unistd.h>
 #include <sys/stat.h>
 
+static bool option_number(const AVDictionaryEntry *entry, uint64_t &out) {
+  if (zm_parse_option_number(entry->value, out)) return true;
+  Warning("Option %s=%s is not a number", entry->key, entry->value);
+  return false;
+}
+
 VideoStore::VideoStore(
   const char *filename_in,
   const char *format_in,
@@ -64,6 +70,7 @@ VideoStore::VideoStore(
   frame_count(0),
   encode_total_us_(0),
   encode_count_(0),
+  packet_write_failures(0),
   video_encoded(false),
   video_encoder_failed(false),
   shares_decoder_pool(false),
@@ -131,14 +138,21 @@ bool VideoStore::open() {
 
   std::string options = monitor->GetEncoderOptions();
   AVDictionary *opts = nullptr;
-  ret = av_dict_parse_string(&opts, options.c_str(), "=", "#,\n", 0);
+  ret = zm_parse_options(&opts, options, "#,\n");
   if (ret < 0) {
     Warning("Could not parse ffmpeg output options '%s'", options.c_str());
   } else {
     const AVDictionaryEntry *entry = av_dict_get(opts, "reorder_queue_size", nullptr, AV_DICT_MATCH_CASE);
     if (entry) {
-      reorder_queue_size = std::stoul(entry->value);
-      Debug(1, "reorder_queue_size set to %zu", reorder_queue_size);
+      if (monitor->GetOptVideoWriter() == Monitor::ENCODE) {
+        Debug(1, "reorder_queue_size ignored for non-passthrough");
+      } else {
+        uint64_t value;
+        if (option_number(entry, value)) {
+          reorder_queue_size = value;
+          Debug(1, "reorder_queue_size set to %zu", reorder_queue_size);
+        }
+      }
       // remove it to prevent complaining later.
       av_dict_set(&opts, "reorder_queue_size", nullptr, AV_DICT_MATCH_CASE);
     } else if (monitor->has_out_of_order_packets() and !monitor->WallClockTimestamps()) {
@@ -182,6 +196,7 @@ bool VideoStore::open() {
         return false;
       }
       avcodec_parameters_copy(video_out_stream->codecpar, video_in_stream->codecpar);
+      zm_clear_incompatible_codec_tag(oc->oformat, video_out_stream->codecpar);
       zm_dump_codecpar(video_out_stream->codecpar);
 
       video_out_stream->avg_frame_rate = video_in_stream->avg_frame_rate;
@@ -306,7 +321,7 @@ bool VideoStore::open() {
         }
         av_dict_free(&opts);
         // Reload it for next attempt and/or avformat open
-        ret = av_dict_parse_string(&opts, options.c_str(), "=", "#,\n", 0);
+        ret = zm_parse_options(&opts, options, "#,\n");
         if (ret < 0) {
           Warning("Could not parse ffmpeg output options '%s'", options.c_str());
         } else {
@@ -358,14 +373,17 @@ bool VideoStore::open() {
 
         // We have to re-parse the options because each attempt to open destroys the dictionary
         AVDictionary *opts = 0;
-        ret = av_dict_parse_string(&opts, options.c_str(), "=", ",#\n", 0);
+        ret = zm_parse_options(&opts, options, ",#\n");
         if (ret < 0) {
           Warning("Could not parse ffmpeg encoder options list '%s'", options.c_str());
         } else {
           const AVDictionaryEntry *entry = av_dict_get(opts, "reorder_queue_size", nullptr, AV_DICT_MATCH_CASE);
           if (entry) {
-            reorder_queue_size = std::stoul(entry->value);
-            Debug(1, "reorder_queue_size set to %zu", reorder_queue_size);
+            uint64_t value;
+            if (option_number(entry, value)) {
+              reorder_queue_size = value;
+              Debug(1, "reorder_queue_size set to %zu", reorder_queue_size);
+            }
             // remove it to prevent complaining later.
             av_dict_set(&opts, "reorder_queue_size", nullptr, AV_DICT_MATCH_CASE);
           }
@@ -385,26 +403,27 @@ bool VideoStore::open() {
         video_out_ctx->pix_fmt = chosen_codec_data->hw_pix_fmt;
         video_out_ctx->sw_pix_fmt = chosen_codec_data->sw_pix_fmt;
         Debug(1, "Setting pix fmt to %d %s", video_out_ctx->pix_fmt, av_get_pix_fmt_name(video_out_ctx->pix_fmt));
+        uint64_t number;
         const AVDictionaryEntry *opts_level = av_dict_get(opts, "level", nullptr, AV_DICT_MATCH_CASE);
-        if (opts_level) {
-          video_out_ctx->level = std::stoul(opts_level->value);
+        if (opts_level and option_number(opts_level, number)) {
+          video_out_ctx->level = number;
         //} else if (!video_out_ctx->level) {
           //video_out_ctx->level = 32;
         }
         const AVDictionaryEntry *opts_gop_size = av_dict_get(opts, "gop_size", nullptr, AV_DICT_MATCH_CASE);
         if (opts_gop_size) {
-          video_out_ctx->gop_size = std::stoul(opts_gop_size->value);
+          if (option_number(opts_gop_size, number)) video_out_ctx->gop_size = number;
           av_dict_set(&opts, "gop_size", nullptr, AV_DICT_MATCH_CASE);
         }
         //zm_dump_codec(video_out_ctx);
         const AVDictionaryEntry *opts_bitrate = av_dict_get(opts, "bitrate", nullptr, AV_DICT_MATCH_CASE);
         if (opts_bitrate) {
-          video_out_ctx->bit_rate = std::stoul(opts_bitrate->value);
+          if (option_number(opts_bitrate, number)) video_out_ctx->bit_rate = number;
           av_dict_set(&opts, "bitrate", nullptr, AV_DICT_MATCH_CASE);
         } else {
           opts_bitrate = av_dict_get(opts, "bit_rate", nullptr, AV_DICT_MATCH_CASE);
           if (opts_bitrate) {
-            video_out_ctx->bit_rate = std::stoul(opts_bitrate->value);
+            if (option_number(opts_bitrate, number)) video_out_ctx->bit_rate = number;
             av_dict_set(&opts, "bit_rate", nullptr, AV_DICT_MATCH_CASE);
           }
         }
@@ -588,6 +607,7 @@ bool VideoStore::open() {
           return false;
         }
         avcodec_parameters_copy(video_out_stream->codecpar, video_in_stream->codecpar);
+        zm_clear_incompatible_codec_tag(oc->oformat, video_out_stream->codecpar);
         video_out_stream->avg_frame_rate = video_in_stream->avg_frame_rate;
         zm_dump_stream(video_out_stream);
       } else {
@@ -653,9 +673,12 @@ bool VideoStore::open() {
             Error("could not allocate codec ctx for AAC");
           } else {
             audio_out_stream = avformat_new_stream(oc, audio_out_codec);
-            audio_out_stream->time_base = audio_in_stream->time_base;
-
-            setup_resampler();
+            if (!audio_out_stream) {
+              Error("Could not allocate new audio stream");
+            } else {
+              audio_out_stream->time_base = audio_in_stream->time_base;
+              setup_resampler();
+            }
           } // end fail to alloc audio_out_ctx
         } // codec opened
       }  // end if found AAC codec
@@ -700,6 +723,7 @@ bool VideoStore::open() {
       } // end if audio_out_stream
     } // end if is AAC
 
+    // Audio setup can fail above, leaving these null; record without audio then
     if (audio_out_stream && audio_out_ctx) {
       if (oc->oformat->flags & AVFMT_GLOBALHEADER) {
         audio_out_ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
@@ -771,6 +795,13 @@ bool VideoStore::open() {
   }
   av_dict_free(&opts);
   if (ret < 0) {
+    for (unsigned int i = 0; i < oc->nb_streams; i++) {
+      const AVCodecID codec_id = oc->streams[i]->codecpar->codec_id;
+      if (avformat_query_codec(oc->oformat, codec_id, FF_COMPLIANCE_NORMAL) == 0) {
+        Error("The %s container can't hold %s, choose another Output Container or codec for this monitor",
+              oc->oformat->name, avcodec_get_name(codec_id));
+      }
+    }
     Error("Error occurred when writing out file header to %s: %s",
           filename.c_str(), av_make_error_string(ret).c_str());
     avio_closep(&oc->pb);
@@ -1996,8 +2027,11 @@ int VideoStore::write_packet(AVPacket *pkt, AVStream *stream) {
 
   int ret = av_interleaved_write_frame(oc, pkt);
   if (ret != 0) {
-    Error("Error writing packet: %s", av_make_error_string(ret).c_str());
     write_packet_failed_ = true;
+    if (packet_write_failures == 0) {
+      Error("Error writing packet: %s", av_make_error_string(ret).c_str());
+    }
+    packet_write_failures++;
   } else {
     Debug(4, "Success writing packet");
     packets_written++;
@@ -2155,6 +2189,10 @@ void VideoStore::finalize() {
       Warning("Could not index %s; it will play, but a player must read it all "
               "before the first frame", filename.c_str());
     }
+  }
+
+  if (packet_write_failures > 1) {
+    Warning("%d packets could not be written to %s", packet_write_failures, filename.c_str());
   }
 }
 

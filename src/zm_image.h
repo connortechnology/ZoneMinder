@@ -327,6 +327,7 @@ SwsContext *sws_convert_context;
   // rather than an Assign() of the full size image followed by a Scale().
   // Keeps the buffer from the last call when the size has not changed.
   bool AssignScaled(const Image &image, unsigned int new_width, unsigned int new_height);
+  bool ScaleFrom(const Image &src, unsigned int x, unsigned int y);
 
   void Deinterlace_Discard();
   void Deinterlace_Linear();

@@ -103,6 +103,7 @@ extern "C" {
 
 /* A single function to initialize ffmpeg, to avoid multiple initializations */
 void FFMPEGInit();
+bool zm_load_avdevice();
 void FFMPEGDeInit();
 
 enum _AVPIXELFORMAT GetFFMPEGPixelFormat(unsigned int p_colours, unsigned p_subpixelorder);
@@ -156,6 +157,7 @@ void zm_dump_stream_format(AVFormatContext *ic, int i, int index, int is_output)
 void zm_dump_codec(const AVCodecContext *codec);
 void zm_dump_codecpar(const AVCodecParameters *par);
 const std::string get_codecpar_string(const AVCodecParameters *par);
+void zm_clear_incompatible_codec_tag(const AVOutputFormat *format, AVCodecParameters *par);
 
 #if LIBAVUTIL_VERSION_CHECK(57, 28, 100, 28, 0)
 #define zm_dump_frame(frame, text) Debug(1, "%s: format %d %s sample_rate %" PRIu32 " nb_samples %d" \
@@ -646,6 +648,14 @@ bool av_log_should_print(AvLogRepeat &state, const std::string &message,
 #ifdef HAVE_QUADRA
 int ni_get_cardno(const AVCodecContext *ctx);
 #endif
+// Like av_dict_parse_string() with "=" between key and value, but an entry with
+// no '=' or no value is skipped with a warning. av_dict_parse_string() would
+// otherwise make it the front of the next entry's key (or take the next entry
+// as its value), silently dropping that option.
+int zm_parse_options(AVDictionary **pm, const std::string &options, const char *separators);
+// Reads a non-negative number the way ffmpeg options do, so "2M" and "500k"
+// work. Returns false, leaving out untouched, for anything else.
+bool zm_parse_option_number(const char *text, uint64_t &out);
 int libjpeg_to_ffmpeg_qv(int libjpeg_quality);
 
 // The jpeg encoder that can take a frame from this device without downloading

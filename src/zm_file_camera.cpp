@@ -20,6 +20,7 @@
 #include "zm_file_camera.h"
 
 #include "zm_packet.h"
+#include "zm_signal.h"
 #include <sys/stat.h>
 
 FileCamera::FileCamera(

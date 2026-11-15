@@ -56,6 +56,13 @@
 #include <vector>
 #if HAVE_LIBCURL
 #include <curl/curl.h>
+
+// zmc is multithreaded, so curl must not use signals to time out name lookups
+inline void zm_curl_set_timeouts(CURL *curl) {
+  curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+}
 #endif  // HAVE_LIBCURL
 
 
@@ -771,6 +778,8 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   int             audio_threshold;   // 0-100; 0 means detection is off
   int             audio_alarm_score; // Score contributed while over threshold
   AudioDetector   audio_detector;
+  static constexpr int AUDIO_STALE_SECONDS = 2;  // Silence from the audio stream after which the level is dropped
+  SystemTimePoint last_audio_packet_time;
   bool            wallclock_timestamps; // Whether to use wallclock pts/dts instead of values from ffmpeg
   int             output_source_stream;
 
@@ -842,6 +851,7 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
                       // errors.
   int startup_delay;  // Seconds to sleep before connecting to camera
   unsigned int zone_count;
+  bool zones_loaded;  // false: connect() counts zones instead of constructing them
 
   int capture_max_fps;
 
@@ -870,6 +880,8 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   // figure that moves with session opens, not with frames.
   static constexpr Seconds kCardUsageSampleInterval{30};
   SystemTimePoint last_card_usage_sample_;
+  int last_fps_report_count;  // capture_image_count when the fps line was last logged
+  bool fps_reported;          // whether an fps line has been logged since connect
   // Written by the analysis thread, read by UpdateFPS on the capture thread.
   std::atomic<int> motion_frame_count;      // How many frames have had motion detection performed on them.
   int        last_motion_frame_count; // last value of motion_frame_count when calculating fps
@@ -970,6 +982,8 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   // Whether a packet must be held back from the codec while it waits for a
   // keyframe; clears the wait once the keyframe comes.
   bool SkipUntilKeyframe(bool keyframe);
+  // A quarter turn needs 4:2:0 chroma, so 4:2:2 is converted when rotating.
+  static bool CanPassthroughFormat(AVPixelFormat format, Orientation orientation);
   packetqueue_iterator  *analysis_it;
   std::unique_ptr<AnalysisThread> analysis_thread;
   packetqueue_iterator *decoder_it;
@@ -991,7 +1005,8 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   std::unique_ptr<MQTT> mqtt;
 #endif
 
-  const unsigned char *privacy_bitmask;
+  std::unique_ptr<Image> privacy_image;
+  const unsigned char  *privacy_bitmask;
 
   std::string linked_monitors_string;
 
@@ -1147,8 +1162,12 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   // packets will never produce output). Marks them decoded so the analysis
   // thread can advance past them.
   void flushDecoderQueue();
-  inline bool Enabled() const { return shared_data->capturing; }
-  DecodingOption Decoding() const { return decoding; }
+  inline bool Enabled() const {
+    return shared_data->capturing != CAPTURING_NONE;
+  }
+  DecodingOption Decoding() const {
+    return decoding;
+  }
   const std::string &DecoderName() const { return decoder_name; }
   const std::string &DecoderHWAccelName() const { return decoder_hwaccel_name; }
   const std::string &DecoderHWAccelDevice() const { return decoder_hwaccel_device; }
@@ -1180,6 +1199,10 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
     return false;
   }
   inline const char *EventPrefix() const { return event_prefix.c_str(); }
+  // Video packets openEvent walks back: skipped frames stretch the alarm frame count
+  inline int PreEventWalkBack() const {
+    return std::max(pre_event_count, alarm_frame_count * (motion_frame_skip + 1));
+  }
   inline bool Ready() const {
     if (!packetqueue.get_max_keyframe_interval()) {
       Debug(4, "Not ready because no keyframe interval.");
@@ -1358,7 +1381,7 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   };
 
 
-  int GetImage(int32_t index=-1, int scale=100);
+  bool GetImage(int32_t index=-1, int scale=100);
   std::shared_ptr<ZMPacket> getSnapshot( int index=-1 );
   SystemTimePoint GetTimestamp(int index = -1);
   void UpdateAdaptiveSkip();
@@ -1372,8 +1395,8 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   uint64_t GetLastEventId() const;
   double GetFPS() const;
   void UpdateFPS();
-  void ForceAlarmOn(int force_score, const char *force_case,
-                    const char *force_text = "");
+  void ResetFPSBaseline();
+  void ForceAlarmOn( int force_score, const char *force_case, const char *force_text="" );
   void ForceAlarmOff();
   void CancelForced();
   TriggerState GetTriggerState() const { return trigger_data ? trigger_data->trigger_state : TRIGGER_CANCEL; }
@@ -1566,9 +1589,10 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   static const char *ActionCommandName(const std::string &action_type);
   static std::string ActionMessage(const EventAction &action);
   static const char *ActionTriggerName(EventAction::TriggerOn trigger);
-  bool DumpSettings(char *output, bool verbose);
-  void DumpZoneImage(const char *zone_string = 0);
-  std::vector<Group *> Groups();
+
+  bool DumpSettings( char *output, bool verbose );
+  bool DumpZoneImage( const char *zone_string=0 );
+  std::vector<Group *>  Groups();
   StringVector GroupNames();
 
   static std::vector<std::shared_ptr<Monitor>> LoadMonitors(

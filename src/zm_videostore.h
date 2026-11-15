@@ -65,6 +65,7 @@ class VideoStore {
   unsigned int frame_count;
   int64_t encode_total_us_;
   int encode_count_;
+  int packet_write_failures;
   bool video_encoded;  // true once at least one frame has been sent to the video encoder
   bool video_encoder_failed;  // true after a fatal encoder error; skip further sends
   // True when video_out_ctx draws frames from the decoder's own pool. Only then

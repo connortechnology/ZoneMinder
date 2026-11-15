@@ -39,6 +39,8 @@ void AnalysisThread::Join() {
 static constexpr int kAnalysisSlackFrames = 4;
 
 void AnalysisThread::Run() {
+  // Report a stack overflow on this thread like one in main.
+  zmSetThreadAltStack();
   SystemTimePoint last_analysis_time = std::chrono::system_clock::now();
 
   // Analyse_Quadra is 23% of the frame interval and the reference blend 4%,
