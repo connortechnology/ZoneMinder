@@ -465,9 +465,9 @@ bool MonitorStream::sendFrame(Image *image, SystemTimePoint timestamp) {
               l_width, l_height, config.jpeg_stream_quality);
         }
         if (!send_image->EncodeJpeg(img_buffer, &img_buffer_size, mJpegCodecContext, mJpegSwsContext)) {
-          fputs("Content-Type: image/jpeg\r\n", stdout);
           return false;
         }
+        fputs("Content-Type: image/jpeg\r\n", stdout);
         break;
       case STREAM_RAW :
         fputs("Content-Type: image/x-rgb\r\n", stdout);
