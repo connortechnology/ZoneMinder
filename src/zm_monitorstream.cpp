@@ -412,7 +412,6 @@ bool MonitorStream::sendFrame(Image *image, SystemTimePoint timestamp) {
   }
   Image *send_image = prepareImage(image);
 
-  fputs("--" BOUNDARY "\r\n", stdout);
   // Calculate how long it takes to actually send the frame
   TimePoint send_start_time = std::chrono::steady_clock::now();
 
@@ -436,6 +435,7 @@ bool MonitorStream::sendFrame(Image *image, SystemTimePoint timestamp) {
 
     /* double pts = */ vid_stream->EncodeImage(*send_image, config.mpeg_timed_frames, delta_time.count());
   } else {
+    fputs("--" BOUNDARY "\r\n", stdout);
     // prepareImage has already applied scale and zoom, so send_image is
     // already the size to send. Multiplying by scale a second time here sent
     // a 50% view at 25%, which the browser then scaled back up. The snapshot
@@ -1004,7 +1004,7 @@ void MonitorStream::runStream() {
               break;
             }
             frame_count++;
-            if (frame_count == 0) {
+            if (frame_count == 1) {
               // Chrome will not display the first frame until it receives another.
               // Firefox is fine.  So just send the first frame twice.
               if (!sendFrame(send_image, last_frame_timestamp)) {

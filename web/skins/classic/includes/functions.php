@@ -143,7 +143,7 @@ echo output_cache_busted_stylesheet_links(array(
   if ($baseCssPhpFile) require_once($baseCssPhpFile);
   if ($css != 'base') {
     $skinCssPhpFile = getSkinFile('css/'.$css.'/skin.css.php');
-    if ($skinCssPhpFile) require_once($baseCssPhpFile);
+    if ($skinCssPhpFile) require_once($skinCssPhpFile);
   }
 
   $baseViewCssPhpFile = getSkinFile('/css/base/views/'.$basename.'.css.php');
@@ -1093,7 +1093,7 @@ function getStorageHTML() {
     $result .= '</li>'.PHP_EOL;
   } else {
     $result .= '<li id="getStorageHTML" class="nav-item dropdown mx-2">'.PHP_EOL;
-    $result .= '<a class="dropdown-toggle mr-2 '.$class.'" href="#" id="dropdown_storage" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false"><i class="material-icons md-18 mr-1">folder_shared</i>Storage</a>'.PHP_EOL;
+    $result .= '<a class="dropdown-toggle mr-2 '.$class.'" href="#" id="dropdown_storage" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false"><i class="material-icons md-18 mr-1">folder_shared</i>' . translate("Storage") . '</a>'.PHP_EOL;
     $result .= '<div class="dropdown-menu" aria-labelledby="dropdown_storage">'.PHP_EOL;
     
     foreach ( $storage_areas as $area ) {  
@@ -1220,7 +1220,7 @@ function getZMVersionHTML() {
     $class = 'text-danger';
     $tt_text = translate('RunLocalUpdate');
     $content = 'v'.ZM_VERSION.PHP_EOL;
-  } else if ( verNum( ZM_DYN_LAST_VERSION ) <= verNum( ZM_VERSION ) || !ZM_CHECK_FOR_UPDATES || ZM_DYN_NEXT_REMINDER > time() ) { // No update needed
+  } else if ( verNum( ZM_DYN_LAST_VERSION ) <= verNum( ZM_VERSION ) || verNum( ZM_DYN_LAST_VERSION ) <= verNum( ZM_DYN_CURR_VERSION ) || !ZM_CHECK_FOR_UPDATES || ZM_DYN_NEXT_REMINDER > time() ) { // No update needed
     $class = ''; // Don't change the text color under normal conditions
     $tt_text = translate('UpdateNotNecessary');
     $content = 'v'.ZM_VERSION.PHP_EOL;

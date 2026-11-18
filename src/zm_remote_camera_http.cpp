@@ -163,10 +163,12 @@ int RemoteCameraHttp::Connect() {
     if ( connect( sd, p->ai_addr, p->ai_addrlen ) < 0 ) {
       close(sd);
       sd = -1;
-      char buf[INET6_ADDRSTRLEN];
-      struct sockaddr_in *addr;
-      addr = (struct sockaddr_in *)p->ai_addr;
-      inet_ntop(AF_INET, &(addr->sin_addr), buf, sizeof(buf));
+      char buf[INET6_ADDRSTRLEN] = "n/a";
+      if (p->ai_family == AF_INET) {
+        inet_ntop(AF_INET, &((struct sockaddr_in *)p->ai_addr)->sin_addr, buf, sizeof(buf));
+      } else if (p->ai_family == AF_INET6) {
+        inet_ntop(AF_INET6, &((struct sockaddr_in6 *)p->ai_addr)->sin6_addr, buf, sizeof(buf));
+      }
 
       Warning("Can't connect to remote camera mid: %d at %s: %s", monitor->Id(), buf, strerror(errno));
       continue;
@@ -215,12 +217,14 @@ int RemoteCameraHttp::SendRequest() {
 
 int RemoteCameraHttp::ReadData(Buffer &buffer, unsigned int bytes_expected) {
   fd_set rfds;
-  FD_ZERO(&rfds);
-  FD_SET(sd, &rfds);
-
-  struct timeval temp_timeout = timeout;
-
-  int n_found = select(sd+1, &rfds, nullptr, nullptr, &temp_timeout);
+  struct timeval temp_timeout;
+  int n_found;
+  do {
+    FD_ZERO(&rfds);
+    FD_SET(sd, &rfds);
+    temp_timeout = timeout;
+    n_found = select(sd+1, &rfds, nullptr, nullptr, &temp_timeout);
+  } while (n_found < 0 && errno == EINTR);
   if (n_found == 0) {
     Debug(1, "Select timed out timeout was %" PRIi64 " secs %" PRIi64" usecs",
           static_cast<int64>(temp_timeout.tv_sec),
@@ -236,9 +240,6 @@ int RemoteCameraHttp::ReadData(Buffer &buffer, unsigned int bytes_expected) {
     }
     // Why are we disconnecting?  It's just a timeout, meaning that data wasn't available.
     //Disconnect();
-    return 0;
-  } else if (n_found == EINTR) {
-    Error("Select interrupted");
     return 0;
   } else if (n_found < 0) {
     Error("Select error: %s", strerror(errno));
@@ -322,6 +323,21 @@ int RemoteCameraHttp::GetData() {
     std::this_thread::sleep_for(Milliseconds(100));
   }
   return buffer_len;
+}
+
+std::string RemoteCameraHttp::ParseBoundary(const char *text) {
+  const bool quoted = (*text == '"');
+  if (quoted) text++;
+  text += strspn(text, "-");
+  size_t len = quoted ? strcspn(text, "\"") : strcspn(text, "; \t\r\n");
+  return std::string(text, len);
+}
+
+bool RemoteCameraHttp::IsBoundaryLine(const char *line, const char *boundary, size_t len) {
+  // Cameras disagree on whether the boundary parameter includes the delimiter's dashes,
+  // so accept any run of two or more.
+  const size_t dashes = strspn(line, "-");
+  return dashes >= 2 && strncasecmp(line + dashes, boundary, len) == 0;
 }
 
 int RemoteCameraHttp::ParseContentLength(const char *text, unsigned long long image_size) {
@@ -823,10 +839,9 @@ int RemoteCameraHttp::GetResponse() {
               start_ptr = strcasestr(end_ptr, boundary_match);
               if (start_ptr) {
                 start_ptr += boundary_match_len;
-                if (*start_ptr == '"') start_ptr++;
-                start_ptr += strspn(start_ptr, "-");
+                std::string boundary = ParseBoundary(start_ptr);
                 zm_strncpy(content_boundary, "--", sizeof(content_boundary));
-                zm_strncpy(content_boundary+2, start_ptr, sizeof(content_boundary)-2, strcspn(start_ptr, "\"; \t\r\n"));
+                zm_strncpy(content_boundary+2, boundary.c_str(), sizeof(content_boundary)-2);
                 content_boundary_len = strlen(content_boundary);
                 Debug(3, "Got content boundary '%s'", content_boundary);
               } else {
@@ -926,7 +941,7 @@ int RemoteCameraHttp::GetResponse() {
             //subheaders[n_subheaders++] = subheader_ptr;
             n_subheaders++;
 
-            if ( !boundary_header && (strncasecmp(subheader_ptr, content_boundary, content_boundary_len) == 0) ) {
+            if (!boundary_header && IsBoundaryLine(subheader_ptr, content_boundary + 2, content_boundary_len - 2)) {
               boundary_header = subheader_ptr;
               Debug(4, "Got boundary subheader '%s'", subheader_ptr);
             } else if (

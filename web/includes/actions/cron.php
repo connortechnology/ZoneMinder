@@ -40,9 +40,9 @@ if ($action == 'save') {
   $posted = isset($_REQUEST['newJob']) && is_array($_REQUEST['newJob'])
     ? $_REQUEST['newJob'] : array();
 
-  $schedule = isset($posted['Schedule']) ? trim($posted['Schedule']) : '';
-  $command = isset($posted['Command']) ? trim($posted['Command']) : '';
-  $name = isset($posted['Name']) ? trim($posted['Name']) : '';
+  $schedule = isset($posted['Schedule']) && is_string($posted['Schedule']) ? trim($posted['Schedule']) : '';
+  $command = isset($posted['Command']) && is_string($posted['Command']) ? trim($posted['Command']) : '';
+  $name = isset($posted['Name']) && is_string($posted['Name']) ? trim($posted['Name']) : '';
 
   // Both are checked here rather than only in the browser: this is the last
   // point before the strings become a crontab line.
@@ -63,9 +63,10 @@ if ($action == 'save') {
 
     $id = empty($_REQUEST['id']) ? 0 : validInt($_REQUEST['id']);
     $job = $id ? ZM\CronJob::find_one(array('Id'=>$id)) : new ZM\CronJob();
-    if (!$job) $job = new ZM\CronJob();
 
-    if ($job->Id()) {
+    if (!$job) {
+      $cron_error = 'The scheduled task no longer exists';
+    } else if ($job->Id()) {
       if ($job->save($values)) {
         ZM\Info('Updated scheduled task '.$job->Id().': '.$schedule.' '.$command);
       } else {
@@ -78,7 +79,7 @@ if ($action == 'save') {
     }
   }
 } else if ($action == 'delete') {
-  if (!empty($_REQUEST['markIds'])) {
+  if (!empty($_REQUEST['markIds']) && is_array($_REQUEST['markIds'])) {
     foreach ($_REQUEST['markIds'] as $id) {
       $id = validInt($id);
       if (!$id) continue;

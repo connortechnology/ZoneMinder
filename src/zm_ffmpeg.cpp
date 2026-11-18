@@ -880,10 +880,19 @@ AVBufferRef *encoder_share_pool(AVBufferRef *decoder_pool, bool software_frames_
 
 int zm_parse_options(AVDictionary **pm, const std::string &options, const char *separators) {
   const std::string key_terminators = std::string("=") + separators;
+  const bool hash_comments = strchr(separators, '#') != nullptr;
   const char *p = options.c_str();
   int result = 0;
 
   while (*p) {
+    if (hash_comments) {
+      p += strspn(p, " \t\r");
+      if (*p == '#') {
+        p += strcspn(p, "\n");
+        if (*p) p++;
+        continue;
+      }
+    }
     char *key = av_get_token(&p, key_terminators.c_str());
     if (!key) return AVERROR(ENOMEM);
     char *value = nullptr;
@@ -912,6 +921,7 @@ int zm_parse_options(AVDictionary **pm, const std::string &options, const char *
     }
     av_free(key);
     av_free(value);
+    if (hash_comments and *p == '#') p += strcspn(p, "\n");
     if (*p) p++;
   }
   return result;
@@ -1485,6 +1495,8 @@ enum AVPixelFormat fix_deprecated_pix_fmt(enum AVPixelFormat fmt) {
     return AV_PIX_FMT_YUV444P;
   case AV_PIX_FMT_YUVJ440P :
     return AV_PIX_FMT_YUV440P;
+  case AV_PIX_FMT_YUVJ411P :
+    return AV_PIX_FMT_YUV411P;
   case AV_PIX_FMT_NONE :
   case AV_PIX_FMT_YUVJ420P :
     return AV_PIX_FMT_YUV420P;
@@ -1524,18 +1536,30 @@ bool pix_fmt_is_jpeg_range(enum AVPixelFormat fmt) {
   }
 }
 
+static bool pix_fmt_is_planar_yuv(enum AVPixelFormat fmt) {
+  // Non-J YUV formats (limited range by swscale default), not RGB or gray.
+  const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(fix_deprecated_pix_fmt(fmt));
+  return desc && !(desc->flags & (AV_PIX_FMT_FLAG_RGB | AV_PIX_FMT_FLAG_PAL | AV_PIX_FMT_FLAG_BAYER))
+         && desc->nb_components >= 3;
+}
+
 void zm_sws_set_ranges(struct SwsContext *ctx,
                        enum AVPixelFormat original_src_fmt,
                        enum AVPixelFormat original_dst_fmt) {
-  // swscale assumes limited (MPEG) range on both ends by default. When either
-  // end was a full-range JPEG format (YUVJ*) that got mapped to its non-J
-  // equivalent by fix_deprecated_pix_fmt(), swscale would otherwise treat the
-  // full-range samples as limited and wash the colours out (or crush them, on
-  // output). Tell it which ends are full range so the maths is correct. Pass
-  // the ORIGINAL (pre-fix) formats so we can tell what the caller really has.
-  const int want_src_range = pix_fmt_is_jpeg_range(original_src_fmt) ? 1 : 0;
-  const int want_dst_range = pix_fmt_is_jpeg_range(original_dst_fmt) ? 1 : 0;
-  if (!want_src_range and !want_dst_range) return;
+  // swscale assumes limited (MPEG) range by default. When a side of the
+  // conversion was a full-range JPEG format (YUVJ*) that got mapped to its
+  // non-J equivalent by fix_deprecated_pix_fmt(), swscale would otherwise
+  // treat full-range samples as limited (or crush full-range output into
+  // limited range) and wash the colours out. Tell it which sides are full
+  // range. Pass the ORIGINAL (pre-fix) formats.
+  const bool src_full = pix_fmt_is_jpeg_range(original_src_fmt);
+  const bool dst_full = pix_fmt_is_jpeg_range(original_dst_fmt);
+  // sws_getCachedContext() keeps the same context across a YUVJ420P ->
+  // YUV420P change, because both map to one format. A range set for the
+  // earlier frame must therefore be put back to limited for a plain YUV side.
+  const bool src_yuv = pix_fmt_is_planar_yuv(original_src_fmt);
+  const bool dst_yuv = pix_fmt_is_planar_yuv(original_dst_fmt);
+  if (!src_full && !dst_full && !src_yuv && !dst_yuv) return;
 
   int *inv_table, *table;
   int srcRange, dstRange, brightness, contrast, saturation;
@@ -1544,12 +1568,13 @@ void zm_sws_set_ranges(struct SwsContext *ctx,
   if (sws_getColorspaceDetails(ctx, &inv_table, &srcRange, &table, &dstRange,
                                &brightness, &contrast, &saturation) < 0)
     return;
-  // Only push a full-range flag on, never off: a caller that handed us a
-  // non-J format may legitimately have set full range itself.
-  const int new_src_range = srcRange | want_src_range;
-  const int new_dst_range = dstRange | want_dst_range;
-  if (new_src_range == srcRange and new_dst_range == dstRange) return;
-  sws_setColorspaceDetails(ctx, inv_table, new_src_range, table, new_dst_range,
+  bool changed = false;
+  const int want_src = src_full ? 1 : 0;
+  const int want_dst = dst_full ? 1 : 0;
+  if ((src_full || src_yuv) && srcRange != want_src) { srcRange = want_src; changed = true; }
+  if ((dst_full || dst_yuv) && dstRange != want_dst) { dstRange = want_dst; changed = true; }
+  if (!changed) return;
+  sws_setColorspaceDetails(ctx, inv_table, srcRange, table, dstRange,
                            brightness, contrast, saturation);
 }
 

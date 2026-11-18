@@ -24,22 +24,23 @@ sub open
     my $self = shift;
     $self->loadMonitor();
 
-    if ( ( $self->{Monitor}->{ControlAddress} =~ /^(?<PROTOCOL>https?:\/\/)?(?<USERNAME>[^:@]+)?:?(?<PASSWORD>[^\/@]+)?@?(?<ADDRESS>.*)$/ ) ) {
-        $PROTOCOL = $+{PROTOCOL} if $+{PROTOCOL};
-        $USERNAME = $+{USERNAME} if $+{USERNAME};
-        $PASSWORD = $+{PASSWORD} if $+{PASSWORD};
-        $ADDRESS = $+{ADDRESS} if $+{ADDRESS};
-    } else {
-        Error('Failed to parse auth from address ' . urlForLog($self->{Monitor}->{ControlAddress}));
-        $ADDRESS = $self->{Monitor}->{ControlAddress};
-    }
-    if ( !($ADDRESS =~ /:/) ) {
-        $ADDRESS .= ':80';
-    }
-
     use LWP::UserAgent;
     $self->{ua} = LWP::UserAgent->new;
     $self->{ua}->agent( "ZoneMinder Control Agent/".ZoneMinder::Base::ZM_VERSION );
+
+    if (!$self->guess_credentials()) {
+        Error('Failed to parse auth from address ' . urlForLog($self->{Monitor}->{ControlAddress}));
+        $ADDRESS = $self->{Monitor}->{ControlAddress};
+        if ( !($ADDRESS =~ /:/) ) {
+            $ADDRESS .= ':80';
+        }
+    } else {
+        $PROTOCOL = ($self->{uri} && $self->{uri}->scheme) ? $self->{uri}->scheme . '://' : 'http://';
+        $USERNAME = $self->{username} if defined $self->{username};
+        $PASSWORD = $self->{password} if defined $self->{password};
+        $ADDRESS = $self->{address} if defined $self->{address};
+    }
+
     $self->{state} = 'closed';
     Debug( "sendCmd credentials control address:'".$ADDRESS
             ."'  realm:'" . $REALM
@@ -131,7 +132,7 @@ sub sendPutRequest {
     my $url = $PROTOCOL . $ADDRESS . $url_path;
     my $req = HTTP::Request->new(PUT=>$url);
     if(defined($content)) {
-        $req->content_type("application/x-www-form-urlencoded; charset=UTF-8");
+        $req->content_type("application/xml; charset=UTF-8");
         $req->content('<?xml version="1.0" encoding="UTF-8"?>' . "\n" . $content);
     }
 
@@ -296,7 +297,10 @@ sub presetSet
     my $res = $sth->execute($self->{Monitor}->{Id}, $preset_id)
         or Fatal("Can't execute sql '$sql': " . $sth->errstr());
     my $control_preset_row = $sth->fetchrow_hashref();
-    my $new_label_name = $control_preset_row->{'Label'};
+    my $new_label_name = $control_preset_row->{'Label'} // '';
+    $new_label_name =~ s/&/&amp;/g;
+    $new_label_name =~ s/</&lt;/g;
+    $new_label_name =~ s/>/&gt;/g;
 
     my $url_path = "/PSIA/PTZ/channels/1/presets/" . $preset_id;
     my $ptz_preset_data = '<PTZPreset>';

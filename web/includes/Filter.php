@@ -224,6 +224,45 @@ class Filter extends ZM_Object {
     return implode(', ', $out);
   }
 
+  // The SQL for the filterdebug modal, laid out as ZoneMinder::Filter::Sql
+  // builds it for zmfilter: the terms in one parenthesised group, then the
+  // conditions the Auto* actions add, then the lock exclusion.
+  public function debugSql() {
+    $sql = 'SELECT E.*,M.Name AS MonitorName,M.DefaultScale FROM Monitors AS M INNER JOIN Events AS E ON (M.Id = E.MonitorId)';
+    $conditions = array();
+    $terms_sql = trim($this->sql());
+    if ($terms_sql !== '') $conditions[] = '( '.$terms_sql.' )';
+
+    $auto_terms = array();
+    foreach (array(
+      'AutoArchive'   => 'E.Archived = 0',
+      'AutoUnarchive' => 'E.Archived = 1',
+      'AutoVideo'     => 'E.Videoed = 0',
+      'AutoUpload'    => 'E.Uploaded = 0',
+      'AutoEmail'     => 'E.Emailed = 0',
+      'AutoMessage'   => 'E.Messaged = 0',
+      'AutoExecute'   => 'E.Executed = 0',
+    ) as $field => $term) {
+      if ($this->$field()) $auto_terms[] = $term;
+    }
+    if (count($auto_terms)) $conditions[] = '( '.implode(' or ', $auto_terms).' )';
+
+    if ($this->LockRows() and $this->skip_locked())
+      $conditions[] = 'NOT EXISTS (SELECT 1 FROM Events_Lock AS EL WHERE EL.EventId=E.Id AND EL.ExpiresAt>NOW())';
+
+    if (count($conditions)) $sql .= "\n    WHERE ".implode("\n    AND ", $conditions);
+
+    // Id and Name are columns of both Events and Monitors, so they have to be qualified.
+    $order = self::buildSortSql($this->sort_field(), $this->sort_asc() ? 'ASC' : 'DESC', function($col) {
+      if ($col == 'MonitorName') return 'M.Name';
+      if ($col == 'Tags') return '(SELECT GROUP_CONCAT(Name) FROM Tags WHERE Id IN (SELECT TagId FROM Events_Tags WHERE Events_Tags.EventId=E.Id))';
+      return 'E.'.$col;
+    });
+    if ($order !== '') $sql .= ' ORDER BY '.$order;
+    if ($this->limit()) $sql .= ' LIMIT '.(int)$this->limit();
+    return $sql;
+  }
+
   # If no storage areas are specified in the terms, then return all
   public function get_StorageAreas() {
     $storage_ids = array();
@@ -855,6 +894,26 @@ class Filter extends ZM_Object {
     return $this;
   }
 
+  // The sort field names a filter attribute; map it to a column of the Events() query,
+  // as ZoneMinder::Filter does in Perl. MonitorName and Tags are not Events columns.
+  public static function events_sort_sql($sort_field) {
+    if (!$sort_field) return '';
+    $parts = array();
+    foreach (explode(',', $sort_field) as $part) {
+      $parts[] = preg_replace_callback('/^\s*([A-Za-z][A-Za-z0-9_]*)/', function($m) {
+        switch ($m[1]) {
+        case 'MonitorName': return 'M.Name';
+        case 'Tags': return '(SELECT GROUP_CONCAT(Name) FROM Tags WHERE Id IN (SELECT TagId FROM Events_Tags WHERE Events_Tags.EventId=E.Id))';
+        case 'StartTime': return 'E.StartDateTime';
+        case 'EndTime': return 'E.EndDateTime';
+        case 'Secs': return 'E.Length';
+        default: return 'E.'.$m[1];
+        }
+      }, trim($part));
+    }
+    return implode(', ', $parts);
+  }
+
   function Events() {
     $events = array();
     if (!$this->test_pre_sql_conditions()) {
@@ -864,10 +923,12 @@ class Filter extends ZM_Object {
 
     $where = $this->sql() ? ' WHERE ('.$this->sql().')' : '';
     // $where = ' WHERE ( T.Name = "Bird" )';
-    $sort = $this->sort_field() ? $this->sort_field() .' '.($this->sort_asc() ? 'ASC' : 'DESC') : '';
+    $sort_sql = self::events_sort_sql($this->sort_field());
+    $sort = $sort_sql ? $sort_sql.' '.($this->sort_asc() ? 'ASC' : 'DESC') : '';
 
+    // DISTINCT: the tag joins give one row per tag, and LIMIT must count events, not tags.
     $col_str = '
-    E.*, 
+    DISTINCT E.*,
     M.Name 
      AS Monitor';
 
@@ -895,11 +956,7 @@ class Filter extends ZM_Object {
     $query = dbQuery($sql);
     if (!$query) return $events;
 
-    // The tag joins give one row per tag, so an event with several tags comes back more than once
-    $seen = array();
     while ($row = dbFetchNext($query)) {
-      if (isset($seen[$row['Id']])) continue;
-      $seen[$row['Id']] = true;
       $event = new Event($row);
       $event->remove_from_cache();
       if (!$this->test_post_sql_conditions($event)) {
@@ -1122,13 +1179,13 @@ class Filter extends ZM_Object {
 
         } else if ( $term['attr'] == 'DateTime' || $term['attr'] == 'StartDateTime' || $term['attr'] == 'EndDateTime') {
           $html .= '<td>'.htmlSelect("filter[Query][terms][$i][op]", $opTypes, $term['op'], ['class'=>'chosen chosen-full-width']).'</td>'.PHP_EOL;
-          $html .= '<td><input type="text" name="filter[Query][terms]['.$i.'][val]" id="filter[Query][terms]['.$i.'][val]" value="'.(isset($term['val'])?validHtmlStr(str_replace('T', ' ', $term['val'])):'').'"/></td>'.PHP_EOL;
+          $html .= '<td><input type="text" name="filter[Query][terms]['.$i.'][val]" id="filter[Query][terms]['.$i.'][val]" value="'.(isset($term['val'])?validHtmlStr(preg_replace('/(\d)T(\d)/', '$1 $2', $term['val'])):'').'"/></td>'.PHP_EOL;
         } else if ( $term['attr'] == 'Date' || $term['attr'] == 'StartDate' || $term['attr'] == 'EndDate' ) {
           $html .= '<td>'.htmlSelect("filter[Query][terms][$i][op]", $opTypes, $term['op'], ['class'=>'chosen chosen-full-width']).'</td>'.PHP_EOL;
           $html .= '<td><input type="text" name="filter[Query][terms]['.$i.'][val]" id="filter[Query][terms]['.$i.'][val]" value="'.(isset($term['val'])?validHtmlStr($term['val']):'').'"/></td>'.PHP_EOL;
         } else if ( $term['attr'] == 'StartTime' || $term['attr'] == 'EndTime' ) {
           $html .= '<td>'.htmlSelect("filter[Query][terms][$i][op]", $opTypes, $term['op'], ['class'=>'chosen chosen-full-width']).'</td>'.PHP_EOL;
-          $html .= '<td><input type="text" name="filter[Query][terms]['.$i.'][val]" id="filter[Query][terms]['.$i.'][val]" value="'.(isset($term['val'])?validHtmlStr(str_replace('T', ' ', $term['val'])):'' ).'"/></td>'.PHP_EOL;
+          $html .= '<td><input type="text" name="filter[Query][terms]['.$i.'][val]" id="filter[Query][terms]['.$i.'][val]" value="'.(isset($term['val'])?validHtmlStr(preg_replace('/(\d)T(\d)/', '$1 $2', $term['val'])):'' ).'"/></td>'.PHP_EOL;
         } else if ( $term['attr'] == 'ExistsInFileSystem' ) {
           $html .= '<td>'.htmlSelect("filter[Query][terms][$i][op]", $is_isnot_opTypes, $term['op'], ['class'=>'chosen chosen-full-width']).'</td>'.PHP_EOL;
           $html .= '<td>'.htmlSelect("filter[Query][terms][$i][val]", $booleanValues, $term['val'], ['class'=>'chosen chosen-full-width']).'</td>'.PHP_EOL;
@@ -1305,7 +1362,7 @@ class Filter extends ZM_Object {
           if (isset($term['cookie'])) {
             $html .= ' data-cookie="'.validHtmlStr($term['cookie']).'"';
           }
-          $html .= ' value="'.(isset($term['val'])?validHtmlStr(str_replace('T', ' ', $term['val'])):'').'"';
+          $html .= ' value="'.(isset($term['val'])?validHtmlStr(preg_replace('/(\d)T(\d)/', '$1 $2', $term['val'])):'').'"';
 
           if (!isset($term['placeholder'])) $term['placeholder'] = translate('Attr'.$term['attr']);
           $html .= ' placeholder="'.$term['placeholder'].'"/>'.PHP_EOL;
@@ -1320,7 +1377,7 @@ class Filter extends ZM_Object {
           $html .= '/></span>'.PHP_EOL;
         } else if ( $term['attr'] == 'StartTime' || $term['attr'] == 'EndTime' ) {
           $html .= '<span class="term-value-wrapper">';
-          $html .= '<input type="text" name="filter[Query][terms]['.$i.'][val]" id="filter[Query][terms]['.$i.'][val]" value="'.(isset($term['val'])?validHtmlStr(str_replace('T', ' ', $term['val'])):'' ).'"/>'.PHP_EOL;
+          $html .= '<input type="text" name="filter[Query][terms]['.$i.'][val]" id="filter[Query][terms]['.$i.'][val]" value="'.(isset($term['val'])?validHtmlStr(preg_replace('/(\d)T(\d)/', '$1 $2', $term['val'])):'' ).'"/>'.PHP_EOL;
           $html .= '</span>';
         } else if ( $term['attr'] == 'ExistsInFileSystem' ) {
           $html .= '<span class="term-value-wrapper">';

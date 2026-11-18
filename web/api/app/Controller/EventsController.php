@@ -138,6 +138,10 @@ class EventsController extends AppController {
 
     } else {
       $raw_params = $_REQUEST;
+      // Legacy API authentication rides in the query string next to the filters.
+      foreach (array('user', 'pass', 'username', 'password', 'auth', 'stateful') as $credential) {
+        unset($raw_params[$credential]);
+      }
       if (isset($raw_params['TagId'])) {
         $tag_filter_value = $raw_params['TagId'];
         $tag_filter_field = 'Id';
@@ -302,13 +306,14 @@ class EventsController extends AppController {
       return;
     }
 
-    # Get the previous and next events for any monitor.
+    # Get the previous and next events for any monitor the user may view.
     # Only Id is used below, so skip the wide SELECT + Monitor/Storage joins + Frames hasMany expansion
     # that recursive=1 from above would otherwise pull in for each neighbor row.
     $this->Event->id = $id;
     $event_neighbors = $this->Event->find('neighbors', array(
       'fields' => array('Event.Id'),
       'recursive' => -1,
+      'conditions' => $mon_options,
     ));
     $event['Event']['Next'] = isset($event_neighbors['next']) ? $event_neighbors['next']['Event']['Id'] : 0;
     $event['Event']['Prev'] = isset($event_neighbors['prev']) ? $event_neighbors['prev']['Event']['Id'] : 0;
@@ -455,9 +460,13 @@ class EventsController extends AppController {
       return;
     }
 
-    if ( $this->Event->delete() ) {
-      //$this->loadModel('Frame');
-      //$this->Event->Frame->delete();
+    # ZM\Event::delete() refuses an archived event; say so instead of answering 500.
+    if ( !empty($event['Event']['Archived']) ) {
+      throw new BadRequestException(__('The event is archived and cannot be deleted. Unarchive it first.'));
+    }
+
+    # Not $this->Event->delete(): the model's beforeDelete() returns false, so that always fails.
+    if ( $EventObj->delete() ) {
       $this->set(array(
         'message' => 'Deleted',
         '_serialize' => array('message'),

@@ -77,7 +77,7 @@ if ( $action == 'delete' ) {
       dbQuery('DELETE FROM Users WHERE Id = ?', array($markUid));
       ZM\AuditAction('delete', 'user', $markUid, '');
     }
-    if ($markUid == $user->Id()) {
+    if (in_array($user->Id(), $_REQUEST['markUids'])) {
       userLogout();
       $redirect = '?view=login';
     } else {
@@ -201,6 +201,9 @@ if ( $action == 'delete' ) {
           if (is_array($value)) {
             foreach ($value as $v) {
             }
+          } else if ($value === '') {
+            # an option without a value, e.g. no-resolv
+            $conf .= $name.PHP_EOL;
           } else {
             $conf .= $name.'='.$value.PHP_EOL;
           }
@@ -211,7 +214,6 @@ if ( $action == 'delete' ) {
       } else {
         exec('sudo -n /bin/systemctl restart dnsmasq.service');
       }
-      exec('sudo -n /bin/systemctl restart dnsmasq.service');
     }
   }
 } else if ($action == 'start') {
@@ -244,6 +246,9 @@ if ( $action == 'delete' ) {
     $allItems = ZM\MenuItem::find();
     foreach ($allItems as $item) {
       $id = $item->Id();
+      // An entry that was not on the submitted form (added by another admin
+      // since the page loaded) must keep its settings, not be disabled.
+      if (!isset($_REQUEST['items'][$id])) continue;
       $enabled = isset($_REQUEST['items'][$id]['Enabled']) ? 1 : 0;
       $label = isset($_REQUEST['items'][$id]['Label']) ? trim($_REQUEST['items'][$id]['Label']) : null;
       $sortOrder = isset($_REQUEST['items'][$id]['SortOrder']) ? intval($_REQUEST['items'][$id]['SortOrder']) : $item->SortOrder();

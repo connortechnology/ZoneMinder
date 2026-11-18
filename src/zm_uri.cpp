@@ -30,11 +30,15 @@ Uri::Uri(const std::string &uri) {
 
   // host
   iterator_t hostStart = protocolEnd;
-  iterator_t pathStart = std::find(hostStart, uriEnd, '/');  // get pathStart
+  iterator_t pathStart = std::find(hostStart, queryStart, '/');  // a / in the query is not the path
+  iterator_t authorityEnd = (pathStart != uriEnd) ? pathStart : queryStart;
 
-  iterator_t hostEnd = std::find(protocolEnd,
-                                 (pathStart != uriEnd) ? pathStart : queryStart,
-                                 ':');  // check for port
+  // skip user:password@
+  for (iterator_t it = hostStart; it != authorityEnd; ++it) {
+    if (*it == '@') hostStart = it + 1;
+  }
+
+  iterator_t hostEnd = std::find(hostStart, authorityEnd, ':');  // check for port
 
   Host = std::string(hostStart, hostEnd);
 

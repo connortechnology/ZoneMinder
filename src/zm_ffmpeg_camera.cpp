@@ -451,6 +451,25 @@ int FfmpegCamera::readFrameWithLoop(AVFormatContext *ctx, AVPacket *pkt) {
   return ret;
 }
 
+decltype(av_find_input_format(nullptr)) FindForcedInputFormat(AVDictionary **opts) {
+  AVDictionaryEntry *entry = av_dict_get(*opts, "input_format", nullptr, 0);
+  if (!entry) return nullptr;
+
+  decltype(av_find_input_format(nullptr)) format = nullptr;
+  if (entry->value && *entry->value) {
+    format = av_find_input_format(entry->value);
+    if (format) {
+      Debug(1, "Forcing input format %s from options", entry->value);
+    } else {
+      Warning("Could not find input format '%s' from options, letting ffmpeg probe", entry->value);
+    }
+  } else {
+    Warning("input_format option has no value, letting ffmpeg probe");
+  }
+  av_dict_set(opts, "input_format", nullptr, 0);
+  return format;
+}
+
 RealtimePaceDecision ComputeRealtimePace(
     int64_t ts_us, int64_t anchor_ts_us, Microseconds elapsed, Microseconds cap) {
   // Backward movement (e.g. a discontinuity the jump checks let through):
@@ -541,6 +560,13 @@ int FfmpegCamera::Capture(std::shared_ptr<ZMPacket> &zm_packet) {
             packet->stream_index, ret, av_make_error_string(ret).c_str());
       }
       return -1;
+    }
+    if (packet->stream_index != mAudioStreamId) {
+      // The secondary input is only read for its audio; its video is the same
+      // picture as the primary's and must not be queued as a second video.
+      Debug(4, "Dropping packet for stream %d from secondary input, audio is stream %d",
+            packet->stream_index, mAudioStreamId);
+      return 0;
     }
   } else {
     formatContextPtr = mFormatContext;

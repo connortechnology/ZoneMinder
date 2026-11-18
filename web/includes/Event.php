@@ -292,7 +292,9 @@ class Event extends ZM_Object {
 
         if ( $this->SecondaryStorageId() ) {
           $SecondaryStorage = $this->SecondaryStorage();
-          if ( $SecondaryStorage->Id() ) {
+          if ( $SecondaryStorage->Id() and !$SecondaryStorage->DoDelete() ) {
+            Debug('Not deleting event files for '.$this->{'Id'}.' from secondary storage because it has DoDelete off.');
+          } else if ( $SecondaryStorage->Id() ) {
             deletePath($SecondaryStorage->Path().'/'.$this->Relative_Path());
             deletePath($SecondaryStorage->Path().'/'.$link_path);
           }
@@ -320,7 +322,9 @@ class Event extends ZM_Object {
         if ( $this->{'Scheme'} == 'Medium' ) @rmdir(dirname($eventPath));
         if ( $this->SecondaryStorageId() ) {
           $Storage = $this->SecondaryStorage();
-          if ( $Storage->Id() ) {
+          if ( $Storage->Id() and !$Storage->DoDelete() ) {
+            Debug('Not deleting event files for '.$this->{'Id'}.' from secondary storage because it has DoDelete off.');
+          } else if ( $Storage->Id() ) {
             $eventPath = $Storage->Path().'/'.$this->Relative_Path();
             if ( ! $eventPath ) {
               Error('No event Path in Event delete. Not deleting');
@@ -409,7 +413,9 @@ class Event extends ZM_Object {
       $this->{'DiskSpace'} = $new;
     }
     if ( (!property_exists($this, 'DiskSpace')) or (null === $this->{'DiskSpace'}) ) {
-      $this->{'DiskSpace'} = folder_size($this->Path());
+      # An empty Path() would make folder_size() add up the whole filesystem from "/".
+      $path = $this->Path();
+      $this->{'DiskSpace'} = $path ? folder_size($path) : null;
       if ($this->{'EndDateTime'} and $this->{'DiskSpace'}) {
         # Finished events shouldn't grow in size much so we can commit it to the db.
         #dbQuery('UPDATE Events SET DiskSpace=? WHERE Id=?', array($this->{'DiskSpace'}, $this->{'Id'}));
@@ -944,7 +950,7 @@ class Event extends ZM_Object {
       Info("Finished $video_file");
       return $video_file;
     } else {
-      Info("Video file $video_file already exists for event {$this['Id']}");
+      Info("Video file $video_file already exists for event ".$this->Id());
       return $video_file;
     }
     return;

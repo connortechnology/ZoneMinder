@@ -163,7 +163,7 @@ while ( $event_row = dbFetchNext($results) ) {
               <td class="colCause"><?php echo makeLink($event_link, validHtmlStr($event->Cause()), canView('Events'), 'title="' .htmlspecialchars($event->Notes()). '" class="eDetailLink" data-eid="'.$event->Id().'"') ?></td>
               <td class="colTime"><?php echo $dateTimeFormatter->format(strtotime($event->StartDateTime())) .
 ( $event->EndDateTime() ? ' until ' . $dateTimeFormatter->format(strtotime($event->EndDateTime())) : '' ) ?></td>
-              <td class="colDuration"><?php echo gmdate('H:i:s', intval($event->Length())) ?></td>
+              <td class="colDuration"><?php $length = intval($event->Length()); echo sprintf('%02d:%02d:%02d', intdiv($length, 3600), intdiv($length, 60) % 60, $length % 60) ?></td>
               <td class="colFrames"><?php echo makeLink('?view=frames&amp;eid='.$event->Id(), $event->Frames()) ?></td>
               <td class="colAlarmFrames"><?php echo makeLink('?view=frames&amp;eid='.$event->Id(), $event->AlarmFrames()) ?></td>
               <td class="colTotScore"><?php echo $event->TotScore() ?></td>
@@ -172,9 +172,9 @@ while ( $event_row = dbFetchNext($results) ) {
 <?php
   if ( ZM_WEB_EVENT_DISK_SPACE ) {
     $disk_space_total += $event->DiskSpace();
-		$event_count += 1;
     echo '<td class="colDiskSpace">'.human_filesize($event->DiskSpace()).'</td>';
   }
+  $event_count += 1;
   unset($event);
   echo PHP_EOL.'</tr>'.PHP_EOL;
 } # end foreach event

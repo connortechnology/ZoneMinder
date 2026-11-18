@@ -29,7 +29,7 @@ if ( isset($_REQUEST['minTime']) ) {
   $minTime = validHtmlStr($_REQUEST['minTime']);
   if (!check_datetime($minTime)) {
     ZM\Error('Invalid date given for minTime.');
-    unset($minTime);
+    $minTime = date('Y-m-d H:i:s', time() - (2*3600));
   }
 } else {
   $minTime = date('Y-m-d H:i:s', time() - (2*3600));
@@ -38,7 +38,7 @@ if ( isset($_REQUEST['maxTime']) ) {
   $maxTime = validHtmlStr($_REQUEST['maxTime']);
   if (!check_datetime($maxTime)) {
     ZM\Error('Invalid date given for maxTime.');
-    unset($maxTime);
+    $maxTime = date('Y-m-d H:i:s', time() - 3600);
   }
 } else {
   $maxTime = date('Y-m-d H:i:s', time() - 3600);
@@ -73,7 +73,8 @@ $eventsSql = 'SELECT *,
   WHERE 1 > 0 
 ';
 if ( count($user->unviewableMonitorIds()) ) {
-  $eventsSql .= ' AND MonitorId IN ('.implode(',', $user->viewableMonitorIds()).')';
+  // IN () is a syntax error, so a user who can view no monitor matches no event
+  $eventsSql .= ' AND MonitorId IN ('.(count($user->viewableMonitorIds()) ? implode(',', array_map('intval', $user->viewableMonitorIds())) : '0').')';
 }
 if ( count($selected_monitor_ids) ) {
   $eventsSql .= ' AND MonitorId IN ('.implode(',', array_map('intval', $selected_monitor_ids)).')';
@@ -193,10 +194,9 @@ for ( $monitor_i = 0; $monitor_i < count($displayMonitors); $monitor_i += 1 ) {
               <?php echo implode('<br/>',
                   array_map(function($group_id){
                     $Group = ZM\Group::find_one(array('Id'=>$group_id));
-                    if ( $Group ) {
-                      $Groups = $Group->Parents();
-                      array_push( $Groups, $Group );
-                    }
+                    if ( !$Group ) return '';
+                    $Groups = $Group->Parents();
+                    array_push( $Groups, $Group );
                     return implode(' &gt; ', array_map(function($Group){ return '<a href="?view=montagereview&amp;GroupId='.$Group->Id().'">'.validHtmlStr($Group->Name()).'</a>'; }, $Groups ));
                     }, $Monitor->GroupIds())); 
 

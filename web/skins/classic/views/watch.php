@@ -104,6 +104,9 @@ if (!$cycle and isset($_COOKIE['zmCycleShow'])) {
 #Whether to show the controls button
 $hasPtzControls = false;
 require_once('includes/MonitorAction.php');
+# The toggle must also work for a monitor that has only manual actions
+$monitorHasActions = (ZM_OPT_CONTROL && canView('Control') &&
+  count(ZM\MonitorAction::find(array('MonitorId'=>$monitor->Id(), 'TriggerOn'=>'Manual', 'Enabled'=>1))));
 foreach ($monitors as $m) {
   if (( ZM_OPT_CONTROL && $m->Controllable() && canView('Control') && $m->Type() != 'WebSite' )) {
     //If there is control for at least one camera, then we display the block.
@@ -271,7 +274,7 @@ echo getNavBarHTML() ?>
         </button>
         <button type="button" id="ptzToggle" class="btn <?php echo $showPtzControls ? 'btn-primary':'btn-secondary'?>"
 <?php
-    if ($monitor->Controllable() && canView('Control') && ($monitor->Type() != 'WebSite')) {
+    if (($monitor->Controllable() || $monitorHasActions) && canView('Control') && ($monitor->Type() != 'WebSite')) {
       echo 'title="'.translate('Toggle PTZ Controls').'"';
     } else {
       echo 'disabled="disabled" title="'.translate('PTZ Not available').'"';
@@ -419,7 +422,7 @@ echo htmlSelect('cyclePeriod', $cyclePeriodOptions, $period, array('id'=>'cycleP
       $ptzControls = ptzControls($m);
       $monitorsExtraData[$m->Id()]['ptzControls'] = $ptzControls;
     }
-    echo '<li id="nav-item-cycle'.$m->Id().'" class="nav-item"><a id="nav-link'.$m->Id().'" class="nav-link'.( $m->Id() == $monitor->Id() ? ' active' : '' ).'" data-monIdx='.$dataMonIdx++.' href="#">'.$m->Name().'</a></li>';
+    echo '<li id="nav-item-cycle'.$m->Id().'" class="nav-item"><a id="nav-link'.$m->Id().'" class="nav-link'.( $m->Id() == $monitor->Id() ? ' active' : '' ).'" data-monIdx='.$dataMonIdx++.' href="#">'.validHtmlStr($m->Name()).'</a></li>';
   }
  ?>
           </ul>

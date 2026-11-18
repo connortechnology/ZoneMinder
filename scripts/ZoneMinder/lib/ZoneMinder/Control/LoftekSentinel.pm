@@ -194,7 +194,7 @@ sub moveConRight
 sub zoomConTele
 {
     my $self = shift;
-    my $stop_command = "17";
+    my $stop_command = "19";
     Debug( "Zoom Tele" );
     my $cmd = "decoder_control.cgi?command=18";
     $self->sendCmd( $cmd );
@@ -205,11 +205,25 @@ sub zoomConTele
 sub zoomConWide
 {
     my $self = shift;
-    my $stop_command = "19";
+    my $stop_command = "17";
     Debug( "Zoom Wide" );
     my $cmd = "decoder_control.cgi?command=16";
     $self->sendCmd( $cmd );
     $self->autoStop( $stop_command, $self->{Monitor}->{AutoStopTimeout} );
+}
+
+#Zoom Stop
+#The ui's centre zoom button stops a continuous zoom without knowing which
+#direction was started, so send both direction stops.  Stopping a direction
+#that is already still is a no-op.
+sub zoomStop
+{
+    my $self = shift;
+    Debug( "Zoom Stop" );
+    my $cmd = "decoder_control.cgi?command=19";
+    $self->sendCmd( $cmd );
+    $cmd = "decoder_control.cgi?command=17";
+    $self->sendCmd( $cmd );
 }
 
 #Diagonally Up Right Arrow

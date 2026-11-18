@@ -126,9 +126,11 @@ class GroupsController extends AppController {
         return;
       }
 
-      if ( $this->request->data['Group']['MonitorIds'] and ! isset($this->request->data['Monitor']) ) {
-        $this->request->data['Monitor'] = explode(',', $this->request->data['Group']['MonitorIds']);
-        unset($this->request->data['Group']['MonitorIds']);
+      $monitorIds = $this->requestField('Group', 'MonitorIds');
+      if ( is_string($monitorIds) and $monitorIds !== '' and ! isset($this->request->data['Monitor']) ) {
+        $this->request->data['Monitor'] = explode(',', $monitorIds);
+        unset($this->request->data['MonitorIds']);
+        if ( isset($this->request->data['Group']) and is_array($this->request->data['Group']) ) unset($this->request->data['Group']['MonitorIds']);
       }
       $monitorIds = $this->requestAssociatedIds('Group', 'Monitor');
       if ($monitorIds) $this->requireMembershipEdit($monitorIds);
@@ -239,7 +241,8 @@ class GroupsController extends AppController {
     # Deleting a group removes its monitors from it, which can lift a deny on them.
     $group = new ZM\Group($id);
     $this->requireMembershipEdit($group->MonitorIds());
-    dbQuery('UPDATE `Groups` SET `ParentId`=NULL WHERE `ParentId`=?', array($id));
+    # Children move up to this group's parent, as deleting one in the web ui does.
+    dbQuery('UPDATE `Groups` SET `ParentId`=? WHERE `ParentId`=?', array($group->ParentId(), $id));
 
 		if ( $this->Group->delete() ) {
       $this->set(array(

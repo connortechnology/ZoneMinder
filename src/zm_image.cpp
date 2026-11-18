@@ -2637,28 +2637,18 @@ void Image::Overlay( const Image &image ) {
 
     /* Grayscale/YUV420 on top of RGB32 - complete */
   } else if ( zm_is_rgb32(imagePixFormat) && zm_bytes_per_pixel(image.imagePixFormat) == 1 ) {
-    const Rgb* const max_ptr = (Rgb*)(buffer+size);
-    Rgb* prdest = (Rgb*)buffer;
-    const uint8_t* psrc = image.buffer;
-
-    if ( imagePixFormat == AV_PIX_FMT_RGBA || imagePixFormat == AV_PIX_FMT_BGRA ) {
-      /* RGBA\BGRA subpixel order - Alpha byte is last */
-      while ( prdest < max_ptr ) {
-        if ( *psrc ) {
-          RED_PTR_RGBA(prdest) = *psrc;
-          //RED_PTR_RGBA(prdest) = GREEN_PTR_RGBA(prdest) = BLUE_PTR_RGBA(prdest) = *psrc;
+    const bool alpha_last = (imagePixFormat == AV_PIX_FMT_RGBA || imagePixFormat == AV_PIX_FMT_BGRA);
+    for (unsigned int y = 0; y < height; y++) {
+      const uint8_t *psrc = image.buffer + y * image.linesize;
+      Rgb *prdest = (Rgb *)(buffer + y * linesize);
+      for (unsigned int x = 0; x < width; x++, psrc++, prdest++) {
+        if (*psrc) {
+          if (alpha_last) {
+            RED_PTR_RGBA(prdest) = GREEN_PTR_RGBA(prdest) = BLUE_PTR_RGBA(prdest) = *psrc;
+          } else {
+            RED_PTR_ABGR(prdest) = GREEN_PTR_ABGR(prdest) = BLUE_PTR_ABGR(prdest) = *psrc;
+          }
         }
-        prdest++;
-        psrc++;
-      }
-    } else {
-      /* ABGR\ARGB subpixel order - Alpha byte is first */
-      while ( prdest < max_ptr ) {
-        if ( *psrc ) {
-          RED_PTR_ABGR(prdest) = GREEN_PTR_ABGR(prdest) = BLUE_PTR_ABGR(prdest) = *psrc;
-        }
-        prdest++;
-        psrc++;
       }
     }
 
@@ -3159,30 +3149,21 @@ bool Image::Delta(const Image &image, Image* targetimage) const {
 }
 
 const Vector2 Image::centreCoord(const char *text, int size = 1) const {
-  int index = 0;
-  int line_no = 0;
-  int text_len = strlen(text);
-  int line_len = 0;
-  int max_line_len = 0;
-  const char *line = text;
+  if (!text || !*text) {
+    return {static_cast<int>(width) / 2, static_cast<int>(height) / 2};
+  }
 
-  while ( (index < text_len) && (line_len = strcspn( line, "\n" )) ) {
-    if ( line_len > max_line_len )
-      max_line_len = line_len;
-
-    index += line_len;
-    while ( text[index] == '\n' ) {
-      index++;
-    }
-    line = text+index;
-    line_no++;
+  std::vector<std::string> lines = Split(text, '\n');
+  std::size_t max_line_len = 0;
+  for (const std::string &s : lines) {
+    max_line_len = std::max(max_line_len, s.size());
   }
 
   FontVariant const &font_variant = font.GetFontVariant(FontVariantIndex(size));
   uint16_t char_width = font_variant.GetCharWidth();
   uint16_t char_height = font_variant.GetCharHeight();
-  int x = (width - (max_line_len * char_width )) / 2;
-  int y = (height - (line_no * char_height) ) / 2;
+  int x = (static_cast<int>(width) - static_cast<int>(max_line_len * char_width)) / 2;
+  int y = (static_cast<int>(height) - static_cast<int>(lines.size() * char_height)) / 2;
   return {x, y};
 }
 
@@ -3311,9 +3292,9 @@ void Image::Annotate(
           if (bg_colour != kRGBTransparent) {
             for (uint16 i = 0; i < char_width; i++) {  // We need to set individual r,g,b components
               uint8 *colour_ptr = ptr + (i * bytesPerPixel);
-              RED_PTR_RGBA(colour_ptr) = RED_VAL_RGBA(bg_colour);
-              GREEN_PTR_RGBA(colour_ptr) = GREEN_VAL_RGBA(bg_colour);
-              BLUE_PTR_RGBA(colour_ptr) = BLUE_VAL_RGBA(bg_colour);
+              RED_PTR_RGBA(colour_ptr) = RED_VAL_RGBA(bg_rgb_col);
+              GREEN_PTR_RGBA(colour_ptr) = GREEN_VAL_RGBA(bg_rgb_col);
+              BLUE_PTR_RGBA(colour_ptr) = BLUE_VAL_RGBA(bg_rgb_col);
             }
           }
 
@@ -3322,9 +3303,9 @@ void Image::Annotate(
             cp_row = cp_row & (cp_row - 1);
             if (column_idx < columns_left) {
               uint8 *colour_ptr = ptr + (column_idx * bytesPerPixel);
-              RED_PTR_RGBA(colour_ptr) = RED_VAL_RGBA(fg_colour);
-              GREEN_PTR_RGBA(colour_ptr) = GREEN_VAL_RGBA(fg_colour);
-              BLUE_PTR_RGBA(colour_ptr) = BLUE_VAL_RGBA(fg_colour);
+              RED_PTR_RGBA(colour_ptr) = RED_VAL_RGBA(fg_rgb_col);
+              GREEN_PTR_RGBA(colour_ptr) = GREEN_VAL_RGBA(fg_rgb_col);
+              BLUE_PTR_RGBA(colour_ptr) = BLUE_VAL_RGBA(fg_rgb_col);
             }
           }
           ptr += linesize;
@@ -4012,7 +3993,9 @@ void rotate_plane(const uint8_t *src, int src_linesize,
 }  // namespace
 
 void Image::Rotate(int angle) {
-  angle %= 360;
+  // C++ keeps the sign of the dividend, so -90 would otherwise stay -90 and
+  // match none of the 90/180/270 cases below.
+  angle = ((angle % 360) + 360) % 360;
 
   if ( !angle || angle%90 ) {
     return;

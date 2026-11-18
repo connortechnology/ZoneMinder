@@ -156,7 +156,7 @@ void Logger::initialise(const std::string &id, const Options &options) {
 
   std::string tempLogFile;
 
-  if ( (envPtr = getTargettedEnv("LOG_FILE")) ) {
+  if ( (envPtr = getTargettedEnv("LOG_FILE")) and *envPtr ) {
     tempLogFile = envPtr;
   } else if ( options.mLogFile.size() ) {
     tempLogFile = options.mLogFile;
@@ -432,7 +432,7 @@ Logger::Level Logger::syslogLevel(Logger::Level syslogLevel) {
 void Logger::logFile(const std::string &logFile) {
   bool addLogPid = false;
   std::string tempLogFile = logFile;
-  if (tempLogFile[tempLogFile.length()-1] == '+') {
+  if (!tempLogFile.empty() and tempLogFile[tempLogFile.length()-1] == '+') {
     tempLogFile.resize(tempLogFile.length()-1);
     addLogPid = true;
   }
@@ -478,6 +478,21 @@ void Logger::openSyslog() {
 
 void Logger::closeSyslog() {
   (void) closelog();
+}
+
+bool Logger::throttle(const char *file, int line, int key, Microseconds interval,
+                      uint64 &suppressed, TimePoint now) {
+  std::lock_guard<std::recursive_mutex> lck(log_mutex);
+  Throttle &state = mThrottles[{file, line, key}];
+  if (state.have_last && (now - state.last) < interval) {
+    state.suppressed++;
+    return false;
+  }
+  suppressed = state.suppressed;
+  state.suppressed = 0;
+  state.last = now;
+  state.have_last = true;
+  return true;
 }
 
 void Logger::logPrint(bool hex, const char *filepath, int line, int level, const char *fstring, ...) {

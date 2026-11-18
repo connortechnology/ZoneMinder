@@ -24,6 +24,7 @@
 #include "zm_monitor.h"
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <cstdlib>
 
@@ -92,6 +93,7 @@ void Zone::Setup(
   pg_image->Fill(0xff, polygon);
   pg_image->Outline(0xff, polygon); // If we just filled it, do we need to outline it?
 
+  pixel_area = 0;
   ranges = new Range[height];
   for ( unsigned int y = 0; y < height; y++ ) {
     ranges[y].lo_x = -1;
@@ -100,6 +102,7 @@ void Zone::Setup(
     const uint8_t *ppoly = pg_image->Buffer( 0, y );
     for ( unsigned int x = 0; x < width; x++, ppoly++ ) {
       if ( *ppoly ) {
+        pixel_area++;
         if ( ranges[y].lo_x == -1 ) {
           ranges[y].lo_x = x;
         }
@@ -333,6 +336,8 @@ void Zone::AdjustScoreForType() {
     // stats.score <<= 1;
     stats.score_ *= 2;
   }
+  if (stats.score_ < 1)
+    stats.score_ = 1; /* An inclusive zone that met its thresholds is still alarmed */
 
   Debug(5, "Adjusted score is %d", stats.score_);
 }
@@ -922,8 +927,8 @@ bool Zone::CheckAlarmsInFrame(const Image *delta_image) {
                   }
                 }
               }  // end for sy = lo_y .. hi_y
-              alarm_mid_x = int(round(x_total/bs->count));
-              alarm_mid_y = int(round(y_total/bs->count));
+              alarm_mid_x = int(round(static_cast<double>(x_total)/bs->count));
+              alarm_mid_y = int(round(static_cast<double>(y_total)/bs->count));
             } else {
               alarm_mid_x = int((bs->hi_x+bs->lo_x+1)/2);
               alarm_mid_y = int((bs->hi_y+bs->lo_y+1)/2);
@@ -1170,6 +1175,32 @@ bool Zone::ParseCoords(const char *Coords, unsigned int width, unsigned int heig
   return true;
 }
 
+// Pixels a polygon covers once rasterised into a width x height image, the same
+// way Setup() builds the zone mask.
+int Zone::RasterArea(const Polygon &polygon, unsigned int width, unsigned int height) {
+  Image mask(width, height, 1, ZM_SUBPIX_ORDER_NONE);
+  mask.Clear();
+  mask.Fill(0xff, polygon);
+  mask.Outline(0xff, polygon);
+  int area = 0;
+  for (unsigned int y = 0; y < height; y++) {
+    const uint8_t *row = mask.Buffer(0, y);
+    for (unsigned int x = 0; x < width; x++) {
+      if (row[x]) area++;
+    }
+  }
+  return area;
+}
+
+// A threshold stored as a percentage of the zone area, as a pixel count. 0 means
+// unset, so a percentage that was set never rounds down to it.
+int Zone::PercentToPixels(double percent, int area) {
+  if (percent <= 0) return 0;
+  const double pixels = percent * area / 100.0 + 0.5;
+  if (pixels >= static_cast<double>(INT_MAX)) return INT_MAX;
+  return std::max(static_cast<int>(pixels), 1);
+}
+
 // Number of zones Load() would produce, without constructing them.
 size_t Zone::Count(const std::shared_ptr<Monitor> &monitor) {
   std::string sql = stringtf("SELECT Id,Name,Coords FROM Zones WHERE MonitorId = %d", monitor->Id());
@@ -1291,14 +1322,16 @@ std::vector<Zone> Zone::Load(const std::shared_ptr<Monitor> &monitor) {
     // Percentage coordinates: thresholds are stored as % of zone area, convert to pixels.
     // Legacy pixel coordinates: thresholds are already pixel counts.
     int MinAlarmPixels, MaxAlarmPixels, MinFilterPixels, MaxFilterPixels, MinBlobPixels, MaxBlobPixels;
-    if (percentages && polygon.Area() > 0) {
-      int zpa = polygon.Area();
-      MinAlarmPixels = MinAlarmPixels_pct > 0 ? static_cast<int>(MinAlarmPixels_pct * zpa / 100.0 + 0.5) : 0;
-      MaxAlarmPixels = MaxAlarmPixels_pct > 0 ? static_cast<int>(MaxAlarmPixels_pct * zpa / 100.0 + 0.5) : 0;
-      MinFilterPixels = MinFilterPixels_pct > 0 ? static_cast<int>(MinFilterPixels_pct * zpa / 100.0 + 0.5) : 0;
-      MaxFilterPixels = MaxFilterPixels_pct > 0 ? static_cast<int>(MaxFilterPixels_pct * zpa / 100.0 + 0.5) : 0;
-      MinBlobPixels = MinBlobPixels_pct > 0 ? static_cast<int>(MinBlobPixels_pct * zpa / 100.0 + 0.5) : 0;
-      MaxBlobPixels = MaxBlobPixels_pct > 0 ? static_cast<int>(MaxBlobPixels_pct * zpa / 100.0 + 0.5) : 0;
+    // Percentages are stored as % of the zone's rasterised pixel area on the
+    // motion frame, the same basis the runtime alarm-pixel count uses.
+    const int zpa = percentages ? RasterArea(polygon, frame_width, frame_height) : 0;
+    if (zpa > 0) {
+      MinAlarmPixels = PercentToPixels(MinAlarmPixels_pct, zpa);
+      MaxAlarmPixels = PercentToPixels(MaxAlarmPixels_pct, zpa);
+      MinFilterPixels = PercentToPixels(MinFilterPixels_pct, zpa);
+      MaxFilterPixels = PercentToPixels(MaxFilterPixels_pct, zpa);
+      MinBlobPixels = PercentToPixels(MinBlobPixels_pct, zpa);
+      MaxBlobPixels = PercentToPixels(MaxBlobPixels_pct, zpa);
     } else {
       // Counted in capture pixels, so they shrink with the frame.
       const double area_ratio = static_cast<double>(frame_width) * frame_height
@@ -1540,6 +1573,7 @@ Zone::Zone(const Zone &z) :
   overload_count(z.overload_count),
   extend_alarm_count(z.extend_alarm_count),
   diag_path(z.diag_path) {
+  pixel_area = z.pixel_area;
   std::copy(z.blob_stats, z.blob_stats+256, blob_stats);
   pg_image = z.pg_image ? new Image(*z.pg_image) : nullptr;
   ranges = new Range[frame_height];

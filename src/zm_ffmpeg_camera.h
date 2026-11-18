@@ -21,6 +21,7 @@
 #define ZM_FFMPEG_CAMERA_H
 
 #include "zm_camera.h"
+#include "zm_ffmpeg.h"
 #include "zm_time.h"
 
 #include <memory>
@@ -59,6 +60,13 @@ int SeekToStart(AVFormatContext *ctx);
 // Returns the presentation time of frame `index` in AV_TIME_BASE units, or
 // AV_NOPTS_VALUE if the rate is unusable.
 int64_t SyntheticPaceTimestamp(int64_t index, AVRational frame_rate);
+
+// "input_format=<name>" in the monitor Options forces the demuxer ffmpeg uses,
+// like ffmpeg's -f flag, for sources whose format cannot be probed. The key is
+// removed from `opts` so it is not reported as an unrecognised option. Returns
+// null, leaving ffmpeg to probe, when the key is absent or names no demuxer.
+decltype(av_find_input_format(nullptr)) FindForcedInputFormat(AVDictionary **opts);
+
 //
 // Class representing 'ffmpeg' cameras, i.e. those which are
 // accessed using ffmpeg multimedia framework

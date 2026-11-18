@@ -65,9 +65,7 @@ function ajaxRequest(params) {
       }
       var rows = processRows(data.rows);
       // Store footer totals data
-      if (data.footerData) {
-        footerData = data.footerData;
-      }
+      footerData = data.footerData || {DiskSpace: '', Length: 0};
       // rearrange the result into what bootstrap-table expects
       params.success({total: data.total, totalNotFiltered: data.totalNotFiltered, rows: rows});
     },
@@ -94,6 +92,7 @@ function ajaxRequest(params) {
 }
 
 function processRows(rows) {
+  if (!rows) return [];
   $j.each(rows, function(ndx, row) {
     var eid = row.Id;
     var archived = row.Archived == yesString ? archivedString : '';
@@ -102,12 +101,13 @@ function processRows(rows) {
     row.Id = '<a href="?view=event&amp;eid=' + eid + filterQuery + sortQuery + '&amp;page=1">' + eid + '</a>';
     row.Name = '<a href="?view=event&amp;eid=' + eid + filterQuery + sortQuery + '&amp;page=1">' + row.Name + '</a>' +
         '<br/><div class="small text-muted">' + archived + emailed + '</div>';
-    if ( canEdit.Monitors ) row.Monitor = '<a href="?view=event&amp;eid=' + eid + '">' + row.Monitor + '</a>';
-    if ( canEdit.Events ) row.Cause = '<a href="#" title="' + row.Notes + '" class="eDetailLink" data-eid="' + eid + '">' + row.Cause + '</a>';
-    if ( row.Notes.indexOf('detected:') >= 0 ) {
-      row.Cause = row.Cause + '<a href="#" class="objDetectLink" data-eid=' +eid+ '><div class="small text-muted"><u>' + row.Notes + '</u></div></div></a>';
-    } else if ( row.Notes != 'Forced Web: ' ) {
-      row.Cause = row.Cause + '<br/><div class="small text-muted">' + row.Notes + '</div>';
+    if ( typeof canView !== 'undefined' && canView.Events ) row.Monitor = '<a href="?view=event&amp;eid=' + eid + '">' + row.Monitor + '</a>';
+    const notes = row.Notes || '';
+    if ( canEdit.Events ) row.Cause = '<a href="#" title="' + notes + '" class="eDetailLink" data-eid="' + eid + '">' + row.Cause + '</a>';
+    if ( notes.indexOf('detected:') >= 0 ) {
+      row.Cause = row.Cause + '<a href="#" class="objDetectLink" data-eid=' +eid+ '><div class="small text-muted"><u>' + notes + '</u></div></div></a>';
+    } else if ( notes && notes != 'Forced Web: ' ) {
+      row.Cause = row.Cause + '<br/><div class="small text-muted">' + notes + '</div>';
     }
     row.Frames = '<a href="?view=frames&amp;eid=' + eid + '">' + row.Frames + '</a>';
     row.AlarmFrames = '<a href="?view=frames&amp;eid=' + eid + '">' + row.AlarmFrames + '</a>';
@@ -116,9 +116,11 @@ function processRows(rows) {
     row.DiskSpace = '<a href="?view=event&amp;eid=' + eid + filterQuery + sortQuery + '&amp;page=1">' + row.DiskSpace + '</a>';
     row.Storage = '<a href="?view=event&amp;eid=' + eid + filterQuery + sortQuery + '&amp;page=1">' + row.Storage + '</a>';
 
-    const date = new Date(0); // Have to init it fresh.  setSeconds seems to add time, not set it.
-    date.setSeconds(row.Length);
-    row.Length = date.toISOString().substr(11, 8);
+    // Not a Date: its time of day wraps at 24 hours, and events can run longer.
+    const totalSecs = Math.floor(row.Length) || 0;
+    row.Length = String(Math.floor(totalSecs / 3600)).padStart(2, '0') + ':' +
+        String(Math.floor((totalSecs % 3600) / 60)).padStart(2, '0') + ':' +
+        String(totalSecs % 60).padStart(2, '0');
     if (ZM_DATETIME_FORMAT_PATTERN) {
       if (window.DateTime) {
         row.StartDateTime = DateTime.fromSQL(row.StartDateTime)
@@ -332,6 +334,29 @@ function getObjdetectModal(eid) {
       });
 }
 
+// Enable or disable buttons based on current selection and user rights
+function updateToolbarButtons() {
+  const selections = table.bootstrapTable('getSelections');
+
+  viewButton.prop('disabled', !(selections.length && canView.Events));
+  archiveButton.prop('disabled', !(selections.length && canEdit.Events));
+  if (!(getArchivedSelections() && canEdit.Events)) {
+    unarchiveButton.prop('disabled', true);
+    if (!getArchivedSelections()) {
+      unarchiveButton.prop('title', 'Please select an event that is archived.');
+    } else {
+      unarchiveButton.prop('title', 'You must have events edit permission to unarchive');
+    }
+  } else {
+    unarchiveButton.prop('disabled', false);
+    unarchiveButton.prop('title', unarchiveString);
+  }
+  editButton.prop('disabled', !(selections.length && canEdit.Events));
+  exportButton.prop('disabled', !(selections.length && canView.Events));
+  downloadButton.prop('disabled', !(selections.length && canView.Events));
+  deleteButton.prop('disabled', !(selections.length && canEdit.Events));
+}
+
 function initPage() {
   // Remove the thumbnail column from the DOM if thumbnails are off globally
   if (!WEB_LIST_THUMBS) $j('th[data-field="Thumbnail"]').remove();
@@ -345,30 +370,10 @@ function initPage() {
     table.bootstrapTable('hideColumn', 'Emailed');
   }
 
-  // enable or disable buttons based on current selection and user rights
+  // The table drops its selection on every reload without any uncheck event, so
+  // the buttons are re-evaluated after each load as well as on selection changes.
   table.on('check.bs.table uncheck.bs.table ' +
-  'check-all.bs.table uncheck-all.bs.table',
-  function() {
-    const selections = table.bootstrapTable('getSelections');
-
-    viewButton.prop('disabled', !(selections.length && canView.Events));
-    archiveButton.prop('disabled', !(selections.length && canEdit.Events));
-    if (!(getArchivedSelections() && canEdit.Events)) {
-      unarchiveButton.prop('disabled', true);
-      if (!getArchivedSelections()) {
-        unarchiveButton.prop('title', 'Please select an event that is archived.');
-      } else {
-        unarchiveButton.prop('title', 'You must have events edit permission to unarchive');
-      }
-    } else {
-      unarchiveButton.prop('disabled', false);
-      unarchiveButton.prop('title', unarchiveString);
-    }
-    editButton.prop('disabled', !(selections.length && canEdit.Events));
-    exportButton.prop('disabled', !(selections.length && canView.Events));
-    downloadButton.prop('disabled', !(selections.length && canView.Events));
-    deleteButton.prop('disabled', !(selections.length && canEdit.Events));
-  });
+  'check-all.bs.table uncheck-all.bs.table post-body.bs.table', updateToolbarButtons);
 
   table.on('sort.bs.table', function(evt, name, order) {
     const sortField = (name == 'Monitor') ? 'MonitorName' : name;
@@ -436,6 +441,8 @@ function initPage() {
       url: thisUrl + '?request=events&task=archive',
       data: {'eids[]': selections},
       success: function(data) {
+        // ajaxError() answers 200 with result=Error
+        if (data.result == 'Error') alert(data.message);
         $j('#eventTable').bootstrapTable('refresh');
       },
       error: logAjaxFail
@@ -655,7 +662,7 @@ function filterEvents(clickedElement, options) {
 
 // Footer formatter for total duration
 function totalLengthFormatter(data) {
-  if (footerData.Length) {
+  if (footerData && footerData.Length) {
     const totalSeconds = Math.floor(footerData.Length);
     const hours = Math.floor(totalSeconds / 3600);
     const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -669,7 +676,7 @@ function totalLengthFormatter(data) {
 
 // Footer formatter for total disk space
 function totalDiskSpaceFormatter(data) {
-  return footerData.DiskSpace || '';
+  return (footerData && footerData.DiskSpace) || '';
 }
 
 $j(document).ready(function() {

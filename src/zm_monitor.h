@@ -459,7 +459,10 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
     inline const std::string &Name() const { return name; }
     //inline const std::string &Name() const { return monitor ? monitor->Name() : ""; }
 
-    inline bool isConnected() const { return connected && shared_data && shared_data->valid; }
+    // The linked zmc is alive: its memory is valid and its heartbeat is recent.
+    // A zmc that died without cleaning up leaves valid set in a stale mapping.
+    bool isAlive() const;
+    bool isConnected() const { return connected && isAlive(); }
     inline time_t getLastConnectTime() const { return last_connect_time; }
 
     inline uint32_t lastFrameScore() { return shared_data->last_frame_score; }
@@ -599,6 +602,7 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
       int add_to_Go2RTC();
       int check_Go2RTC();
       int remove_from_Go2RTC();
+      int delete_stream(const std::string &name);
       bool refresh_auth_if_needed();        // Refresh auth_hash if expired
 #else
     public:
@@ -805,6 +809,7 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
                              // functions, IGNORED from this object, passed
                              // directly into zms now
   Seconds section_length;    // How long events should last in continuous modes
+  bool no_zones_warned = false;  // Whether the no-zones warning was already logged for the current no-zones state
   bool section_length_warn;  // Whether to log a warning when a motion event
                              // exceeds desired section_length
   Seconds min_section_length;        // Minimum event length when using
@@ -888,6 +893,8 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   int        ready_count;
   int        first_alarm_count;
   int        last_alarm_count;
+  int        pre_alarm_count_ = 0;     // Alarmed frames seen while in PREALARM
+  int64_t    last_section_sec_ = -1;   // Timestamp (s) of the previous packet, for CLOSE_TIME
   bool       last_signal;
   // Capture assumes signal on the first packet after connect() cleared it,
   // even when the decoder measures it, so Analyse doesn't see a signal loss
@@ -1500,6 +1507,24 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   // at it (motion_frame_skip, or the frame seeded the reference).
   std::pair<int, std::string> Analyse_MotionDetection(std::shared_ptr<ZMPacket> packet);
 
+  // WHERE fragment (starting with " AND") for zmc -H: only the parts given on the
+  // command line are matched. Pure, for tests.
+  static std::string RemoteMonitorFilter(const char *protocol, const char *host, const char *port, const char *path,
+                                         const std::function<std::string(const std::string &)> &escape);
+  // Frames analysis skips between motion detections so that analysis runs at
+  // about analysis_fps_limit when the camera captures at capture_fps. Pure.
+  static int AnalysisFrameSkip(double capture_fps, double analysis_fps_limit);
+  // True when the section_length boundary lies between two packet timestamps
+  // (whole seconds). prev_sec < 0 means there is no previous packet. Pure.
+  static bool TimeSectionCrossed(int64_t prev_sec, int64_t cur_sec, int64_t section_length_sec);
+  // Alarm frames counted while in PREALARM. Per monitor: one zmc process can
+  // run several monitors, whose analysis threads must not share the count.
+  int PreAlarmCount() const { return pre_alarm_count_; }
+  void AddPreAlarmFrame() { pre_alarm_count_++; }
+  void EmptyPreAlarmFrames() { pre_alarm_count_ = 0; }
+  // Forget partial alarm progress when analysis is interrupted (trigger off,
+  // signal loss) so it cannot be completed later by an unrelated frame.
+  void ClearAlarmTracking();
   bool setupConvertContext(const AVFrame *input_frame, const Image *image);
   // Write capture_image into image_buffer[index] without conversion and
   // record its AVPixelFormat in image_pixelformats[index] so reading
@@ -1526,7 +1551,8 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   Event *openEvent(
     ZMPacketLock *packet_lock,
     const std::string &cause,
-    const Event::StringSetMap &noteSetMap);
+    const Event::StringSetMap &noteSetMap,
+    SystemTimePoint counting_boundary = SystemTimePoint());
   // Join a close that is still in flight, so whatever it holds -- notably a
   // hardware encoder session belonging to the previous event -- is released.
   // Returns true if there was one to wait for.

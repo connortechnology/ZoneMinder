@@ -7,11 +7,11 @@ function generateVideoResponse( data, responseText ) {
   $j('#videoProgress').removeClass( 'text-warning' );
   if ( generated ) {
     $j('#videoProgress').addClass( 'text-success' );
-    $j('#videoProgress').text(exportSucceededString);
+    $j('#videoProgress').text(videoGenSuccessString);
     $j( "#videoTable" ).load( fullUrl+ ' #videoTable' );
   } else {
     $j('#videoProgress').addClass( 'text-danger' );
-    $j('#videoProgress').text(exportFailedString);
+    $j('#videoProgress').text(videoGenFailedString);
   }
 }
 
@@ -23,7 +23,10 @@ function generateVideo() {
   $j.getJSON(thisUrl + '?view=request&request=event&action=video', form)
       .done(generateVideoResponse)
       .fail(logAjaxFail);
-  $j('#videoProgress').removeClass('invisible');
+  // A previous result replaced the spinner and message, so put them back.
+  $j('#videoProgress').removeClass('invisible text-success text-danger').addClass('text-warning')
+      .html('<span class="spinner-grow" role="status" aria-hidden="true"></span> ')
+      .append(document.createTextNode(videoGenProgressString));
 }
 
 function initPage() {

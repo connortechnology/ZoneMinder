@@ -45,11 +45,13 @@ Event::Event(
   packetqueue_iterator *p_packetqueue_it,
   SystemTimePoint p_start_time,
   const std::string &p_cause,
-  const StringSetMap &p_noteSetMap
+  const StringSetMap &p_noteSetMap,
+  SystemTimePoint p_counting_boundary
 ) :
   id(0),
   monitor(p_monitor),
   storage(nullptr),
+  storage_id(0),
   packetqueue_it(p_packetqueue_it),
   start_time(p_start_time),
   end_time(p_start_time),
@@ -79,8 +81,8 @@ Event::Event(
   have_video_keyframe(false),
   //scheme
   save_jpegs(0),
+  counting_boundary(p_counting_boundary),
   terminate_(false)
-
 {
   std::string notes;
   createNotes(notes);
@@ -126,6 +128,7 @@ Event::Event(
   // Copy it in case opening the mp4 doesn't work we can set it to another value
   save_jpegs = monitor->GetOptSaveJPEGs();
   storage = monitor->getStorage();
+  storage_id = storage->Id();
   if (monitor->GetOptVideoWriter() != 0) {
     container = monitor->OutputContainer();
     if (container == "auto" || container == "") {
@@ -553,8 +556,8 @@ Event::~Event() {
       Warning("Failed unlinking %s: %s", video_incomplete_path.c_str(), strerror(errno));
   }
 
-  if (storage && storage->Id()) {
-    sql = stringtf("UPDATE Storage SET DiskSpace = DiskSpace + %" PRIu64 " WHERE Id=%u", video_size, storage->Id());
+  if (storage_id) {
+    sql = stringtf("UPDATE Storage SET DiskSpace = COALESCE(DiskSpace,0) + %" PRIu64 " WHERE Id=%u", video_size, storage_id);
     dbQueue.push(std::move(sql));
   }
 
@@ -981,7 +984,8 @@ void Event::AddFrame(const std::shared_ptr<ZMPacket>&packet) {
 
   frames++;
   Monitor::State monitor_state = monitor->GetState();
-  int score = packet->score;
+  const bool counted = EventCountsFrameStats(packet->timestamp, counting_boundary);
+  int score = counted ? packet->score : 0;
 
   bool write_to_db = false;
   FrameType frame_type = ( ( score > 0 ) ? ALARM : (
@@ -997,7 +1001,8 @@ void Event::AddFrame(const std::shared_ptr<ZMPacket>&packet) {
   if (frame_type == ALARM) alarm_frames++;
 
   Debug(1, "Have frame type %s from score(%d) state %d frames %d bulk frame interval %d and mod%d",
-        frame_type_names[frame_type], score, monitor_state, frames.load(), config.bulk_frame_interval, (frames.load() % config.bulk_frame_interval));
+        frame_type_names[frame_type], score, monitor_state, frames.load(), config.bulk_frame_interval,
+        (config.bulk_frame_interval ? frames.load() % config.bulk_frame_interval : 0));
 
   if (score < 0) score = 0;
   tot_score += score;
@@ -1100,7 +1105,7 @@ void Event::AddFrame(const std::shared_ptr<ZMPacket>&packet) {
                   or ( monitor_state == Monitor::ALARM )
                   or ( monitor_state == Monitor::PREALARM );
 
-  if (score > max_score) {
+  if (counted and score > max_score) {
     max_score = score;
     max_score_frame_id = frames;
   }
@@ -1144,7 +1149,7 @@ void Event::AddFrame(const std::shared_ptr<ZMPacket>&packet) {
                           alarm_frames.load(),
                           tot_score,
                           static_cast<uint32>(alarm_frames ? (tot_score / alarm_frames) : 0),
-                          max_score < 0 ? 0 : max_score,
+                          EventMaxScoreForDb(max_score),
                           max_score_frame_id,
                           id);
       dbQueue.push(std::move(sql));
@@ -1296,6 +1301,7 @@ void Event::Run() {
     }
     sql = stringtf("UPDATE Events SET StorageId = '%d', Scheme = '%s' WHERE Id=%" PRIu64, storage->Id(), storage->SchemeString().c_str(), id);
     zmDbDo(sql);
+    storage_id = storage->Id();
   }  // end if ! setPath(Storage)
   Debug(1, "Using storage area at %s", path.c_str());
 
@@ -1358,10 +1364,11 @@ void Event::Run() {
   // The idea is to process the queue no matter what so that all packets get processed.
   // We only break if the queue is empty
   Debug(1, "Event::Run %" PRIu64 ": entering packet loop", id);
-  while (!terminate_ and !zm_terminate) {
-    // I don't exactly remember why the no_wait
+  while (!zm_terminate) {
     ZMPacketLock packet_lock = packetqueue->get_packet_no_wait(packetqueue_it);
     std::shared_ptr<ZMPacket> packet = packet_lock.packet_;
+    if (!EventKeepsDraining(terminate_, drain_until.load(), packet.get()))
+      break;
     if (packet) {
       if (!packet->decoded) {
         Debug(1, "Not decoded");

@@ -144,6 +144,9 @@ function loadEventImage(imagePath, zm_event, fid) {
 
   var eventData = $j('#eventData'+zm_event.MonitorId);
   if ( eventData.length ) {
+    // showEvent reads these from the clicked element
+    eventData.attr('data-event-id', zm_event.Id);
+    eventData.attr('data-frame-id', fid);
     eventData.off('click');
     eventData.on('click', function() {
       showEvent(this);
@@ -189,13 +192,11 @@ function tlPanRight() {
 
 function divDataOnClick() {
   // These look like the code in skin.js, but that code doesn't select for divs.
-  document.querySelectorAll('div.event').forEach(function(el) {
+  document.querySelectorAll('div.event, div.activity').forEach(function(el) {
     el.onclick = window[el.getAttribute('data-on-click-this')].bind(el, el);
-    el.onmouseover = window[el.getAttribute('data-on-mouseover-this')].bind(el, el);
-  });
-  document.querySelectorAll('div.activity').forEach(function(el) {
-    el.onclick = window[el.getAttribute('data-on-click-this')].bind(el, el);
-    el.onmouseover = window[el.getAttribute('data-on-mouseover-this')].bind(el, el);
+    // Absent when the page was loaded with mouseover=0
+    const over = el.getAttribute('data-on-mouseover-this');
+    if (over) el.onmouseover = window[over].bind(el, el);
   });
   document.querySelectorAll('div.tlzoom').forEach(function(el) {
     el.onclick = function(ev) {
