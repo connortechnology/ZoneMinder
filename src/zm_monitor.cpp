@@ -5355,7 +5355,11 @@ unsigned int Monitor::EvaluateZones(Event::StringSet &zoneSet,
 
   for (Zone &zone : zones) {
     // need previous alarmed state for preclusive zone, so don't clear just yet
-    if (!zone.IsPreclusive()) zone.ClearAlarm();
+    if (!zone.IsPreclusive()) {
+      zone.ClearAlarm();
+      // Not every zone is checked each frame, so drop last frame's scores and boxes.
+      zone.ClearStats();
+    }
   }
 
   size_t zone_index = 0;

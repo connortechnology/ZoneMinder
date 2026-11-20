@@ -244,11 +244,11 @@ bool Zone::CheckExtendAlarmCount() {
 // already filled in and returns false when the zone fails that stage.
 //
 
-// A degenerate polygon (collinear points, one pixel wide) has no area but still
-// rasterises pixels, so never divide by zero when scoring it.
+// Score against the pixels the zone mask covers. The polygon's geometric area
+// leaves out its edge pixels (and is zero for a degenerate polygon that still
+// rasterises pixels), so never divide by zero when scoring it.
 int Zone::ZoneArea() const {
-  const int polygon_area = polygon.Area();
-  return polygon_area > 0 ? polygon_area : 1;
+  return pixel_area > 0 ? pixel_area : 1;
 }
 
 bool Zone::ScoreAlarmedPixels() {
