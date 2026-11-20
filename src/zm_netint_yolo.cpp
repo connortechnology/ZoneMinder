@@ -37,6 +37,21 @@ AVFrame *ai_input_frame(bool use_hwframe, AVFrame *hw_frame, AVFrame *in_frame) 
   return nullptr;
 }
 
+void LastDetection::remember(const AVRegionOfInterest *p_roi,
+                             const AVRegionOfInterestNetintExtra *p_extra, int num) {
+  roi.clear();
+  extra.clear();
+  if (num <= 0 or !p_roi or !p_extra) return;
+  roi.reserve(num);
+  extra.reserve(num);
+  for (int i = 0; i < num; i++) {
+    AVRegionOfInterest r = p_roi[i];
+    r.qoffset = { 0 , 1 };  // 0/1: no QP adjustment. den=0 is rejected by the encoder.
+    roi.push_back(r);
+    extra.push_back(p_extra[i]);
+  }
+}
+
 }  // namespace zm_yolo
 
 Quadra_Yolo::Quadra_Yolo(Monitor *p_monitor, bool p_use_hwframe) :
@@ -65,9 +80,6 @@ Quadra_Yolo::Quadra_Yolo(Monitor *p_monitor, bool p_use_hwframe) :
   dec_ctx(nullptr),
 
   aiframe_number(0),
-  last_roi(nullptr),
-  last_roi_extra(nullptr),
-  last_roi_count(0),
 
   use_hwframe(p_use_hwframe),
   filt_cnt(0)
@@ -86,9 +98,6 @@ Quadra_Yolo::~Quadra_Yolo() {
     delete model_ctx;
     model_ctx = nullptr;
   }
-
-  free(last_roi);
-  free(last_roi_extra);
 
   if (sw_scale_ctx) {
     sws_freeContext(sw_scale_ctx);
@@ -377,7 +386,13 @@ int Quadra_Yolo::receive_detection(std::shared_ptr<ZMPacket> packet) {
       Error("Quadra: read roi failed");
       return -1;
     } else if (ret == 0) {
+      // The inference completed and found nothing. That replaces the last
+      // detection like any other result: the frames skipped until the next
+      // inference must not go on drawing boxes from an earlier one.
       Debug(1, "Quadra: ni_read_roi == 0");
+      last_.forget();
+      detections = nlohmann::json::array();
+      packet->detections = detections;
       return 1;
     }
     aiframe_number++;
@@ -622,6 +637,8 @@ int Quadra_Yolo::process_roi(AVFrame *in_frame, AVFrame **filt_frame) {
     // filters: hwdownload then failed on thousands of frames. The analysis
     // image falls back to in_frame on its own.
     *filt_frame = nullptr;
+    last_.forget();
+    detections = nlohmann::json::array();
     Debug(1, "no roi area in frame %d", filt_cnt);
     return 0;
   }
@@ -765,31 +782,8 @@ int Quadra_Yolo::process_roi(AVFrame *in_frame, AVFrame **filt_frame) {
   *filt_frame = (output == in_frame) ? nullptr : output;
   if (input != in_frame and input != output) av_frame_free(&input);
   
-  // Technicall we should have a lock around this, but since we only access from the Analysis thread, we won't worry about it.
-  // // Not sure why we free/allocate, would be more efficient to allocate the max and just overwrite.
-  free(last_roi);
-  free(last_roi_extra);
-  AVRegionOfInterest* cur_roi = nullptr;
-  AVRegionOfInterestNetintExtra *cur_roi_extra = nullptr;
-
-  if (num > 0) {
-    cur_roi = (AVRegionOfInterest *)av_malloc((int)(num * sizeof(AVRegionOfInterest)));
-    cur_roi_extra = (AVRegionOfInterestNetintExtra *)av_malloc((int)(num * sizeof(AVRegionOfInterestNetintExtra)));
-    for (int i = 0; i < num; i++) {
-      (cur_roi[i]).self_size = roi[i].self_size;
-      (cur_roi[i]).top       = roi[i].top;
-      (cur_roi[i]).bottom    = roi[i].bottom;
-      (cur_roi[i]).left      = roi[i].left;
-      (cur_roi[i]).right     = roi[i].right;
-      (cur_roi[i]).qoffset   = { 0 , 1 };  // 0/1: no QP adjustment. den=0 is rejected by the encoder.
-      cur_roi_extra[i].self_size = roi_extra[i].self_size;
-      cur_roi_extra[i].cls       = roi_extra[i].cls;
-      cur_roi_extra[i].prob      = roi_extra[i].prob;
-    }
-  }
-  last_roi = cur_roi;
-  last_roi_extra = cur_roi_extra;
-  last_roi_count = num;
+  // Only the analysis thread reads or writes this, so it needs no lock.
+  last_.remember(roi, roi_extra, num);
 
   // We don't need the size data any more.  So free it.  Probably not worth it.
   av_frame_side_data_free(&in_frame->side_data, &in_frame->nb_side_data);
@@ -865,7 +859,7 @@ int Quadra_Yolo::annotate(
 } // end annotate
 
 int Quadra_Yolo::draw_last_roi(std::shared_ptr<ZMPacket> packet) {
-  if (!last_roi_count) return 1;
+  if (!last_.count()) return 1;
 
 #if SOFTWARE_DRAWBOX
   if (packet->needs_hw_transfer(dec_ctx)) {
@@ -883,10 +877,10 @@ int Quadra_Yolo::draw_last_roi(std::shared_ptr<ZMPacket> packet) {
 
   if (!input) return 1;
 
-  for (int i = 0; i < last_roi_count; i++) {
+  for (int i = 0; i < last_.count(); i++) {
     // Apply same filtering as in process_roi
-    std::string class_name = object_classes_.getClassName(last_roi_extra[i].cls);
-    nlohmann::json detection = {{"class", class_name}, {"score", last_roi_extra[i].prob}};
+    std::string class_name = object_classes_.getClassName(last_.extra[i].cls);
+    nlohmann::json detection = {{"class", class_name}, {"score", last_.extra[i].prob}};
     nlohmann::json temp_array = nlohmann::json::array();
     temp_array.push_back(detection);
     nlohmann::json filtered = monitor->FilterDetections(temp_array);
@@ -904,7 +898,7 @@ int Quadra_Yolo::draw_last_roi(std::shared_ptr<ZMPacket> packet) {
 
     AVFrame *output = nullptr;
     // Annotate doesn't touch input, should return output, which is a frame pointing to the same data as input.
-    annotate(input, &output, last_roi[i], last_roi_extra[i], box_color);
+    annotate(input, &output, last_.roi[i], last_.extra[i], box_color);
     if (output) {
       // This is incorrect, and is only here as a test.
       if (input != in_frame) av_frame_free(&input);
@@ -912,9 +906,9 @@ int Quadra_Yolo::draw_last_roi(std::shared_ptr<ZMPacket> packet) {
     }
     if (drawtext) {
       text_items.push_back({
-          stringtf("%s %.1f%%", class_name.c_str(), 100*last_roi_extra[i].prob),
-          last_roi[i].left + 1 + monitor->LabelSize(),
-          last_roi[i].top + 1 + monitor->LabelSize(),
+          stringtf("%s %.1f%%", class_name.c_str(), 100*last_.extra[i].prob),
+          last_.roi[i].left + 1 + monitor->LabelSize(),
+          last_.roi[i].top + 1 + monitor->LabelSize(),
           "white"});
     }
   } // end foreach detection
@@ -967,14 +961,14 @@ int Quadra_Yolo::check_movement(
     AVRegionOfInterest cur_roi,
     AVRegionOfInterestNetintExtra cur_roi_extra)
 {
-    for (int i = 0; i < last_roi_count; i++) {
-        if (last_roi_extra[i].cls == cur_roi_extra.cls) {
-            if (abs(cur_roi.left - last_roi[i].left) < NI_SAME_BORDER_THRESH &&
-                abs(cur_roi.right - last_roi[i].right) < NI_SAME_BORDER_THRESH &&
-                abs(cur_roi.top - last_roi[i].top) < NI_SAME_BORDER_THRESH &&
-                abs(cur_roi.bottom - last_roi[i].bottom) < NI_SAME_BORDER_THRESH &&
-                abs((last_roi[i].left + last_roi[i].right) / 2 - (cur_roi.left + cur_roi.right) / 2) < NI_SAME_CENTER_THRESH &&
-                abs((last_roi[i].top + last_roi[i].bottom) / 2 - (cur_roi.top + cur_roi.bottom) / 2) < NI_SAME_CENTER_THRESH) {
+    for (int i = 0; i < last_.count(); i++) {
+        if (last_.extra[i].cls == cur_roi_extra.cls) {
+            if (abs(cur_roi.left - last_.roi[i].left) < NI_SAME_BORDER_THRESH &&
+                abs(cur_roi.right - last_.roi[i].right) < NI_SAME_BORDER_THRESH &&
+                abs(cur_roi.top - last_.roi[i].top) < NI_SAME_BORDER_THRESH &&
+                abs(cur_roi.bottom - last_.roi[i].bottom) < NI_SAME_BORDER_THRESH &&
+                abs((last_.roi[i].left + last_.roi[i].right) / 2 - (cur_roi.left + cur_roi.right) / 2) < NI_SAME_CENTER_THRESH &&
+                abs((last_.roi[i].top + last_.roi[i].bottom) / 2 - (cur_roi.top + cur_roi.bottom) / 2) < NI_SAME_CENTER_THRESH) {
                     return 1;
                 }
         }
