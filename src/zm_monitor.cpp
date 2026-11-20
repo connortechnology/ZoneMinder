@@ -2639,14 +2639,13 @@ int Monitor::Analyse() {
             if (packet->in_frame) {
               if (analysis_fps_limit) {
                 double capture_fps = get_capture_fps();
-                int new_skip = capture_fps / analysis_fps_limit;
+                int new_skip = AnalysisFrameSkip(capture_fps, analysis_fps_limit);
                 if (new_skip != motion_frame_skip) {
                   motion_frame_skip = new_skip;
                   packetqueue.setPreEventVideoPackets(PreEventWalkBack());
                 }
                 Debug(1, "Recalculating motion_frame_skip (%d) = capture_fps(%f) / analysis_fps(%f)",
                     motion_frame_skip, capture_fps, analysis_fps_limit);
-                if (motion_frame_skip < 0) motion_frame_skip = 0;
               }
 
               if (objectdetection != OBJECT_DETECTION_NONE) {
