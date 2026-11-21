@@ -3879,7 +3879,7 @@ std::pair<int, std::string> Monitor::Analyse_MotionDetection(std::shared_ptr<ZMP
             } else {
               zone_colour = kRGBWhite;
             }
-            packet->analysis_image->Overlay(*(zone.AlarmImage()), zone_colour, analysis_image_opacity);
+            OverlayAlarmImage(*packet->analysis_image, *zone.AlarmImage(), zone_colour, analysis_image_opacity);
           }
         }
         Debug(4, "Setting score for zone %d to %d", zone_index, zone.Score());
@@ -4070,6 +4070,22 @@ std::string Monitor::RtspUrlFromRemote(
     url += path;
   }
   return url;
+}
+
+bool Monitor::OverlayAlarmImage(Image &analysis, const Image &alarm, Rgb colour, uint8_t opacity) {
+  if (alarm.Width() == analysis.Width() and alarm.Height() == analysis.Height()) {
+    analysis.Overlay(alarm, colour, opacity);
+    return true;
+  }
+  // Reused across frames: AssignScaled keeps the buffer while the size holds.
+  static thread_local Image scaled;
+  if (!scaled.AssignScaled(alarm, analysis.Width(), analysis.Height())) {
+    Warning("Could not scale the %ux%u zone alarm image to the %ux%u analysis image",
+            alarm.Width(), alarm.Height(), analysis.Width(), analysis.Height());
+    return false;
+  }
+  analysis.Overlay(scaled, colour, opacity);
+  return true;
 }
 
 std::pair<unsigned int, unsigned int> Monitor::MotionFrameSize(

@@ -1600,6 +1600,11 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   // what Analyse_MotionDetection() returned: -1 when it did not look at the
   // frame (skipped, or seeding the reference), otherwise the score.
   static bool QuietFrameCounts(int motion_score, AnalysingOption analysing);
+  // Overlays a zone's alarm image onto the analysis image. Motion detection
+  // runs at MotionFrameWidth, so the alarm image can be smaller than the
+  // capture-sized analysis image; it is scaled up to match first. Returns
+  // false when it could not be scaled, leaving the analysis image untouched.
+  static bool OverlayAlarmImage(Image &analysis, const Image &alarm, Rgb colour, uint8_t opacity);
   // The motion frame size for a MotionFrameWidth setting on a width x height
   // capture: the setting's width, rounded down to even, with the height that
   // keeps the capture's aspect ratio. 0, or a width not smaller than the

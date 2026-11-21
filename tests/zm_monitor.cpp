@@ -129,3 +129,36 @@ TEST_CASE("Analysis returns Quadra frames once object detection is done", "[Moni
   }
 #endif
 }
+
+// Motion detection runs at MotionFrameWidth, so a zone's alarm image is at the
+// motion size while the analysis image is at the capture size. Overlaying one
+// onto the other panicked and took zmc down at every alarm.
+TEST_CASE("A motion-sized alarm image overlays onto the capture-sized analysis image", "[Monitor]") {
+  Image analysis(64, 36, ZM_COLOUR_GRAY8, ZM_SUBPIX_ORDER_NONE);
+  analysis.Clear();
+  Image alarm(16, 9, ZM_COLOUR_GRAY8, ZM_SUBPIX_ORDER_NONE);
+  alarm.Clear();
+  // An alarmed block in the top left quarter of the motion frame.
+  for (unsigned int y = 1; y < 4; y++)
+    for (unsigned int x = 1; x < 7; x++) *alarm.Buffer(x, y) = 255;
+
+  REQUIRE(Monitor::OverlayAlarmImage(analysis, alarm, kRGBWhite, 255));
+  REQUIRE(analysis.Width() == 64);
+  REQUIRE(analysis.Height() == 36);
+  // The block, four times larger, is painted; the far corner is not.
+  CHECK(*analysis.Buffer(12, 8) != 0);
+  CHECK(*analysis.Buffer(20, 10) != 0);
+  CHECK(*analysis.Buffer(60, 32) == 0);
+}
+
+TEST_CASE("An alarm image already at the analysis size overlays unscaled", "[Monitor]") {
+  Image analysis(32, 18, ZM_COLOUR_GRAY8, ZM_SUBPIX_ORDER_NONE);
+  analysis.Clear();
+  Image alarm(32, 18, ZM_COLOUR_GRAY8, ZM_SUBPIX_ORDER_NONE);
+  alarm.Clear();
+  *alarm.Buffer(5, 5) = 255;
+
+  REQUIRE(Monitor::OverlayAlarmImage(analysis, alarm, kRGBWhite, 255));
+  CHECK(*analysis.Buffer(5, 5) != 0);
+  CHECK(*analysis.Buffer(6, 5) == 0);
+}
