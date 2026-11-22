@@ -139,7 +139,8 @@ int FfmpegCamera::PrimeCapture() {
   if (!mOptions.empty()) {
     ret = av_dict_parse_string(&opts, mOptions.c_str(), "=", kOptionSeparators, 0);
     if (ret < 0) {
-      Warning("Could not parse ffmpeg input options '%s'", mOptions.c_str());
+      Error("Could not parse ffmpeg input options '%s'. Options must be key=value pairs separated by commas or "
+            "new lines, such as tls_verify=0, not ffmpeg command line flags like -tls_verify 0.", mOptions.c_str());
     }
     av_dict_set(&opts, "xcoder-params", nullptr, AV_DICT_MATCH_CASE);
 
@@ -165,6 +166,10 @@ int FfmpegCamera::PrimeCapture() {
       av_dict_set(&opts, "re", nullptr, 0);
       Debug(1, "Real-time pacing %s from options", mRealtime ? "enabled" : "disabled");
     }
+
+    // "input_format=mjpeg" forces the demuxer like ffmpeg's -f flag. Not
+    // applied to v4l2, which always uses its own device format below.
+    input_format = FindForcedInputFormat(&opts);
   }
 
   // Fresh prime: drop any real-time anchor so pacing restarts cleanly.
@@ -174,6 +179,10 @@ int FfmpegCamera::PrimeCapture() {
   // Fresh prime: start with no loop offset.
   mLoopVideoOffset = 0;
   mLoopAudioOffset = 0;
+
+  // What ffmpeg is given. For v4l2 it is the path without the scheme, which
+  // must not be written back to mPath or the next prime no longer sees v4l2.
+  std::string openPath = mPath;
 
   // Set transport method as specified by method field, rtpUni is default
   std::string protocol = mPath.substr(0, 4);
@@ -201,8 +210,8 @@ int FfmpegCamera::PrimeCapture() {
       Error("Cannot find v4l2 input format");
       return -1;
     }
-    mPath = mPath.substr(7);
-    mMaskedPath = mPath;  // Update masked path after stripping v4l2:// prefix
+    openPath = mPath.substr(7);
+    mMaskedPath = openPath;  // Log the device node ffmpeg is given
   }  // end if RTSP
 
   Debug(1, "Calling avformat_open_input for %s", mMaskedPath.c_str());
@@ -219,10 +228,10 @@ int FfmpegCamera::PrimeCapture() {
 
   if (mUser.length() > 0) {
     try {
-      Url url(mPath);
+      Url url(openPath);
       if (url.user_info().empty()) {
         url.user_info(mUser + ":" + mPass);
-        mPath = url.str();
+        openPath = url.str();
         Debug(1, "Rebuilt URI with encoded parameters: '%s'", mMaskedPath.c_str());
       }
     } catch (const Url::parse_error &e) {
@@ -230,7 +239,7 @@ int FfmpegCamera::PrimeCapture() {
     }
   }
 
-  ret = avformat_open_input(&mFormatContext, mPath.c_str(), input_format, &opts);
+  ret = avformat_open_input(&mFormatContext, openPath.c_str(), input_format, &opts);
   if (ret != 0) {
     logPrintf(Logger::ERROR + monitor->Importance(),
               "Unable to open input %s due to: %s", mMaskedPath.c_str(),

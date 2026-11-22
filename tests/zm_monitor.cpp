@@ -162,3 +162,16 @@ TEST_CASE("An alarm image already at the analysis size overlays unscaled", "[Mon
   CHECK(*analysis.Buffer(5, 5) != 0);
   CHECK(*analysis.Buffer(6, 5) == 0);
 }
+
+// Analysing every Nth frame is a skip of N-1. Dividing the rates gave N, so a
+// 10fps camera limited to 5fps was analysed at 3.3fps, and object detection
+// shares the same skip.
+TEST_CASE("Analysis fps limit picks the skip that meets it", "[Monitor]") {
+  REQUIRE(Monitor::AnalysisFrameSkip(10.0, 5.0) == 1);
+  REQUIRE(Monitor::AnalysisFrameSkip(30.0, 10.0) == 2);
+  // A measured rate a little off the nominal one picks the same skip.
+  REQUIRE(Monitor::AnalysisFrameSkip(9.8, 5.0) == 1);
+  REQUIRE(Monitor::AnalysisFrameSkip(10.0, 10.0) == 0);
+  REQUIRE(Monitor::AnalysisFrameSkip(5.0, 10.0) == 0);
+  REQUIRE(Monitor::AnalysisFrameSkip(10.0, 0.0) == 0);
+}

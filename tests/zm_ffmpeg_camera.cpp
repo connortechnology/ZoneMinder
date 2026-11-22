@@ -436,6 +436,15 @@ TEST_CASE("FfmpegCamera: priming a v4l2 path twice opens it as v4l2 both times")
   REQUIRE(static_cast<FfmpegCamera *>(camera.get())->Path() == path);
 }
 
+TEST_CASE("FfmpegCamera: input_format in the options forces the demuxer") {
+  // An mp4 opened as raw MJPEG finds no picture. Without the option ffmpeg
+  // probes the file and opens it; see the cases above.
+  SecondPathMonitor monitor("");
+  auto camera = std::make_unique<FfmpegCamera>(&monitor, kVideoOnly, "", "", "", "", "input_format=mjpeg",
+                                               160, 120, ZM_COLOUR_RGB24, -1, -1, -1, -1, true, true);
+  REQUIRE(camera->PrimeCapture() <= 0);
+}
+
 TEST_CASE("FindForcedInputFormat: input_format forces the demuxer and is consumed") {
   AVDictionary *opts = nullptr;
   av_dict_set(&opts, "input_format", "mjpeg", 0);
