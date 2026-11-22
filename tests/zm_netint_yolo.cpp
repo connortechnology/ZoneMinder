@@ -89,4 +89,45 @@ TEST_CASE("zm_yolo::ai_input_frame hardware session", "[yolo]") {
   }
 }
 
+TEST_CASE("zm_yolo::LastDetection is replaced by every inference", "[yolo]") {
+  AVRegionOfInterest roi[2] = {};
+  AVRegionOfInterestNetintExtra extra[2] = {};
+  roi[0].left = 10; roi[0].top = 20; roi[0].right = 110; roi[0].bottom = 220;
+  roi[1].left = 300; roi[1].top = 40; roi[1].right = 400; roi[1].bottom = 140;
+  extra[0].cls = 0;  // person
+  extra[0].prob = 0.9f;
+  extra[1].cls = 2;  // car
+  extra[1].prob = 0.6f;
+
+  zm_yolo::LastDetection last;
+  REQUIRE(last.count() == 0);
+
+  last.remember(roi, extra, 2);
+  REQUIRE(last.count() == 2);
+  REQUIRE(last.roi[1].left == 300);
+  REQUIRE(last.extra[1].cls == 2);
+  // The encoder refuses a zero denominator; a remembered box must not carry one.
+  REQUIRE(last.roi[0].qoffset.den == 1);
+
+  // The regression: an inference that finds nothing left the previous boxes in
+  // place, and every frame skipped until the next inference drew them again.
+  SECTION("an inference that found nothing clears it") {
+    last.forget();
+    REQUIRE(last.count() == 0);
+    REQUIRE(last.extra.empty());
+  }
+
+  SECTION("an empty result passed as a count of zero clears it") {
+    last.remember(roi, extra, 0);
+    REQUIRE(last.count() == 0);
+  }
+
+  SECTION("a new detection replaces rather than adds to the last") {
+    last.remember(&roi[1], &extra[1], 1);
+    REQUIRE(last.count() == 1);
+    REQUIRE(last.roi[0].left == 300);
+    REQUIRE(last.extra[0].cls == 2);
+  }
+}
+
 #endif  // HAVE_QUADRA

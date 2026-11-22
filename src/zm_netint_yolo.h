@@ -41,6 +41,21 @@ namespace zm_yolo {
 // a fault, because the decoder hands hw_frame back to the card once we are at
 // the device frame budget.
 AVFrame *ai_input_frame(bool use_hwframe, AVFrame *hw_frame, AVFrame *in_frame);
+
+// The boxes from the most recent inference, redrawn on the frames skipped
+// between inferences. Every inference replaces them, including one that found
+// nothing: keeping the previous boxes then draws an object into the video that
+// is no longer in the scene, on frames that carry no detection to tag the
+// event with.
+struct LastDetection {
+  std::vector<AVRegionOfInterest> roi;
+  std::vector<AVRegionOfInterestNetintExtra> extra;
+
+  void remember(const AVRegionOfInterest *p_roi,
+                const AVRegionOfInterestNetintExtra *p_extra, int num);
+  void forget() { remember(nullptr, nullptr, 0); }
+  int count() const { return static_cast<int>(roi.size()); }
+};
 }  // namespace zm_yolo
 
 class Quadra_Yolo {
@@ -85,9 +100,7 @@ class Quadra_Yolo {
     AVCodecContext *dec_ctx;
 
     int aiframe_number;
-    AVRegionOfInterest *last_roi;
-    AVRegionOfInterestNetintExtra *last_roi_extra;
-    int last_roi_count;
+    zm_yolo::LastDetection last_;
 
     // Annotation cost, split by the two operations, so the software and
     // hardware paths can be compared on the same monitor. Accumulated per
