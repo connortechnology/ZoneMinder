@@ -89,7 +89,7 @@ if ( $Config{ZM_LD_PRELOAD} ) {
   }
 }
 #delete @ENV{qw(IFS CDPATH ENV BASH_ENV)};
-Debug(Data::Dumper::Dumper(\%ENV));
+Dump(\%ENV, 'ENV');
 
 my @daemons = (
   'zm_ai_server',
