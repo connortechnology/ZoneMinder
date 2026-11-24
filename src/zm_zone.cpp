@@ -1343,10 +1343,11 @@ std::vector<Zone> Zone::Load(const std::shared_ptr<Monitor> &monitor) {
       MinBlobPixels = ScalePixelCount(static_cast<int>(MinBlobPixels_pct), area_ratio);
       MaxBlobPixels = ScalePixelCount(static_cast<int>(MaxBlobPixels_pct), area_ratio);
     }
-    // The filter box is in capture pixels however the zone is stored.
+    // The filter box is in capture pixels however the zone is stored. It
+    // shrinks with the frame, but not so far that it stops filtering.
     if (scaled) {
-      FilterX = ScaleLength(FilterX, static_cast<double>(frame_width) / capture_width);
-      FilterY = ScaleLength(FilterY, static_cast<double>(frame_height) / capture_height);
+      FilterX = ScaleFilterLength(FilterX, static_cast<double>(frame_width) / capture_width);
+      FilterY = ScaleFilterLength(FilterY, static_cast<double>(frame_height) / capture_height);
     }
 
     if (atoi(dbrow[2]) == Zone::INACTIVE) {
@@ -1387,9 +1388,10 @@ int Zone::ScalePixelCount(int count, double area_ratio) {
   return std::max(1, static_cast<int>(std::lround(count * area_ratio)));
 }
 
-int Zone::ScaleLength(int length, double ratio) {
+int Zone::ScaleFilterLength(int length, double ratio) {
   if (length <= 0) return length;
-  return std::max(1, static_cast<int>(std::lround(length * ratio)));
+  const int floor = length >= 2 ? 2 : 1;
+  return std::max(floor, static_cast<int>(std::lround(length * ratio)));
 }
 
 std::string Zone::DumpSettings(bool /*verbose*/) const {

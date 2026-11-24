@@ -269,7 +269,10 @@ class Zone {
   static Polygon ScalePolygon(const Polygon &polygon, unsigned int from_width, unsigned int from_height,
                               unsigned int to_width, unsigned int to_height);
   static int ScalePixelCount(int count, double area_ratio);
-  static int ScaleLength(int length, double ratio);
+  // A filter box side scaled by ratio. A box of 1x1 does no filtering, so a
+  // side of 2 or more never scales below 2: shrinking the frame must not turn
+  // the zone's noise filtering off.
+  static int ScaleFilterLength(int length, double ratio);
   //=================================================
   bool CheckOverloadCount();
   int GetOverloadCount();

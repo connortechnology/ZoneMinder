@@ -553,11 +553,20 @@ TEST_CASE("Zone thresholds scale with the motion frame", "[Zone]") {
     REQUIRE(Zone::ScalePixelCount(5, 1.0 / 9) == 1);
   }
 
-  SECTION("lengths scale by width") {
-    REQUIRE(Zone::ScaleLength(9, 1.0 / 3) == 3);
-    REQUIRE(Zone::ScaleLength(0, 1.0 / 3) == 0);
-    REQUIRE(Zone::ScaleLength(3, 1.0 / 3) == 1);
-    REQUIRE(Zone::ScaleLength(2, 1.0 / 3) == 1);
+  SECTION("the filter box scales by width") {
+    REQUIRE(Zone::ScaleFilterLength(9, 1.0 / 3) == 3);
+    REQUIRE(Zone::ScaleFilterLength(30, 1.0 / 3) == 10);
+    REQUIRE(Zone::ScaleFilterLength(0, 1.0 / 3) == 0);
+    REQUIRE(Zone::ScaleFilterLength(1, 1.0 / 3) == 1);
+    REQUIRE(Zone::ScaleFilterLength(3, 1.0) == 3);
+  }
+
+  // A 1x1 box doesn't filter at all, so a 3x3 box scaled to a third of the
+  // width turned filtering off and sent every noise pixel to blob detection.
+  SECTION("a filter box that filtered still filters after scaling") {
+    REQUIRE(Zone::ScaleFilterLength(3, 1.0 / 3) == 2);
+    REQUIRE(Zone::ScaleFilterLength(2, 1.0 / 3) == 2);
+    REQUIRE(Zone::ScaleFilterLength(5, 1.0 / 6) == 2);
   }
 }
 
