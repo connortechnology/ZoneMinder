@@ -90,6 +90,7 @@ TEST_CASE("SharedData offsets still match Monitor.php and Memory.pm", "[Monitor]
   CHECK(offsetof(SharedData, stream_socket_path) == 704);
   CHECK(offsetof(SharedData, janus_pin) == 832);
   CHECK(offsetof(SharedData, audio_level_until) == 896);
+  CHECK(offsetof(SharedData, onvif_status) == 900);
 }
 
 TEST_CASE("SharedValue reads and writes the plain value", "[Monitor]") {

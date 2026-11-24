@@ -330,7 +330,7 @@ class FilterTerm {
     case 'MonitorServerId':
       return 'M.ServerId';
     case 'StorageServerId':
-      return 'S.ServerId';
+      return '(SELECT Storage.ServerId FROM Storage WHERE Storage.Id=E.StorageId)';
     case 'FilterServerId':
       return '/* ZM_SERVER_ID:*/'.(defined('ZM_SERVER_ID') ? ZM_SERVER_ID : 0);
       # Unspecified start or end, so assume start, this is to support legacy filters
@@ -540,8 +540,9 @@ class FilterTerm {
   // Returns [$day_start_sql, $next_day_start_sql] for a date value.
   // $value is either a quoted 'YYYY-MM-DD HH:MM:SS', CURDATE(), or NOW().
   private static function dateBounds($value) {
-    if ($value === 'CURDATE()' || $value === 'NOW()') {
-      return array($value, "$value + INTERVAL 1 DAY");
+    // NOW() is the current day, so its bounds are midnight like CURDATE()'s
+    if (in_array(strtoupper($value), array('CURDATE()', 'NOW()'), true)) {
+      return array('CURDATE()', 'CURDATE() + INTERVAL 1 DAY');
     }
     $stripped = preg_replace("/^'(.+)'$/", '$1', $value);
     if (!preg_match('/^(\d{4})-(\d{2})-(\d{2})/', $stripped, $m)) {
@@ -637,20 +638,7 @@ class FilterTerm {
         # The logic on this when there are multiple storage areas breaks.  We will just use the first.
         foreach ( $storage_areas as $storage ) {
           Debug($storage->disk_usage_percent(). ' '.$this->op.'? '.$this->val);
-          switch ($this->op) {
-          case '=':
-            return ($storage->disk_usage_percent() == $this->val);
-          case '>':
-            return ($storage->disk_usage_percent() > $this->val);
-          case '<':
-            return ($storage->disk_usage_percent() < $this->val);
-          case '<=':
-            return ($storage->disk_usage_percent() <= $this->val);
-          case '>=':
-            return ($storage->disk_usage_percent() >= $this->val);
-          default:
-            Warning('Invalid op '.$this->op .' for DiskPercent.');
-          }
+          return $this->compare($storage->disk_usage_percent(), $this->op, $this->val);
         } # end foreach Storage Area
       } else if ( $this->attr == 'DiskBlocks' ) {
         # As with DiskPercent, we will just use the first storage area.

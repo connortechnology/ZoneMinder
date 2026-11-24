@@ -74,11 +74,14 @@ if (isset($_REQUEST['limit'])) {
 switch ($task) {
   case 'delete' :
 		if (!canEdit('Snapshots'))  {
-			ajaxError('Insufficient permissions for user '.$user->Username());
+			ajaxError('Insufficient permissions for user '.validHtmlStr($user->Username()));
 			return;
 		}
 
-    foreach ($ids as $id) $data[] = deleteRequest($id);
+    // Only the problems are reported; snapshots.js shows them.
+    $messages = array();
+    foreach ($ids as $id) $messages = array_merge($messages, deleteRequest($id));
+    $data = array('message' => $messages);
     break;
   case 'query' :
     $data = queryRequest($search, $advsearch, $sort, $offset, $order, $limit);
@@ -97,12 +100,9 @@ function deleteRequest($id) {
   $message = array();
   $snapshot = new ZM\Snapshot($id);
   if ( !$snapshot->Id() ) {
-    $message[] = array($id=>'Snapshot not found.');
-  //} else if ( $snapshot->Archived() ) {
-    //$message[] = array($id=>'Event is archived, cannot delete it.');
-  } else {
-    $snapshot->delete();
-    $message[] = array($id=>'Snapshot deleted.');
+    $message[] = 'Snapshot '.$id.' not found.';
+  } else if ( !$snapshot->delete() ) {
+    $message[] = 'Snapshot '.$id.' could not be deleted.';
   }
   
   return $message;
@@ -149,7 +149,8 @@ function queryRequest($search, $advsearch, $sort, $offset, $order, $limit) {
       $terms[count($terms)-1]['cbr'] = 1;
       $search_filter->addTerms($terms);
     } else if ( $search != '' ) {
-      $search = '%' .$search. '%';
+      // FilterTerm splits a value on commas into alternatives, so match a comma as any one character.
+      $search = '%' .str_replace(',', '_', $search). '%';
       $terms = array();
       foreach ( $columns as $col ) {
         $terms[] = array('cnj'=>'or', 'attr'=>$col, 'op'=>'LIKE', 'val'=>$search, 'tablename'=>'Snapshots');

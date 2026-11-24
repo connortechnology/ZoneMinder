@@ -1056,6 +1056,15 @@ function setLive(value) {
   liveMode = value;
   var form = document.getElementById('montagereview_form');
   form.elements['live'].value = value;
+  // Fit and scale are changed in script only, so carry the current values over
+  form.elements['fit'].value = (fitMode == 1) ? '1' : '0';
+  if (!form.elements['scale']) {
+    const scaleInput = document.createElement('input');
+    scaleInput.type = 'hidden';
+    scaleInput.name = 'scale';
+    form.appendChild(scaleInput);
+  }
+  form.elements['scale'].value = currentScale;
   form.submit();
   return false;
 }
@@ -1278,7 +1287,8 @@ function changeFilters(e) {
     minTimeSecs = minStartDateTime.valueOf()/1000;
     maxTime = maxStartDateTime.toFormat('yyyy-MM-dd HH:mm:ss');
     maxTimeSecs = maxStartDateTime.valueOf()/1000;
-    rangeTimeSecs = maxTimeSecs - minTimeSecs;
+    // inclusive, as montagereview.js.php emits it; never 0 when min equals max
+    rangeTimeSecs = maxTimeSecs - minTimeSecs + 1;
     // On any change, jump to beginning ? No...
     if (currentTimeSecs < minTimeSecs) {
       // console.log("currentTimeSecs < minTimeSecs setting to ", minTimeSecs, minTime);
@@ -1754,14 +1764,36 @@ function loadFrames(zm_events) {
       return;
     }
 
+    // A failed fetch must drop the "loading" marker we set above, otherwise a
+    // closed event is skipped by the filter on every later call and its frames
+    // can never be loaded again until a page reload.
+    const clearLoadingMarkers = function(event_ids) {
+      for (let i=0; i<event_ids.length; i++) {
+        const e = zm_events[event_ids[i]];
+        if (e && e.FramesById && !e.FramesById.length) delete e.FramesById;
+      }
+    };
+
     let query = '';
+    let batch = [];
+    let outstanding = 0; // the caller redraws once, so resolve when every batch is in
     while (ids.length) {
-      query += '/EventId:'+ids.shift();
+      const id = ids.shift();
+      query += '/EventId:'+id;
+      batch.push(id);
 
       if ((!ids.length) || (query.length > 1000)) {
+        // Snapshot the batch for this request: the loop keeps pushing into it
+        // and the ajax callbacks run later.
+        const batch_ids = batch;
+        batch = [];
+        outstanding++;
         $j.ajax(zmAuth.appendTo(url+query+'.json'), {
           timeout: 0,
           success: function(data) {
+            if (data && data.result == 'Error') {
+              clearLoadingMarkers(batch_ids);
+            }
             if (data && data.frames && data.frames.length) {
               let last_frame = null;
 
@@ -1802,10 +1834,11 @@ function loadFrames(zm_events) {
             } else {
               // console.log("No frames in data", data);
             } // end if there are frames
-            resolve();
+            if (--outstanding == 0) resolve();
           },
           error: function(jqXHR) {
             logAjaxFail(jqXHR);
+            clearLoadingMarkers(batch_ids);
             reject(Error("There was an error"));
           }
         }); // end ajax

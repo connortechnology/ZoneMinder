@@ -20,6 +20,8 @@
 #include "zm_eventstream.h"
 
 #include <chrono>
+#include <string>
+#include <vector>
 
 namespace {
 
@@ -36,6 +38,18 @@ class ProbeEventStream : public EventStream {
     for (int i = 0; i < count; i++) {
       event_data->frames.emplace_back(i + 1, event_data->start_time + spacing * i, spacing * i,
                                       i ? spacing : Microseconds(0), true);
+    }
+  }
+  // Frames at the given offsets from the start, in an event of the given length.
+  void loadFrameTimes(const std::vector<Microseconds> &offsets, Microseconds length) {
+    event_data = new EventData();
+    event_data->start_time = SystemTimePoint(Seconds(1000));
+    event_data->end_time = event_data->start_time + length;
+    event_data->duration = length;
+    event_data->frame_count = static_cast<int>(offsets.size());
+    for (size_t i = 0; i < offsets.size(); i++) {
+      event_data->frames.emplace_back(static_cast<unsigned int>(i) + 1, event_data->start_time + offsets[i], offsets[i],
+                                      i ? offsets[i] - offsets[i - 1] : Microseconds(0), true);
     }
   }
   void start(SystemTimePoint t) { startAtTime(t); }
@@ -101,6 +115,30 @@ TEST_CASE("event= with a time outside the event starts on frame 1", "[EventStrea
   }
 }
 
+TEST_CASE("event= with a time starts on the last frame at or before it", "[EventStreamCmd]") {
+  ProbeEventStream stream;
+
+  SECTION("a time on each frame") {
+    stream.loadFrames(10, Milliseconds(100));
+    for (int i = 0; i < 10; i++) {
+      stream.start(stream.startTime() + Milliseconds(100) * i);
+      CHECK(stream.frameId() == i + 1);
+    }
+    stream.start(stream.startTime() + Milliseconds(450));
+    CHECK(stream.frameId() == 5);
+  }
+  SECTION("a time in a gap longer than the one before it") {
+    stream.loadFrameTimes({Milliseconds(0), Milliseconds(100), Milliseconds(150), Milliseconds(300)}, Milliseconds(400));
+    stream.start(stream.startTime() + Milliseconds(290));
+    CHECK(stream.frameId() == 3);
+  }
+  SECTION("a time after the last frame") {
+    stream.loadFrameTimes({Milliseconds(0), Milliseconds(100), Milliseconds(200)}, Milliseconds(500));
+    stream.start(stream.startTime() + Milliseconds(450));
+    CHECK(stream.frameId() == 3);
+  }
+}
+
 TEST_CASE("zms scale= is limited, and a negative value is not a huge one", "[EventStreamCmd]") {
   CHECK(StreamBase::ParseScaleParam("50") == 50);
   CHECK(StreamBase::ParseScaleParam("1600") == 1600);
@@ -110,4 +148,16 @@ TEST_CASE("zms scale= is limited, and a negative value is not a huge one", "[Eve
   CHECK(StreamBase::ParseScaleParam("abc") == 100);
   CHECK(StreamBase::ParseScaleParam("-50") == 100);
   CHECK(StreamBase::ParseScaleParam("-1") == 100);
+}
+
+TEST_CASE("zms time= gives the time it names", "[EventStreamCmd]") {
+  // A double near 1.7e9 is up to 0.12 us off the decimal it was read from.
+  // Truncated to a nanosecond clock, about a quarter of two-decimal times came
+  // out just before the frame at that time, so the stream started a frame early.
+  const SystemTimePoint start(Seconds(1763600000));
+  for (int cs = 0; cs < 100; cs++) {
+    const std::string value = std::to_string(1763600000) + (cs < 10 ? ".0" : ".") + std::to_string(cs);
+    CAPTURE(value);
+    CHECK(StreamBase::ParseTimeParam(value.c_str()) == start + Milliseconds(10 * cs));
+  }
 }

@@ -23,7 +23,7 @@ require_once('includes/Monitor.php');
 
 if ( $action == 'create' ) {
   // A snapshot forces an alarm on each monitor and archives the events it
-  // records, so it needs Snapshots edit, and only monitors the user can view.
+  // records, so it needs Snapshots edit, and only monitors the user can edit.
   if (!canEdit('Snapshots')) {
     ZM\Warning('Creating a snapshot requires Snapshots edit permission');
     return;
@@ -39,7 +39,7 @@ if ( $action == 'create' ) {
       continue;
     }
     $monitor = ZM\Monitor::find_one(['Id'=>$monitor_id]);
-    if (!$monitor or !visibleMonitor($monitor->Id())) {
+    if (!$monitor or !visibleMonitor($monitor->Id()) or !$monitor->canEdit()) {
       ZM\Error('Monitor not found for id '.$monitor_id);
       continue;
     }
@@ -99,6 +99,9 @@ if ( isset($_REQUEST['id']) ) {
         ZM\AuditAction('update', 'snapshot', $snapshot->Id(), 'Changed: '.implode(', ', array_keys($changes)));
       }
       $redirect = '?view=snapshots';
+    } else {
+      global $error_message;
+      $error_message .= 'You do not have permission to edit this snapshot.<br/>';
     }
   } else if ( $action == 'delete' ) {
     if ( canEdit('Events') ) {

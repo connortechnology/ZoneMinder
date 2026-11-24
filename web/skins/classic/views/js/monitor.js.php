@@ -2,6 +2,12 @@ const hasOnvif = <?php echo ZM_HAS_ONVIF ?>;
 const useAuth = <?php echo ZM_OPT_USE_AUTH ? 'true' : 'false' ?>;
 const defaultAspectRatio = '<?php echo ZM_DEFAULT_ASPECT_RATIO ?>';
 const messageSavingDataWhenLeavingPage = '<?php echo translate('MessageSavingDataWhenLeavingPage') ?>';
+const onvifStatusLabels = [
+  '<?php echo addslashes(translate('OnvifStatusNotInUse')) ?>',
+  '<?php echo addslashes(translate('OnvifStatusNotSubscribed')) ?>',
+  '<?php echo addslashes(translate('OnvifStatusSubscribed')) ?>',
+];
+const onvifStatusUnavailable = '<?php echo addslashes(translate('OnvifStatusUnavailable')) ?>';
 const audioMotionVersionOK = '<?php echo translate('AudioMotionVersionOK') ?>';
 const audioMotionVersionNotInstalled = '<?php echo translate('AudioMotionVersionNotInstalled') ?>';
 const audioMotionVersionWrongVersion = '<?php echo translate('AudioMotionVersionWrongVersion') ?>';
@@ -58,7 +64,9 @@ function validateForm(form) {
 
   // No monitor input should have whitespace at beginning or end, so strip them out first.
   for (let i=0; i<elements.length; i++) {
-    if (elements[i].nodeName != 'SELECT') {
+    // Passwords may legitimately start or end with a space, and the camera password fields are text inputs masked by the masked-input class, so leave those untouched.
+    const isPassword = elements[i].type == 'password' || (elements[i].classList && elements[i].classList.contains('masked-input'));
+    if (elements[i].nodeName != 'SELECT' && !isPassword) {
       elements[i].value = elements[i].value.trim();
     }
   }

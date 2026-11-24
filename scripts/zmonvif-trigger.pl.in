@@ -214,7 +214,8 @@ sub xs_duration {
 
     my %new_monitors = ();
 
-    my $sql = "SELECT * FROM Monitors WHERE Capturing != 'None' AND ONVIF_URL != ''";
+    # A deleted monitor keeps Capturing and ONVIF_URL, so it must be excluded explicitly. Same as zmtrigger.pl.in loadMonitors.
+    my $sql = "SELECT * FROM Monitors WHERE Deleted=0 AND Capturing != 'None' AND ONVIF_URL != ''";
     my $sth = $dbh->prepare_cached($sql) or Fatal("Can't prepare '$sql': ".$dbh->errstr());
     my $res = $sth->execute() or Fatal("Can't execute: ".$sth->errstr());
     while ( my $monitor = $sth->fetchrow_hashref() ) {
@@ -353,21 +354,25 @@ $SOAP::Constants::DO_NOT_CHECK_MUSTUNDERSTAND = 1;
     #    Data::Dump::dump($som);
     my $action = $som->valueof('/Envelope/Header/Action');
     Debug('  Action = '.$action);
-    my $msg = $som->match('/Envelope/Body/Notify/NotificationMessage');
-    my $topic = $msg->valueof('Topic');
-    my $msg2  = $msg->match('Message/Message');
-    #    Data::Dump::dump($msg2->current());
-    my $time = $msg2->dataof()->attr->{'UtcTime'};
+    # A Notify can carry several messages; they are the first children of Notify
+    my $count = () = $som->dataof('/Envelope/Body/Notify/NotificationMessage');
+    foreach my $i ( 1 .. $count ) {
+      my $msg = $som->match("/Envelope/Body/Notify/[$i]");
+      my $topic = $msg->valueof('Topic');
+      my $msg2  = $msg->match('Message/Message');
+      #    Data::Dump::dump($msg2->current());
+      my $time = $msg2->dataof()->attr->{'UtcTime'};
 
-    my (%source, %data);
-    foreach my $item ($msg2->dataof('Source/SimpleItem')) {
-      $source{$item->attr->{Name}} = $item->attr->{Value};
-      #      print $item->attr->{Name} ."=>". $item->attr->{Value} ."\n";
+      my (%source, %data);
+      foreach my $item ($msg2->dataof('Source/SimpleItem')) {
+        $source{$item->attr->{Name}} = $item->attr->{Value};
+        #      print $item->attr->{Name} ."=>". $item->attr->{Value} ."\n";
+      }
+      foreach my $item ($msg2->dataof('Data/SimpleItem')) {
+        $data{$item->attr->{Name}} = $item->attr->{Value};
+      }
+      main::handle_notification($zm, $id, $topic, $time, \%source, \%data);
     }
-    foreach my $item ($msg2->dataof('Data/SimpleItem')) {
-      $data{$item->attr->{Name}} = $item->attr->{Value};
-    }
-    main::handle_notification($zm, $id, $topic, $time, \%source, \%data);
     return ();
   }
 } # end Consumer
@@ -388,9 +393,9 @@ sub handle_notification {
     Warning("Notification for unknown monitor $id");
     return;
   }
-  if ( lc($state) eq 'true' ) {
+  if ( lc($state) eq 'true' or $state eq '1' ) {
     $zm->eventOn($id, 100, $cause, $time);
-  } elsif ( lc($state) eq 'false' ) {
+  } elsif ( lc($state) eq 'false' or $state eq '0' ) {
     $zm->eventOff($id, 100, $cause, $time);
   }
 }

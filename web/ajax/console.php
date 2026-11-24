@@ -73,11 +73,27 @@ function saveMonitorSequence($monitor_ids) {
 
 // The legacy Function column is skipped: nothing maintains it any more.
 function monitorMatchesSearch($monitor, $search) {
-  foreach (array('Name', 'Path', 'Device', 'Host', 'Id', 'Status') as $field) {
+  foreach (array('Name', 'Device', 'Id', 'Status') as $field) {
     if (isset($monitor[$field]) && stripos($monitor[$field], $search) !== false)
       return true;
   }
-  return false;
+  // The raw Host and Path hold credentials: match what the Source column shows, as the Source filter does.
+  $Monitor = new ZM\Monitor($monitor);
+  return stripos($Monitor->Source(), $search) !== false || stripos(pathWithoutQuery($Monitor->Path()), $search) !== false;
+}
+
+// Cameras often take credentials as query parameters (user=, pwd=), and Path()
+// only strips user:pass@, so match the path without its query string.
+function pathWithoutQuery($path) {
+  $cut = strcspn((string)$path, '?#');
+  return substr((string)$path, 0, $cut);
+}
+
+// The Source filter matches what the Source column shows, or the Path, as the
+// filter bar does. The raw Host holds credentials and hides the port.
+function monitorMatchesSource($monitor, $regexp) {
+  $Monitor = new ZM\Monitor($monitor);
+  return preg_match($regexp, $Monitor->Source()) || preg_match($regexp, pathWithoutQuery($Monitor->Path()));
 }
 
 // Source, Server, Storage and Function are display values, not row columns.
@@ -117,8 +133,8 @@ function queryRequest() {
   // Get pagination parameters
   $offset = 0;
   if (isset($_REQUEST['offset']) and ($_REQUEST['offset'] != 'NaN')) {
-    if ((!is_int($_REQUEST['offset']) and !ctype_digit($_REQUEST['offset']))) {
-      ZM\Error('Invalid value for offset: ' . $_REQUEST['offset']);
+    if (!is_scalar($_REQUEST['offset']) or (!is_int($_REQUEST['offset']) and !ctype_digit((string)$_REQUEST['offset']))) {
+      ZM\Error('Invalid value for offset: ' . (is_scalar($_REQUEST['offset']) ? $_REQUEST['offset'] : gettype($_REQUEST['offset'])));
     } else {
       $offset = $_REQUEST['offset'];
     }
@@ -126,8 +142,8 @@ function queryRequest() {
   
   $limit = 0;
   if (isset($_REQUEST['limit']) and ($_REQUEST['limit'] != 'NaN')) {
-    if ((!is_int($_REQUEST['limit']) and !ctype_digit($_REQUEST['limit']))) {
-      ZM\Error('Invalid value for limit: ' . $_REQUEST['limit']);
+    if (!is_scalar($_REQUEST['limit']) or (!is_int($_REQUEST['limit']) and !ctype_digit((string)$_REQUEST['limit']))) {
+      ZM\Error('Invalid value for limit: ' . (is_scalar($_REQUEST['limit']) ? $_REQUEST['limit'] : gettype($_REQUEST['limit'])));
     } else {
       $limit = $_REQUEST['limit'];
     }
@@ -238,8 +254,7 @@ function queryRequest() {
   if ($request_filters['Source']) {
     $regexp = monitorNameRegexp($request_filters['Source']);
     $filtered_monitors = array_filter($filtered_monitors, function($monitor) use ($regexp) {
-      // Match against Path field directly instead of creating Monitor object
-      return (preg_match($regexp, $monitor['Path']) || preg_match($regexp, $monitor['Device']) || preg_match($regexp, $monitor['Host']));
+      return monitorMatchesSource($monitor, $regexp);
     });
   }
   

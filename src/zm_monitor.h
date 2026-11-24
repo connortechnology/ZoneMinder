@@ -383,7 +383,12 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
      * +880, and ai_server carries last_analysis_index/analysis_image_count
      * inline in the header above rather than appended. */
     SharedValue<uint32_t> audio_level_until;  /* +896 */
-    uint32_t analysis_pad[3];     /* +900  pad to 912 (16-byte multiple) */
+    /* State of the ONVIF event subscription, published by the ONVIF poll
+     * thread for the web interface: 0 ONVIF events not in use, 1 enabled but
+     * not subscribed (connecting, retrying or failing), 2 subscribed and
+     * polling. Carved out of analysis_pad, so no offset or size moves. */
+    SharedValue<uint32_t> onvif_status;       /* +900 */
+    uint32_t analysis_pad[2];     /* +904  pad to 912 (16-byte multiple) */
   } SharedData;
   // Cross-process ABI guard: zmc/zma/zms plus the Perl (Memory.pm) and PHP
   // (Monitor.php) SHM readers all assume this exact layout. The struct is
@@ -396,6 +401,7 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   static_assert(offsetof(SharedData, stream_socket_path) == 704, "stream_socket_path offset changed; update Memory.pm and Monitor.php");
   static_assert(offsetof(SharedData, janus_pin) == 832, "janus_pin offset changed; update Memory.pm and Monitor.php");
   static_assert(offsetof(SharedData, audio_level_until) == 896, "audio_level_until offset changed; update Memory.pm and Monitor.php");
+  static_assert(offsetof(SharedData, onvif_status) == 900, "onvif_status offset changed; update Memory.pm and Monitor.php");
 
   enum TriggerState : uint32 { TRIGGER_CANCEL, TRIGGER_ON, TRIGGER_OFF };
 
@@ -1517,6 +1523,8 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
   // True when the section_length boundary lies between two packet timestamps
   // (whole seconds). prev_sec < 0 means there is no previous packet. Pure.
   static bool TimeSectionCrossed(int64_t prev_sec, int64_t cur_sec, int64_t section_length_sec);
+  // The reference image must be re-seeded when signal returns whenever analysis is on, whatever the recording mode.
+  static bool ReacquireNeedsRefReset(int analysing) { return analysing != ANALYSING_NONE; }
   // Alarm frames counted while in PREALARM. Per monitor: one zmc process can
   // run several monitors, whose analysis threads must not share the count.
   int PreAlarmCount() const { return pre_alarm_count_; }
@@ -1575,6 +1583,10 @@ class Monitor : public std::enable_shared_from_this<Monitor> {
 
   void Reload();
   void ReloadZones();
+  const std::vector<Zone> &Zones() const { return zones; }
+  // Zone has a const member and cannot be assigned, so a zone is replaced by
+  // swapping in a whole new list.
+  void SetZones(std::vector<Zone> &&new_zones) { zones = std::move(new_zones); }
   void ReloadLinkedMonitors();
 
   void LoadActions();

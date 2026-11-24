@@ -22,7 +22,11 @@ var NextEventDefVideoPath = "";
 var currEventId = null;
 var CurEventDefVideoPath = null;
 var vid = null;
-var spf = Math.round((eventData.Length / eventData.Frames)*1000000 )/1000000;//Seconds per frame for videojs frame by frame.
+// Seconds per frame for video.js frame stepping, from the event as it is now. Without a usable frame count (an event still recording has none) assume 25 fps.
+function frameSeconds() {
+  const spf = parseFloat(eventData.Length) / parseFloat(eventData.Frames);
+  return (isFinite(spf) && spf > 0) ? Math.round(spf*1000000)/1000000 : 1/25;
+}
 var intervalRewind;
 var revSpeed = .5;
 var cueFrames = null; //make cueFrames available even if we don't send another ajax query
@@ -36,6 +40,7 @@ var zmsBroke = false; //Use alternate navigation if zms has crashed
 var wasHidden = false;
 var availableTags = [];
 var selectedTags = [];
+var addingTagIds = {}; // tags with an addtag request in flight, so a second Enter or click can't add one twice
 var realEventWidth = 0;
 // The monitor the page's elements (stream, zoom buttons, zones, PanZoom) were
 // built for. On the zms path eventData can move on to another monitor's event
@@ -425,7 +430,8 @@ function changeRate() {
       clearInterval(intervalRewind);
       intervalRewind = setInterval(function() {
         if (vid.currentTime() <= 0) {
-          clearInterval(intervalRewind);
+          // As the pause button does: the ticks left playbackRate at 0, so Play would not move
+          stopFastRev();
           vid.pause();
         } else {
           vid.playbackRate(0);
@@ -649,7 +655,7 @@ function streamFastFwd(action) {
   setButtonState('slowRevBtn', 'unavail');
   setButtonState('fastRevBtn', 'inactive');
   if (vid) {
-    if (revSpeed != .5) stopFastRev();
+    if (intervalRewind) stopFastRev();
     const next = stepRate(rates, vid.playbackRate()*100, 1);
     if (next === null) {
       // Already at the fastest rate. streamPlay() re-enables this button
@@ -672,7 +678,7 @@ function streamFastFwd(action) {
 
 function streamSlowFwd(action) {
   if (vid) {
-    vid.currentTime(vid.currentTime() + spf);
+    vid.currentTime(vid.currentTime() + frameSeconds());
   } else {
     streamReq({command: CMD_SLOWFWD});
   }
@@ -680,7 +686,7 @@ function streamSlowFwd(action) {
 
 function streamSlowRev(action) {
   if (vid) {
-    vid.currentTime(vid.currentTime() - spf);
+    vid.currentTime(vid.currentTime() - frameSeconds());
   } else {
     streamReq({command: CMD_SLOWREV});
   }
@@ -732,7 +738,8 @@ function streamFastRev(action) {
     setCookie('zmEventRate', next);
     intervalRewind = setInterval(function() {
       if (vid.currentTime() <= 0) {
-        clearInterval(intervalRewind);
+        // As the pause button does: the ticks left playbackRate at 0, so Play would not move
+        stopFastRev();
         vid.pause();
       } else {
         vid.playbackRate(0);
@@ -812,6 +819,15 @@ function streamNext(action) {
     streamPlay();
   }
 } // end function streamNext(action)
+
+// The event is gone: show the next one, or the previous one when it was the last.
+function eventDeleted() {
+  if (nextEventId == 0 && prevEventId != 0) {
+    streamPrev(true);
+    return;
+  }
+  streamNext(true);
+}
 
 function tagAndNext(action) {
   addTag(availableTags[0]);
@@ -938,6 +954,12 @@ function restartZmsStream(onReady) {
   img.onload = function() {
     img.onload = null;
     zmsBroke = false;
+    if (!vid) {
+      // streamQuery cleared the interval while zms was broke; re-arm it so the
+      // progress bar and status readouts resume.
+      clearInterval(streamCmdInterval);
+      streamCmdInterval = setInterval(streamQuery, streamTimeout);
+    }
     // The new zms has none of the next/prev hints; resend them with its first
     // status reply.
     zmsHints.reset();
@@ -976,13 +998,17 @@ function getEventResponse(respObj, respText) {
 
   const previousEvent = eventData;
   eventData = respObj.event;
+  const eventChanged = previousEvent && previousEvent.Id != eventData.Id;
   getStat();
   currEventId = eventData.Id;
   $j('#eventTitle').html('Event '+currEventId); // FIXME should translate Event
 
   // Refresh the status of the archive and delete buttons
   setArchiveButtons();
-  if (previousEvent && previousEvent.Id != eventData.Id) refreshSelectedTags();
+  if (eventChanged) {
+    setDownloadLink();
+    refreshSelectedTags();
+  }
 
   history.replaceState(null, null, '?view=event&eid=' + eventData.Id + filterQuery + sortQuery); //if popup removed, check if this allows forward
   if ( vid && CurEventDefVideoPath ) {
@@ -991,7 +1017,6 @@ function getEventResponse(respObj, respText) {
     addVideoTimingTrack(vid, LabelFormat, eventData.MonitorName, eventData.Length, eventData.StartDateTime);
     CurEventDefVideoPath = null;
     $j('#modeValue').html('Replay');
-    $j('#zoomValue').html('1');
     $j('#rate').val('100');
     //vjsPanZoom('zoomOut');
   } else {
@@ -1006,6 +1031,14 @@ function setArchiveButtons() {
   unarchiveBtn.prop('disabled', !(eventData.Archived && canEdit.Events));
   deleteBtn.prop('disabled', !(!eventData.Archived && canEdit.Events));
   deleteBtn.prop('title', eventData.Archived ? "You cannot delete an archived event." : "");
+}
+
+// event.php renders the Download link for the page's event; point it at the
+// event now shown. An empty DownloadUrl means no video, so hide it as event.php does.
+function setDownloadLink() {
+  const url = eventData.DownloadUrl;
+  downloadBtn.attr('href', url || '');
+  if (url) downloadBtn.show(); else downloadBtn.hide();
 }
 
 // zms moved on to eventData by itself, possibly to another monitor's event.
@@ -1469,7 +1502,7 @@ function manageDelConfirmModalBtns() {
             if (!vid) restartZmsStream();
             return;
           }
-          streamNext(true);
+          eventDeleted();
         })
         .fail(logAjaxFail);
   });
@@ -1506,8 +1539,8 @@ function getStat() {
         tdString = escapeHTML(eventData[key]) + ' (Id:' + eventData['Id'] + ')';
         break;
       case 'Frames':
-        tdString = '<a href="?view=frames&amp;eid=' + eventData.Id + '">' + eventData[key] + '</a>';
-        tdString += ' Alarm:' + '<a href="?view=frames&amp;eid=' + eventData.Id + '">' + eventData['AlarmFrames'] + '</a>';
+        tdString = '<a href="?view=frames&amp;eid=' + eventData.Id + '">' + (eventData[key] ?? 0) + '</a>';
+        tdString += ' Alarm:' + '<a href="?view=frames&amp;eid=' + eventData.Id + '">' + (eventData['AlarmFrames'] ?? 0) + '</a>';
         break;
       //case 'AlarmFrames':
       //  tdString = '<a href="?view=frames&amp;eid=' + eventData.Id + '">' + eventData[key] + '</a>';
@@ -1538,7 +1571,7 @@ function getStat() {
       //  tdString = '<a href="?view=frame&amp;eid=' + eventData.Id + '&amp;fid=0">' + eventData[key] + '</a>';
       //  break;
       case 'Score':
-        tdString = 'Total:' + eventData['TotScore'] + ' '+ '<a href="?view=frame&amp;eid=' + eventData.Id + '&amp;fid=0">' + 'Max:' + eventData['MaxScore'] + '</a>' + ' Avg:' + eventData['AvgScore'];
+        tdString = 'Total:' + (eventData['TotScore'] ?? 0) + ' '+ '<a href="?view=frame&amp;eid=' + eventData.Id + '&amp;fid=0">' + 'Max:' + (eventData['MaxScore'] ?? 0) + '</a>' + ' Avg:' + (eventData['AvgScore'] ?? 0);
         break;
       case 'n/a':
         tdString = 'n/a';
@@ -1777,6 +1810,11 @@ function initPage() {
     evt.preventDefault();
     $j.getJSON(thisUrl + '?request=events&task=archive&eids[]='+eventData.Id)
         .done( function(data) {
+          // ajaxError() answers 200 with result=Error, so done() runs for a refusal too.
+          if (data.result == 'Error') {
+            alert(Array.isArray(data.message) ? data.message.join("\n") : data.message);
+            return;
+          }
           //FIXME: update the status of the archive button reather than reload the whole page
           window.location.reload(true);
         })
@@ -1792,6 +1830,11 @@ function initPage() {
     evt.preventDefault();
     $j.getJSON(thisUrl + '?request=events&task=unarchive&eids[]='+eventData.Id)
         .done( function(data) {
+          // ajaxError() answers 200 with result=Error, so done() runs for a refusal too.
+          if (data.result == 'Error') {
+            alert(Array.isArray(data.message) ? data.message.join("\n") : data.message);
+            return;
+          }
           //FIXME: update the status of the unarchive button rather than reload the whole page
           window.location.reload(true);
         })
@@ -1831,23 +1874,23 @@ function initPage() {
     videoEvent();
   });
 
-  // Manage the generate Live button
-  bindButton('#eventLiveBtn', 'click', null, function onLiveClick(evt) {
+  // Manage the generate Live, Edit and All Events buttons. getStat() rebuilds
+  // them on every event change, so they are handled by delegation on the table.
+  eventStatsTable.on('click', '#eventLiveBtn', function onLiveClick(evt) {
     evt.preventDefault();
     eventLive();
   });
 
-  // Manage the generate Edit button
-  bindButton('#eventEditBtn', 'click', null, function onEditClick(evt) {
+  eventStatsTable.on('click', '#eventEditBtn', function onEditClick(evt) {
     evt.preventDefault();
     eventEdit();
   });
 
-  // Manage the generate All Events button
-  bindButton('#eventAllEvents', 'click', null, function onAllEventsClick(evt) {
+  eventStatsTable.on('click', '#eventAllEvents', function onAllEventsClick(evt) {
     evt.preventDefault();
     viewAllEvents();
   });
+
   // Manage the Event STATISTICS Button
   bindButton('#statsBtn', 'click', null, function onStatsClick(evt) {
     evt.preventDefault();
@@ -1883,7 +1926,7 @@ function initPage() {
     if (window.event.shiftKey) {
       $j.getJSON(thisUrl + '?request=event&action=delete&id='+eventData.Id)
           .done(function(data) {
-            if (deleteAnswered(data)) streamNext(true);
+            if (deleteAnswered(data)) eventDeleted();
           })
           .fail(logAjaxFail);
     } else {
@@ -2147,7 +2190,8 @@ function formatTag(tag) {
 }
 
 function addTag(tag, buttonPressed = null) {
-  if (canEdit.Events && tag && (tag.Name.trim() !== '') && !isDup(tag.Name)) {
+  if (canEdit.Events && tag && (tag.Name.trim() !== '') && !isDup(tag.Name) && !addingTagIds[tag.Id]) {
+    addingTagIds[tag.Id] = true;
     $j.getJSON(thisUrl + '?request=event&action=addtag&tid=' + tag.Id + '&id=' + eventData.Id)
         .done(function(data) {
           if (data.result != 'Ok') {
@@ -2162,7 +2206,10 @@ function addTag(tag, buttonPressed = null) {
           availableTags.splice(0, 0, availableTags.splice(index, 1)[0]);
           if (["Enter", " ", ","].includes(buttonPressed)) $j('#tagInput').focus();
         })
-        .fail(logAjaxFail);
+        .fail(logAjaxFail)
+        .always(function() {
+          delete addingTagIds[tag.Id];
+        });
   } else {
     $j('.tag-dropdown-content').hide();
   }
@@ -2194,6 +2241,7 @@ function createTag(tagName, buttonPressed = null) {
       .done(function(data) {
         if (data.result != 'Ok') {
           console.error('createtag refused', data.message);
+          alert(data.message);
           return;
         }
         if (data.response.length > 0) {
@@ -2211,7 +2259,8 @@ function createTag(tagName, buttonPressed = null) {
 function getAvailableTags() {
   $j.getJSON(thisUrl + '?request=tags&action=getavailabletags')
       .done(function(data) {
-        availableTags = data.response;
+        // An error reply has no response; keep a list so the tag input still works.
+        availableTags = Array.isArray(data.response) ? data.response : [];
       })
       .fail(logAjaxFail);
 }
@@ -2276,6 +2325,12 @@ function fullscreenClicked() {
     console.log(content);
     openFullscreen(content);
   }
+}
+
+// Keeps the Zoom readout on the PanZoom scale, including for video.js events
+// where no zms status arrives to refresh it.
+function panZoomEventPanzoomchange(event) {
+  $j('#zoomValue').html(event.detail.scale.toFixed(1));
 }
 
 function panZoomIn(el) {

@@ -81,15 +81,14 @@ if (isset($_REQUEST['limit'])) {
 switch ($task) {
   case 'delete' :
 		if (!canEdit('Events'))  {
-			ajaxError('Insufficient permissions for user '.$user->Username());
+			ajaxError('Insufficient permissions for user '.validHtmlStr($user->Username()));
 			return;
 		}
+    $messages = array();
     foreach ($ids as $id) {
-      $message = deleteRequest($id);
-      if (count($message)) {
-        $data[] = $message;
-      }
+      $messages = array_merge($messages, deleteRequest($id));
     }
+    $data = array('message' => $messages);
     break;
   case 'query' :
     $data = queryRequest($search, $advsearch, $sort, $offset, $order, $limit);
@@ -108,9 +107,9 @@ function deleteRequest($id) {
   $message = array();
   $report = new ZM\Report($id);
   if ( !$report->Id() ) {
-    $message[] = array($id=>'Report not found.');
+    $message[] = 'Report not found.';
   } else if (!$report->canEdit()) {
-    $message[] = array($id=>'You do not have permission to delete report '.$report->Id());
+    $message[] = 'You do not have permission to delete report '.$report->Id();
   } else {
     $report->delete();
   }

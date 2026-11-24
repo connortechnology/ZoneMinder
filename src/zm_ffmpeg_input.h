@@ -42,6 +42,7 @@ class FFmpeg_Input {
     AVCodecContext *context;
     const AVCodec *codec;
     int frame_count;
+    bool drained;
   } stream;
 
   stream *streams;

@@ -193,10 +193,12 @@ our %mem_data = (
     janus_pin        => { type=>'int8[64]', seq=>$mem_seq++ },
     # ai_server carries last_analysis_index/analysis_image_count inline in the
     # multi-index header above, so upstream's appended copies are not repeated
-    # here. audio_level_until is appended for the on-demand audio meter; the pad
-    # rounds SharedData to a 16-byte multiple (912) matching uint32 analysis_pad[3].
+    # here. audio_level_until is appended for the on-demand audio meter, then
+    # onvif_status is carved from the reserve; the pad rounds SharedData to a
+    # 16-byte multiple (912).
     audio_level_until => { type=>'uint32', seq=>$mem_seq++ },
-    analysis_pad     => { type=>'uint8[12]', seq=>$mem_seq++ },
+    onvif_status     => { type=>'uint32', seq=>$mem_seq++ }, # 0 not in use, 1 not subscribed, 2 subscribed; carved from analysis_pad
+    analysis_pad     => { type=>'uint8[8]', seq=>$mem_seq++ },
   }
   },
   trigger_data => { type=>'TriggerData', seq=>$mem_seq++, 'contents'=> {
@@ -575,6 +577,7 @@ sub zmGetMonitorActions {
 sub zmMonitorEnable {
   my $monitor = shift;
 
+  return undef if !zmMemVerify($monitor);
   my $action = zmMemRead($monitor, 'shared_data:action');
   $action |= ACTION_RESUME;
   zmMemWrite($monitor, {'shared_data:action' => $action});
@@ -583,6 +586,7 @@ sub zmMonitorEnable {
 sub zmMonitorDisable {
   my $monitor = shift;
 
+  return undef if !zmMemVerify($monitor);
   my $action = zmMemRead($monitor, 'shared_data:action');
   $action |= ACTION_SUSPEND;
   zmMemWrite($monitor, {'shared_data:action' => $action});
@@ -591,6 +595,7 @@ sub zmMonitorDisable {
 sub zmMonitorSuspend {
   my $monitor = shift;
 
+  return undef if !zmMemVerify($monitor);
   my $action = zmMemRead($monitor, 'shared_data:action');
   $action |= ACTION_SUSPEND;
   zmMemWrite($monitor, {'shared_data:action' => $action});
@@ -599,6 +604,7 @@ sub zmMonitorSuspend {
 sub zmMonitorResume {
   my $monitor = shift;
 
+  return undef if !zmMemVerify($monitor);
   my $action = zmMemRead($monitor, 'shared_data:action');
   $action |= ACTION_RESUME;
   zmMemWrite($monitor, {'shared_data:action' => $action});

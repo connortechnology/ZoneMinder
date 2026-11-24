@@ -82,6 +82,8 @@ if (isset($_REQUEST['dupId'])) {
     $monitor->Name(mb_substr('Clone of '.$monitor->Name(), 0, 64));
   }
   $monitor->Id($mid);
+  // Like a new monitor, the copy gets its own colour so the two can be told apart in graphs
+  $monitor->WebColour(random_colour());
 }
 
 if (ZM_OPT_X10 && empty($x10Monitor)) {
@@ -119,7 +121,7 @@ if ($monitor->AlarmMaxFPS() == '0.00')
 
 if (!empty($_REQUEST['preset'])) {
   $preset = dbFetchOne('SELECT Type, Device, Channel, Format, Protocol, Method, Host, Port, Path, Width, Height, Palette, MaxFPS, Controllable, ControlId, ControlDevice, ControlAddress, DefaultRate, DefaultScale FROM MonitorPresets WHERE Id = ?', NULL, array($_REQUEST['preset']));
-  foreach ($preset as $name=>$value) {
+  foreach ($preset ?: array() as $name=>$value) {
     # Does isset handle NULL's?  I don't think this code is correct.
     # Icon: It does, but this means we can't set a null value.
     if (isset($value)) {
@@ -194,6 +196,15 @@ if (!ZM_PCRE)
   unset($httpMethods['regexp']);
   // Currently unsupported
 unset($httpMethods['jpegTags']);
+
+// A saved Method that is not offered (jpegTags, regexp without PCRE, an unknown
+// value) would show the first option and be replaced on the next save, so keep
+// it listed and selected.
+function methodsWithSaved($methods, $saved) {
+  if ($saved !== null && $saved !== '' && !isset($methods[$saved]))
+    $methods[$saved] = $saved;
+  return $methods;
+}
 
 if (ZM_HAS_V4L2) {
   $v4l2DeviceFormats = array(
@@ -669,6 +680,12 @@ switch ($name) {
               <label><?php echo translate('ONVIF_Event_Listener') ?></label>
               <?php echo html_radio('newMonitor[ONVIF_Event_Listener]', array('1'=>translate('Enabled'), '0'=>translate('Disabled')), $monitor->ONVIF_Event_Listener()); ?>
             </li>
+<?php if ($monitor->Id()) { ?>
+            <li class="ONVIF_Status">
+              <label><?php echo translate('ONVIF_Subscription') ?></label>
+              <span id="onvifStatus" data-mid="<?php echo validInt($monitor->Id()) ?>">&mdash;</span>
+            </li>
+<?php } ?>
 <?php
         break;
     }
@@ -749,9 +766,7 @@ if (count($localMethods)>1) {
             <input type="radio" name="newMonitor[V4LMultiBuffer]" id="newMonitor[V4LMultiBuffer]" value="" <?php echo ( $monitor->V4LMultiBuffer() == '' ? 'checked="checked"' : '' ) ?>/>
             <label for="newMonitor[V4LMultiBuffer]">Use Config Value
           </li>
-          <li class="V4LCapturesPerFrame"api:
-  origin: "*"
->
+          <li class="V4LCapturesPerFrame">
             <label><?php echo translate('V4LCapturesPerFrame') ?></label>
             <input type="number" name="newMonitor[V4LCapturesPerFrame]" value="<?php echo validHtmlStr($monitor->V4LCapturesPerFrame()); ?>" min="1"/>
           </li>
@@ -802,9 +817,9 @@ if (count($localMethods)>1) {
             <label><?php echo translate('RemoteMethod') ?></label>
 <?php
         if ( !$monitor->Protocol() || $monitor->Protocol() == 'http' ) {
-          echo htmlSelect('newMonitor[Method]', $httpMethods, $monitor->Method());
+          echo htmlSelect('newMonitor[Method]', methodsWithSaved($httpMethods, $monitor->Method()), $monitor->Method());
         } else {
-          echo htmlSelect('newMonitor[Method]', $rtspMethods, $monitor->Method());
+          echo htmlSelect('newMonitor[Method]', methodsWithSaved($rtspMethods, $monitor->Method()), $monitor->Method());
         }
 ?>
           </li>
@@ -861,7 +876,7 @@ if (count($localMethods)>1) {
           </li>
           <li class="Method">
             <label><?php echo translate('RemoteMethod'); echo makeHelpLink('OPTIONS_RTSPTrans') ?></label>
-            <?php echo htmlSelect('newMonitor[Method]', $rtspFFMpegMethods, $monitor->Method()) ?>
+            <?php echo htmlSelect('newMonitor[Method]', methodsWithSaved($rtspFFMpegMethods, $monitor->Method()), $monitor->Method()) ?>
           <li>
           <li class="SourceOptions">
             <label><?php echo translate('Options'); echo makeHelpLink('OPTIONS_'.strtoupper($monitor->Type())) ?></label>
@@ -1193,7 +1208,7 @@ echo htmlSelect('newMonitor[Decoder]', $decoders, $monitor->Decoder());
             <li class="settingsGroup"><?php echo translate('OtherAnalysisSettings') ?></li>
             <li class="LinkedMonitors">
               <label><?php echo translate('LinkedMonitors'); echo makeHelpLink('OPTIONS_LINKED_MONITORS') ?></label>
-              <input type="text" name="newMonitor[LinkedMonitors]" value="<?php echo $monitor->LinkedMonitors() ?>" data-on-input="updateLinkedMonitorsUI"/><br/>
+              <input type="text" name="newMonitor[LinkedMonitors]" value="<?php echo validHtmlStr($monitor->LinkedMonitors()) ?>" data-on-input="updateLinkedMonitorsUI"/><br/>
               <div id="LinkedMonitorsUI"></div>
             </li>
             <li class="ObjectDetection">
@@ -1662,7 +1677,7 @@ echo htmlSelect('newMonitor[OutputContainer]', $videowriter_containers, $monitor
             </li>
             <li id="FunctionJanusRTSPSessionTimeout">
               <label><?php echo translate('Janus RTSP Session Timeout Override') ?></label>
-              <input type="text" name="newMonitor[Janus_RTSP_Session_Timeout]" value="<?php echo $monitor->Janus_RTSP_Session_Timeout()?>"/>
+              <input type="text" name="newMonitor[Janus_RTSP_Session_Timeout]" value="<?php echo validHtmlStr($monitor->Janus_RTSP_Session_Timeout()) ?>"/>
 <?php
   if ( isset($OLANG['FUNCTION_JANUS_RTSP_SESSION_TIMEOUT']) ) {
     echo '<div class="form-text">'.$OLANG['FUNCTION_JANUS_RTSP_SESSION_TIMEOUT']['Help'].'</div>';
@@ -2165,7 +2180,7 @@ echo htmlSelect('newMonitor[ReturnLocation]', $return_options, $monitor->ReturnL
         </li>
         <li>
           <label class="MQTT_Subscriptions"><?php echo translate('MQTT Subscriptions') ?></label>
-          <input type="text" name="newMonitor[MQTT_Subscriptions]" value="<?php echo $monitor->MQTT_Subscriptions() ?>" />
+          <input type="text" name="newMonitor[MQTT_Subscriptions]" value="<?php echo validHtmlStr($monitor->MQTT_Subscriptions()) ?>" />
         </li>
 <?php
     break;

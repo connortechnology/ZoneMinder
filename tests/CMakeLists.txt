@@ -48,6 +48,7 @@ set(TEST_SOURCES
   zmu_helpers.cpp
   zm_monitor_ondemand.cpp
   zm_monitor_privacy.cpp
+  zm_monitor_substitute.cpp
   zm_monitorlink_expression.cpp
   zm_monitorstream.cpp
   zm_monitorlink_token.cpp
@@ -57,6 +58,7 @@ set(TEST_SOURCES
   zm_netint_yolo.cpp
   zm_object_classes.cpp
   zm_packet.cpp
+  zm_mpeg_raw_packet.cpp
   zm_packetqueue.cpp
   zm_packet_lock.cpp
   zm_packet_y_image.cpp
@@ -69,9 +71,12 @@ set(TEST_SOURCES
   zm_onvif_alarm_latch.cpp
   zm_onvif_alarm_termination.cpp
   zm_onvif_auth_error.cpp
+  zm_onvif_max_alarm.cpp
+  zm_onvif_options.cpp
   zm_onvif_poll_wait.cpp
   zm_onvif_renewal.cpp
   zm_onvif_resubscribe.cpp
+  zm_onvif_topic_filter.cpp
   zm_onvif_wsse.cpp
   zm_pixformat.cpp
   zm_rgb_luma.cpp
@@ -102,6 +107,7 @@ set(TEST_SOURCES
   zm_user_default_password.cpp
   zm_user_group.cpp
   zm_remote_camera.cpp
+  zm_uri.cpp
   zm_utils.cpp
   zm_mem_utils.cpp
   zm_videostore_m3u8.cpp
@@ -118,6 +124,7 @@ set(TEST_SOURCES
   zm_zone_degenerate.cpp
   zm_zone_percent.cpp
   zm_zone_scoring.cpp
+  zm_zone_load_row.cpp
   zm_image_linesize.cpp
   zm_image_blend.cpp
   zm_image_delta.cpp
@@ -137,6 +144,7 @@ set(TEST_SOURCES
   zm_integration_urls.cpp
   zm_janus_ids.cpp
   zm_janus_refresh.cpp
+  zm_rtsp2web_check.cpp
   zm_local_camera.cpp
   zm_libvnc_loader.cpp
   zm_restream_user_missing.cpp

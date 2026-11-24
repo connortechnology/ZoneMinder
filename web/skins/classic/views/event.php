@@ -210,7 +210,7 @@ if ( !$Event->Id() ) {
 }
 
 if ( $Event->Id() and !file_exists($Event->Path()) )
-  echo '<div class="error">Event was not found at '.$Event->Path().'.  It is unlikely that playback will be possible.</div>';
+  echo '<div class="error">Event was not found at '.validHtmlStr($Event->Path()).'.  It is unlikely that playback will be possible.</div>';
 ?>
 
 <!-- BEGIN HEADER -->
@@ -388,9 +388,9 @@ if ($video_tag) {
       if (ZM_AUTH_RELAY == 'hashed') {
         $hlsSrc .= '&amp;auth=' . generateAuthHash(ZM_AUTH_HASH_IPS);
       } else if (ZM_AUTH_RELAY == 'plain') {
-        $hlsSrc .= '&amp;user=' . $_SESSION['username'] . '&amp;pass=' . $_SESSION['password'];
+        $hlsSrc .= '&amp;user=' . ($_SESSION['username'] ?? '') . '&amp;pass=' . ($_SESSION['password'] ?? '');
       } else if (ZM_AUTH_RELAY == 'none') {
-        $hlsSrc .= '&amp;user=' . $_SESSION['username'];
+        $hlsSrc .= '&amp;user=' . ($_SESSION['username'] ?? '');
       }
     }
   }

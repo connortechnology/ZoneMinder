@@ -91,8 +91,9 @@ sub open {
     $ADDRESS = $self->{Monitor}->{ControlAddress};
   }
   if ( !($ADDRESS =~ /:/) ) {
-    Debug('You generally need to also specify the port.  I will append :80');
-    $ADDRESS .= ':80';
+    my $port = ($PROTOCOL eq 'https://') ? '443' : '80';
+    Debug('You generally need to also specify the port.  I will append :'.$port);
+    $ADDRESS .= ':'.$port;
   }
   $BASE_URL = $PROTOCOL.($USERNAME?$USERNAME.':'.$PASSWORD.'@':'').$ADDRESS;
   Debug('Base url: '.urlForLog($BASE_URL));
@@ -200,7 +201,7 @@ sub moveConDown {
 
 sub moveConLeft {
   my ($self, $params) = @_;
-  my $val = defined($params->{panspeed}) ? -$params->{panspeed} : -5;
+  my $val = defined($params->{panspeed}) ? $params->{panspeed} - 6 : -5;
   my $speed = 'speedpan=' . _clamp_speed($val);
   $self->sendCmd( 'move=left', $speed );
 }

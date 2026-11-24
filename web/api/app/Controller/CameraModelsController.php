@@ -46,7 +46,7 @@ class CameraModelsController extends AppController {
         'CameraModel' => array_keys($this->CameraModel->schema()),
         'Manufacturer' => array_keys($this->CameraModel->Manufacturer->schema()),
       ));
-      $conditions = $this->FilterComponent->buildFilter($named);
+      $conditions = $this->FilterComponent->buildFilter($named, array_merge(array_keys($this->CameraModel->schema()), array_keys($this->CameraModel->Manufacturer->schema())));
     }
     $models = $this->CameraModel->find('all', array('conditions' => $conditions));
 		$this->set(array(
@@ -87,25 +87,32 @@ class CameraModelsController extends AppController {
  * @return void
  */
   public function add() {
-    if ($this->request->is('post')) {
-
-      global $user;
-      $canEdit = (!$user) || ($user->System() == 'Edit');
-      if (!$canEdit) {
-        throw new UnauthorizedException(__('Insufficient privileges'));
-        return;
-      }
-
-      $this->pinRequestId($this->CameraModel, null);
-      $this->CameraModel->create();
-      if ($this->CameraModel->save($this->request->data)) {
-        return $this->flash(__('The model has been saved.'), array('action' => 'index'));
-      }
-      $this->set(array(
-        'message' => $this->CameraModel->validationErrors ? $this->CameraModel->validationErrors : 'Error',
-        '_serialize' => array('message')
-      ));
+    if ( !$this->request->is('post') ) {
+      throw new BadRequestException(__('Invalid method. Should be post'));
     }
+
+    global $user;
+    $canEdit = (!$user) || ($user->System() == 'Edit');
+    if (!$canEdit) {
+      throw new UnauthorizedException(__('Insufficient privileges'));
+      return;
+    }
+
+    $this->pinRequestId($this->CameraModel, null);
+    $this->CameraModel->create();
+    if ($this->CameraModel->save($this->request->data)) {
+      $this->set(array(
+        'message' => 'Saved',
+        'id' => $this->CameraModel->id,
+        '_serialize' => array('message', 'id')
+      ));
+      return;
+    }
+    $this->set(array(
+      'message' => $this->CameraModel->validationErrors ? $this->CameraModel->validationErrors : 'Error',
+      'id' => null,
+      '_serialize' => array('message', 'id')
+    ));
   }
 
 /**
@@ -128,6 +135,7 @@ class CameraModelsController extends AppController {
     if (!$this->CameraModel->exists($id)) {
       throw new NotFoundException(__('Invalid model'));
     }
+    $this->request->allowMethod('post', 'put');
     $this->pinRequestId($this->CameraModel, $id);
     if ($this->CameraModel->save($this->request->data)) {
       $message = 'Saved';

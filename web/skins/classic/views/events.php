@@ -29,7 +29,8 @@ require_once('_monitor_filters.php'); // getFilterSelection() for shared zmFilte
 
 $eventsSql = 'SELECT E.*,M.Name AS MonitorName,M.DefaultScale FROM Monitors AS M INNER JOIN Events AS E on (M.Id = E.MonitorId) WHERE';
 if (count($user->unviewableMonitorIds())) {
-  $user_monitor_ids = ' M.Id in ('.implode(',', $user->viewableMonitorIds()).')';
+  $ids = $user->viewableMonitorIds();
+  $user_monitor_ids = ' M.Id in ('.(count($ids) ? implode(',', array_map('intval', $ids)) : '0').')';
   $eventsSql .= $user_monitor_ids;
 } else {
   $eventsSql .= ' 1';
@@ -127,6 +128,7 @@ echo getNavBarHTML();
 <?php } ?>
               <button id="tlineBtn" class="btn btn-normal" data-toggle="tooltip" data-placement="top" title="<?php echo translate('ShowTimeline') ?>" ><i class="fa fa-history"></i></button>
               <button id="filterBtn" class="btn btn-normal" data-toggle="tooltip" data-placement="top" title="<?php echo translate('Filter') ?>"><i class="fa fa-filter"></i></button>
+              <button id="tagsBtn" class="btn btn-normal" data-toggle="tooltip" data-placement="top" title="<?php echo translate('ManageTags') ?>"><i class="fa fa-tags"></i></button>
               <a class="btn" href="#" data-flip-control-object="#fieldsTable"><i id="fbflip" class="material-icons" data-icon-visible="filter_alt_off" data-icon-hidden="filter_alt"></i></a>
             </div>
             <div id="rightButtons" class="buttons">

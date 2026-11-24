@@ -31,7 +31,8 @@ require_once('includes/Group_Permission.php');
 require_once('includes/User_Role.php');
 
 if (isset($_REQUEST['uid']) and $_REQUEST['uid']) {
-	if ( !($User = new ZM\User(validCardinal($_REQUEST['uid']))) ) {
+	$User = new ZM\User(validCardinal($_REQUEST['uid']));
+	if ( !$User->Id() ) {
 		$view = 'error';
 		return;
 	}
@@ -80,7 +81,7 @@ echo getNavBarHTML();
 <?php if (canEdit('System')) { ?>
                     <tr>
                       <th scope="row"><?php echo translate('Username') ?></th>
-                      <td><input type="text" class="form-control form-control-sm" name="user[Username]" pattern="[A-Za-z0-9 .@]+" placeholder="<?php echo translate('NewUser') ?>" value="<?php echo validHtmlStr($User->Username()); ?>"<?php echo $User->Username() == 'admin' ? ' readonly="readonly"':''?>/></td>
+                      <td><input type="text" class="form-control form-control-sm" name="user[Username]" pattern="[A-Za-z0-9_ .@]+" placeholder="<?php echo translate('NewUser') ?>" value="<?php echo validHtmlStr($User->Username()); ?>"<?php echo $User->Username() == 'admin' ? ' readonly="readonly"':''?>/></td>
                     </tr>
 <?php } ?>
                     <tr>

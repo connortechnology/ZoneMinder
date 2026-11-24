@@ -1134,6 +1134,32 @@ void Image::Assign(const Image &image) {
   }
 }
 
+// Brings a box's corners inside the image. A box wholly outside it gives lo > hi, so the
+// fill loops do not run.
+static void LimitsInImage(const Box *limits, unsigned int width, unsigned int height,
+                          unsigned int &lo_x, unsigned int &lo_y, unsigned int &hi_x, unsigned int &hi_y) {
+  if (!limits) {
+    lo_x = 0;
+    lo_y = 0;
+    hi_x = width - 1;
+    hi_y = height - 1;
+    return;
+  }
+  const int max_x = static_cast<int>(width) - 1;
+  const int max_y = static_cast<int>(height) - 1;
+  if (limits->Hi().x_ < 0 || limits->Hi().y_ < 0 || limits->Lo().x_ > max_x || limits->Lo().y_ > max_y) {
+    lo_x = 1;
+    lo_y = 1;
+    hi_x = 0;
+    hi_y = 0;
+    return;
+  }
+  lo_x = std::max(0, limits->Lo().x_);
+  lo_y = std::max(0, limits->Lo().y_);
+  hi_x = std::min(limits->Hi().x_, max_x);
+  hi_y = std::min(limits->Hi().y_, max_y);
+}
+
 Image *Image::BuildHighlight(
   Rgb colour,
   unsigned int p_colours,
@@ -1157,10 +1183,8 @@ Image *Image::BuildHighlight(
   /* Set image to all black */
   high_image->Clear();
 
-  unsigned int lo_x = limits ? limits->Lo().x_ : 0;
-  unsigned int lo_y = limits ? limits->Lo().y_ : 0;
-  unsigned int hi_x = limits ? limits->Hi().x_ : width - 1;
-  unsigned int hi_y = limits ? limits->Hi().y_ : height - 1;
+  unsigned int lo_x, lo_y, hi_x, hi_y;
+  LimitsInImage(limits, width, height, lo_x, lo_y, hi_x, hi_y);
 
   // Source (this) is GRAY8 (guaranteed by the Panic above) with linesize per
   // row. Use it when looking up neighbour pixels (p ± src_linesize) so we
@@ -1659,7 +1683,8 @@ bool Image::WriteJpeg(const std::string &filename,
   // jpeg libs are not thread safe
   std::unique_lock<std::mutex> lck(jpeg_mutex);
 
-  int quality = quality_override ? quality_override : config.jpeg_file_quality;
+  // The option accepts any integer; there is a cached struct for each quality 0-100.
+  int quality = std::clamp(quality_override ? quality_override : config.jpeg_file_quality, 0, 100);
 
   jpeg_compress_struct *cinfo = writejpg_ccinfo[quality];
   FILE *outfile = nullptr;
@@ -1676,18 +1701,6 @@ bool Image::WriteJpeg(const std::string &filename,
   } else {
     jpg_err.pub.error_exit = zm_jpeg_error_silent;
     jpg_err.pub.emit_message = zm_jpeg_emit_silence;
-    if (setjmp(jpg_err.setjmp_buffer)) {
-      jpeg_abort_compress(cinfo);
-      Debug(1,
-            "Aborted a write mid-stream and %s and %d",
-            (outfile == nullptr) ? "closing file" : "file not opened",
-            raw_fd);
-      if (raw_fd)
-        close(raw_fd);
-      if (outfile)
-        fclose(outfile);
-      return false;
-    }
   }
 
   if (!on_blocking_abort) {
@@ -1709,6 +1722,14 @@ bool Image::WriteJpeg(const std::string &filename,
   fl.l_whence = SEEK_SET;
   if (fcntl(raw_fd, F_SETLKW, &fl) == -1) {
     Error("Couldn't get lock on %s, continuing", filename.c_str());
+  }
+
+  // Both error handlers longjmp here, a failed write (full disk) included.
+  if (setjmp(jpg_err.setjmp_buffer)) {
+    jpeg_abort_compress(cinfo);
+    Debug(1, "Aborted writing %s", filename.c_str());
+    fclose(outfile);  // closes raw_fd too
+    return false;
   }
 
   jpeg_stdio_dest(cinfo, outfile);
@@ -1845,8 +1866,9 @@ bool Image::WriteJpeg(const std::string &filename,
     const unsigned chroma_v_shift = is_422 ? 0u : 1u;
 
     const bool limited = zm_jpeg_yuv_is_limited(imagePixFormat);
-    std::vector<uint8_t> tmprow(static_cast<size_t>(width) * 3);
-    JSAMPROW row_ptr = tmprow.data();
+    // From libjpeg's image pool, so jpeg_abort_compress frees it if an error longjmps out of the write.
+    JSAMPROW row_ptr = static_cast<JSAMPROW>((*cinfo->mem->alloc_large)(
+        reinterpret_cast<j_common_ptr>(cinfo), JPOOL_IMAGE, static_cast<size_t>(width) * 3));
 
     while (cinfo->next_scanline < cinfo->image_height) {
       const unsigned y = cinfo->next_scanline;
@@ -1854,7 +1876,7 @@ bool Image::WriteJpeg(const std::string &filename,
       const uint8_t *yrow = plane[0] + static_cast<size_t>(y) * plane_linesizes[0];
       const uint8_t *urow = plane[1] + static_cast<size_t>(cy) * plane_linesizes[1];
       const uint8_t *vrow = plane[2] + static_cast<size_t>(cy) * plane_linesizes[2];
-      zm_jpeg_interleave_row(tmprow.data(), yrow, urow, vrow, width, limited);
+      zm_jpeg_interleave_row(row_ptr, yrow, urow, vrow, width, limited);
       jpeg_write_scanlines(cinfo, &row_ptr, 1);
     }
   } else {
@@ -2100,7 +2122,7 @@ bool Image::EncodeJpeg(JOCTET *outbuffer, size_t *outbuffer_size, int quality_ov
 
   std::unique_lock<std::mutex> lck(jpeg_mutex);
 
-  int quality = quality_override ? quality_override : config.jpeg_stream_quality;
+  int quality = std::clamp(quality_override ? quality_override : config.jpeg_stream_quality, 0, 100);
 
   struct jpeg_compress_struct *cinfo = encodejpg_ccinfo[quality];
 
@@ -3527,10 +3549,8 @@ void Image::Fill( Rgb colour, const Box *limits ) {
   /* Convert the colour's RGBA subpixel order into the image's subpixel order */
   colour = rgb_convert(colour,subpixelorder);
 
-  unsigned int lo_x = limits ? limits->Lo().x_ : 0;
-  unsigned int lo_y = limits ? limits->Lo().y_ : 0;
-  unsigned int hi_x = limits ? limits->Hi().x_ : width - 1;
-  unsigned int hi_y = limits ? limits->Hi().y_ : height - 1;
+  unsigned int lo_x, lo_y, hi_x, hi_y;
+  LimitsInImage(limits, width, height, lo_x, lo_y, hi_x, hi_y);
   // Use linesize as the row stride so non-32-aligned widths don't write
   // into padding bytes or shift subsequent rows.
   if ( zm_bytes_per_pixel(imagePixFormat) == 1 ) {
@@ -3574,10 +3594,8 @@ void Image::Fill( Rgb colour, int density, const Box *limits ) {
   /* Convert the colour's RGBA subpixel order into the image's subpixel order */
   colour = rgb_convert(colour, subpixelorder);
 
-  unsigned int lo_x = limits ? limits->Lo().x_ : 0;
-  unsigned int lo_y = limits ? limits->Lo().y_ : 0;
-  unsigned int hi_x = limits ? limits->Hi().x_ : width - 1;
-  unsigned int hi_y = limits ? limits->Hi().y_ : height - 1;
+  unsigned int lo_x, lo_y, hi_x, hi_y;
+  LimitsInImage(limits, width, height, lo_x, lo_y, hi_x, hi_y);
   // Use linesize as the row stride so non-32-aligned widths don't write
   // into padding bytes or shift subsequent rows.
   if ( zm_bytes_per_pixel(imagePixFormat) == 1 ) {
@@ -3851,8 +3869,11 @@ void Image::Fill(Rgb colour, int density, const Polygon &polygon) {
   std::vector<PolygonFill::Edge> global_edges;
   global_edges.reserve(n_coords);
   for (size_t j = 0, i = n_coords - 1; j < n_coords; i = j++) {
-    const Vector2 &p1 = polygon.GetVertices()[i];
-    const Vector2 &p2 = polygon.GetVertices()[j];
+    // Keep the vertices inside the image, as Outline does.
+    const Vector2 p1(zm::clamp(polygon.GetVertices()[i].x_, 0, static_cast<int>(width) - 1),
+                     zm::clamp(polygon.GetVertices()[i].y_, 0, static_cast<int>(height) - 1));
+    const Vector2 p2(zm::clamp(polygon.GetVertices()[j].x_, 0, static_cast<int>(width) - 1),
+                     zm::clamp(polygon.GetVertices()[j].y_, 0, static_cast<int>(height) - 1));
 
     // Do not add horizontal edges to the global edge table.
     if (p1.y_ == p2.y_)

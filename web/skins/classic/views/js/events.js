@@ -103,15 +103,17 @@ function processRows(rows) {
         '<br/><div class="small text-muted">' + archived + emailed + '</div>';
     if ( typeof canView !== 'undefined' && canView.Events ) row.Monitor = '<a href="?view=event&amp;eid=' + eid + '">' + row.Monitor + '</a>';
     const notes = row.Notes || '';
-    if ( canEdit.Events ) row.Cause = '<a href="#" title="' + notes + '" class="eDetailLink" data-eid="' + eid + '">' + row.Cause + '</a>';
+    const notesTitle = notes.replace(/<br\s*\/?>/gi, '\n');
+    if ( canEdit.Events ) row.Cause = '<a href="#" title="' + notesTitle + '" class="eDetailLink" data-eid="' + eid + '">' + row.Cause + '</a>';
     if ( notes.indexOf('detected:') >= 0 ) {
       row.Cause = row.Cause + '<a href="#" class="objDetectLink" data-eid=' +eid+ '><div class="small text-muted"><u>' + notes + '</u></div></div></a>';
     } else if ( notes && notes != 'Forced Web: ' ) {
       row.Cause = row.Cause + '<br/><div class="small text-muted">' + notes + '</div>';
     }
-    row.Frames = '<a href="?view=frames&amp;eid=' + eid + '">' + row.Frames + '</a>';
-    row.AlarmFrames = '<a href="?view=frames&amp;eid=' + eid + '">' + row.AlarmFrames + '</a>';
-    row.MaxScore = '<a href="?view=frame&amp;eid=' + eid + '&amp;fid=0">' + row.MaxScore + '</a>';
+    // Frames, AlarmFrames and MaxScore are null until zmc first updates a new event
+    row.Frames = '<a href="?view=frames&amp;eid=' + eid + '">' + (row.Frames ?? 0) + '</a>';
+    row.AlarmFrames = '<a href="?view=frames&amp;eid=' + eid + '">' + (row.AlarmFrames ?? 0) + '</a>';
+    row.MaxScore = '<a href="?view=frame&amp;eid=' + eid + '&amp;fid=0">' + (row.MaxScore ?? 0) + '</a>';
     row.Location = (parseFloat(row.Latitude) || parseFloat(row.Longitude)) ? row.Latitude+', '+row.Longitude : '';
     row.DiskSpace = '<a href="?view=event&amp;eid=' + eid + filterQuery + sortQuery + '&amp;page=1">' + row.DiskSpace + '</a>';
     row.Storage = '<a href="?view=event&amp;eid=' + eid + filterQuery + sortQuery + '&amp;page=1">' + row.Storage + '</a>';
@@ -227,7 +229,7 @@ function unarchiveEvents(event_ids) {
     url: thisUrl + '?request=events&task=unarchive',
     data: {'eids[]': chunk},
     success: function(data) {
-      if (data.message) alert(data.message.join("\n"));
+      if (data.message) alert(Array.isArray(data.message) ? data.message.join("\n") : data.message);
 
       if (!event_ids.length) {
         $j('#eventTable').bootstrapTable('refresh');
@@ -263,7 +265,7 @@ function deleteEvents(event_ids) {
     url: thisUrl + '?request=events&task=delete',
     data: {'eids[]': chunk},
     success: function(data) {
-      if (data.message) alert(data.message.join("\n"));
+      if (data.message) alert(Array.isArray(data.message) ? data.message.join("\n") : data.message);
 
       if (!event_ids.length) {
         $j('#eventTable').bootstrapTable('refresh');
@@ -415,6 +417,12 @@ function initPage() {
     window.location.assign('?view=timeline'+filterQuery);
   });
 
+  // Manage the TAGS Button
+  document.getElementById('tagsBtn').addEventListener('click', function onTagsClick(evt) {
+    evt.preventDefault();
+    window.location.assign('?view=tags');
+  });
+
   // Manage the FILTER Button
   document.getElementById('filterBtn').addEventListener('click', function onFilterClick(evt) {
     evt.preventDefault();
@@ -441,8 +449,11 @@ function initPage() {
       url: thisUrl + '?request=events&task=archive',
       data: {'eids[]': selections},
       success: function(data) {
-        // ajaxError() answers 200 with result=Error
-        if (data.result == 'Error') alert(data.message);
+        // ajaxError() answers 200 with result=Error; events that could not
+        // be archived come back in message (a list).
+        if (data.message && (data.result == 'Error' || data.message.length)) {
+          alert(Array.isArray(data.message) ? data.message.join("\n") : data.message);
+        }
         $j('#eventTable').bootstrapTable('refresh');
       },
       error: logAjaxFail
@@ -588,7 +599,13 @@ function initPage() {
       const el = $j(this);
       const name = el.attr('name');
       if (urlParams.has(name)) {
-        el.val(urlParams.get(name));
+        const value = urlParams.get(name);
+        // buildFilterQuery joins a multiple select's values with commas
+        if (el.prop('multiple')) {
+          el.val(value === '' ? [] : value.split(',')).trigger('chosen:updated');
+        } else {
+          el.val(value);
+        }
       }
     });
 
@@ -601,7 +618,10 @@ function initPage() {
     filterEvents({}, {skipPushState: true});
   });
 
-  table.bootstrapTable('resetSearch');
+  // Drop a search text restored from the cookie. resetSearch also sets the page
+  // to 1 and stores that, so it is skipped when there is nothing to clear and the
+  // page the cookie remembers is kept when coming back from the event view.
+  if (table.bootstrapTable('getOptions').searchText) table.bootstrapTable('resetSearch');
   // The table is initially given a hidden style, so now that we are done rendering, show it
   table.show();
 }

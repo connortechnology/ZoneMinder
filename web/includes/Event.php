@@ -394,10 +394,10 @@ class Event extends ZM_Object {
         // instead of iterating all users to validate the auth hash
         if (!empty($_SESSION['username'])) $args['user'] = $_SESSION['username'];
       } else if ( ZM_AUTH_RELAY == 'plain' ) {
-        $args['user'] = $_SESSION['username'];
-        $args['pass'] = $_SESSION['password'];
+        $args['user'] = $_SESSION['username'] ?? '';
+        $args['pass'] = $_SESSION['password'] ?? '';
       } else if ( ZM_AUTH_RELAY == 'none' ) {
-        $args['user'] = $_SESSION['username'];
+        $args['user'] = $_SESSION['username'] ?? '';
       }
     }
 
@@ -518,10 +518,10 @@ class Event extends ZM_Object {
         // instead of iterating all users to validate the auth hash
         if (!empty($_SESSION['username'])) $args['user'] = $_SESSION['username'];
       } else if ( ZM_AUTH_RELAY == 'plain' ) {
-        $args['user'] = $_SESSION['username'];
-        $args['pass'] = $_SESSION['password'];
+        $args['user'] = $_SESSION['username'] ?? '';
+        $args['pass'] = $_SESSION['password'] ?? '';
       } else if ( ZM_AUTH_RELAY == 'none' ) {
-        $args['user'] = $_SESSION['username'];
+        $args['user'] = $_SESSION['username'] ?? '';
       }
     }
 
@@ -535,14 +535,15 @@ class Event extends ZM_Object {
     $eventPath = $Event->Path();
 
     if ( $frame and !is_array($frame) ) {
+      $requestedFrameId = $frame;
       Debug("Assuming that $frame is an Id");
-      $f = Frame::find_one(['Id'=>$frame]);
+      $f = Frame::find_one(['Id'=>$requestedFrameId]);
       if ($f) {
         $frame = (array)$f;
       } else {
-        $frame = $this->find_virtual_frame($frame);
+        $frame = $this->find_virtual_frame($requestedFrameId);
         if (!$frame)
-          $frame = array('FrameId'=>$frame, 'Type'=>'', 'Delta'=>0);
+          $frame = array('FrameId'=>$requestedFrameId, 'Type'=>'', 'Delta'=>0);
       }
     }
 
@@ -552,7 +553,7 @@ class Event extends ZM_Object {
       Debug('Frame not specified, using snapshot');
       $frame = array('FrameId'=>'snapshot', 'Type'=>'', 'Delta'=>0);
     } else {
-      $captureImage = sprintf('%0'.ZM_EVENT_IMAGE_DIGITS.'d-analyze.jpg', $frame['FrameId']);
+      $captureImage = sprintf('%0'.ZM_EVENT_IMAGE_DIGITS.'d-analyse.jpg', $frame['FrameId']);
       if ( ! file_exists( $eventPath.'/'.$captureImage ) ) {
         $captureImage = sprintf('%0'.ZM_EVENT_IMAGE_DIGITS.'d-capture.jpg', $frame['FrameId']);
         if ( !file_exists($eventPath.'/'.$captureImage) ) {
@@ -600,10 +601,7 @@ class Event extends ZM_Object {
       $imageFile = $imagePath;
       $thumbFile = $thumbPath;
     } else {
-      if ( version_compare(phpversion(), '4.3.10', '>=') )
-        $fraction = sprintf('%.3F', $scale/SCALE_BASE);
-      else
-        $fraction = sprintf('%.3f', $scale/SCALE_BASE);
+      $fraction = sprintf('%.3F', $scale/SCALE_BASE);
       $scale = (int)round($scale);
 
       $thumbCapturePath = preg_replace('/\.jpg$/', "-$scale.jpg", $capturePath);
@@ -656,7 +654,7 @@ class Event extends ZM_Object {
   }
 
   public function file_exists() {
-    if ( file_exists( $this->Path().'/'.$this->DefaultVideo() ) ) {
+    if ( $this->DefaultVideo() and file_exists($this->Path().'/'.$this->DefaultVideo()) ) {
       return true;
     }
     if ( !defined('ZM_SERVER_ID') ) {
@@ -696,7 +694,7 @@ class Event extends ZM_Object {
   } # end public function file_exists()
 
   public function file_size() {
-    if ( file_exists($this->Path().'/'.$this->DefaultVideo()) ) {
+    if ( $this->DefaultVideo() and file_exists($this->Path().'/'.$this->DefaultVideo()) ) {
       return filesize($this->Path().'/'.$this->DefaultVideo());
     }
     if ( !defined('ZM_SERVER_ID') ) {
@@ -868,10 +866,12 @@ class Event extends ZM_Object {
     return $this->Tags;
   }
 
-  public function GenerateVideo($rate=0, $fps=0, $scale=0, $size=0, $overwrite=false, $format='mp4', $transforms='')  {
+  public function GenerateVideo($rate=0, $fps=0, $scale=0, $size=0, $overwrite=false, $format='mp4', $transforms='', $output_dir='')  {
     $event_path = $this->Path();
+    // Where the video and its log are written; the events' own storage unless a directory is given.
+    $out_path = $output_dir !== '' ? $output_dir : $event_path;
     // Name is user editable; keep the output file inside the event directory.
-    $video_name = preg_replace('/^\./', '_', preg_replace('/[^-A-Za-z0-9_.]/', '_', $this->Name()));
+    $video_name = preg_replace('/^[-.]/', '_', preg_replace('/[^-A-Za-z0-9_.]/', '_', $this->Name()));
 
     $file_parts = [$video_name];
     if ( $rate ) {
@@ -897,7 +897,7 @@ class Event extends ZM_Object {
     }
     array_merge($file_parts, explode(',', $transforms));
     $video_file = implode('-', $file_parts).'.'.$format;
-    if ( $overwrite || ! file_exists($event_path.'/'.$video_file) ) {
+    if ( $overwrite || ! file_exists($out_path.'/'.$video_file) ) {
       Info("Creating video file $video_file for event ".$this->Id());
 
       $frame_rate = $this->Length() > 0 ? sprintf('%.2f', $this->Frames()/$this->Length()) : 1;
@@ -937,10 +937,10 @@ class Event extends ZM_Object {
       array_push($command, '-s', trim($video_size));
       $command = array_merge($command,
         preg_split('/\s+/', ZM_FFMPEG_OUTPUT_OPTIONS, -1, PREG_SPLIT_NO_EMPTY),
-        [$event_path.'/'.$video_file]
+        [$out_path.'/'.$video_file]
       );
       Debug(implode(' ', $command));
-      $log = $event_path.'/ffmpeg.log';
+      $log = $out_path.'/ffmpeg.log';
       $process = proc_open(implode(' ', array_map('escapeshellarg', $command)), [0=>['file', '/dev/null', 'r'], 1=>['file', $log, 'w'], 2=>['file', $log, 'a']], $pipes);
       if (!is_resource($process) or proc_close($process) != 0) {
         Error("Unable to generate video, check $log for details");

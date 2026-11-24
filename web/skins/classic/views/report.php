@@ -18,14 +18,10 @@
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 //
 
-#if (!canView('Reports')) {
-  #$view = 'error';
-  #return;
-#} else if (!ZM_FEATURES_SNAPSHOTS) {
-  #$view = 'console';
-  #return;
-#}
-#
+if (!canView('Events')) {
+  $view = 'error';
+  return;
+}
 
 require_once('includes/Event.php');
 require_once('includes/Filter.php');
@@ -54,7 +50,7 @@ getBodyTopHTML();
           <tbody>
             <tr>
               <th class="text-right" scope="row"><?php echo translate('Name') ?></th>
-              <td><input type="text" name="Report[Name]" value="<?php echo validHtmlStr($report->Name()) ?>"/></td>
+              <td><input type="text" name="Report[Name]" value="<?php echo validHtmlStr($report->Name()) ?>" maxlength="30"/></td>
             </tr>
             <tr>
               <th class="text-right " scope="row"><?php echo translate('Filter') ?></th>
@@ -109,6 +105,8 @@ if (count($user->unviewableMonitorIds())) {
 }
 $events = $filter->Events();
 foreach ($events as $event) {
+  // The filter's own terms can use OR, which the monitor term added above does not restrict.
+  if (!$event->canView()) continue;
   echo 'events[events.length] = '.$event->to_json().PHP_EOL;
 }
 ?>
@@ -123,9 +121,12 @@ months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 
 
 for (event_index=0; event_index < events.length; event_index++) {
   const event = events[event_index];
-  const event_start = new Date(event.StartDateTime);
+  // "YYYY-MM-DD HH:MM:SS" is not a format Date() must accept (Safari gives Invalid Date);
+  // with a T it is ISO 8601 local time everywhere.
+  const event_start = new Date(String(event.StartDateTime).replace(' ', 'T'));
   const day = event_start.getDate();
-  const date_key = months[event_start.getMonth()] + ' ' + day;
+  // The year is part of the key: with no date term in the filter, Nov 21 of two years is two lines.
+  const date_key = months[event_start.getMonth()] + ' ' + day + ' ' + event_start.getFullYear();
   if (! (date_key in dataset_indexes)) {
     dataset_indexes[date_key] = datasets.length;
   }

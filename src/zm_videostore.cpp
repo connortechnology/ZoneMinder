@@ -1479,9 +1479,15 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
     // black while reporting success -- and since both sides are
     // AV_PIX_FMT_VAAPI the upload below does not fire to rescue it either.
     if (zm_packet->hw_frame and shares_decoder_pool) {
-      av_frame_ref(frame.get(), zm_packet->hw_frame.get());
+      if (av_frame_ref(frame.get(), zm_packet->hw_frame.get()) < 0) {
+        Error("Could not reference frame");
+        return 0;
+      }
     } else if (zm_packet->out_frame) {
-      av_frame_ref(frame.get(), zm_packet->out_frame.get());
+      if (av_frame_ref(frame.get(), zm_packet->out_frame.get()) < 0) {
+        Error("Could not reference frame");
+        return 0;
+      }
     } else {
       Debug(3, "Have no out frame. codec is %s sw_pf %d %s hw_pf %d %s %dx%d",
             chosen_codec_data->codec_name,
@@ -1504,7 +1510,10 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
         } else {
           Debug(2, "converting");
           zm_packet->get_out_frame(video_out_ctx->width, video_out_ctx->height, chosen_codec_data->sw_pix_fmt);
-          av_frame_ref(frame.get(), zm_packet->out_frame.get());
+          if (av_frame_ref(frame.get(), zm_packet->out_frame.get()) < 0) {
+            Error("Could not reference frame");
+            return 0;
+          }
 
           // The destination is out_frame's buffer, which get_out_frame laid
           // out at alignment (width % 32 ? 1 : 32) — mirror that choice here
@@ -1549,14 +1558,22 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
           Debug(1, "in_frame format %s matches encoder sw_pix_fmt %s, using directly",
                 av_get_pix_fmt_name(static_cast<AVPixelFormat>(zm_packet->in_frame->format)),
                 av_get_pix_fmt_name(chosen_codec_data->sw_pix_fmt));
-          av_frame_ref(frame.get(), zm_packet->in_frame.get());
+          if (av_frame_ref(frame.get(), zm_packet->in_frame.get()) < 0) {
+            Error("Could not reference frame");
+            return 0;
+          }
         } else {
           Debug(1, "Scaling in_frame %dx%d %s -> %dx%d %s",
                 zm_packet->in_frame->width, zm_packet->in_frame->height,
                 av_get_pix_fmt_name(static_cast<AVPixelFormat>(zm_packet->in_frame->format)),
                 video_out_ctx->width, video_out_ctx->height,
                 av_get_pix_fmt_name(chosen_codec_data->sw_pix_fmt));
-          av_frame_ref(frame.get(), zm_packet->get_out_frame(video_out_ctx->width, video_out_ctx->height, chosen_codec_data->sw_pix_fmt));
+          // Have in_frame.... may need to convert it to out_frame
+          zm_packet->get_out_frame(video_out_ctx->width, video_out_ctx->height, chosen_codec_data->sw_pix_fmt);
+          if (av_frame_ref(frame.get(), zm_packet->out_frame.get()) < 0) {
+            Error("Could not reference frame");
+            return 0;
+          }
           swscale.Convert(zm_packet->in_frame.get(), frame.get());
         }
       } // end if no in_frame
@@ -1795,7 +1812,10 @@ int VideoStore::writeVideoFramePacket(const std::shared_ptr<ZMPacket> zm_packet)
     }
     ZM_DUMP_STREAM_PACKET(video_in_stream, ipkt, "Doing passthrough, just copy packet");
     // Just copy it because the codec is the same
-    av_packet_ref(opkt.get(), ipkt);
+    if (av_packet_ref(opkt.get(), ipkt) < 0) {
+      Error("Could not reference packet");
+      return 0;
+    }
     pkt_guard.acquire(opkt);
 
     if (monitor->WallClockTimestamps()) {

@@ -77,12 +77,13 @@ class Monitor extends ZM_Object {
     // retired audio_fifo; kept reserved at this offset/size, free for future reuse
     'reserved_path2'   => [ 'type'=>'int8[64]', 'offset'=>768, 'size'=>64 ],
     'janus_pin'        => [ 'type'=>'int8[64]', 'offset'=>832, 'size'=>64 ],
-    // audio_level_until appended for the on-demand audio meter, then 12 bytes
-    // of padding (uint32 analysis_pad[3]) to keep the 16-byte-multiple layout,
-    // so SharedData is 912 bytes and TriggerData starts at 912.
+    // audio_level_until appended for the on-demand audio meter, then onvif_status
+    // carved from the reserve, then 8 bytes of padding (uint32 analysis_pad[2]) to
+    // keep the 16-byte-multiple layout, so SharedData is 912 bytes and TriggerData starts at 912.
     // ai_server carries last_analysis_index/analysis_image_count inline in the
     // multi-index header above, so upstream's appended copies are not repeated.
     'audio_level_until' => [ 'type'=>'uint32', 'offset'=>896, 'size'=>4 ],
+    'onvif_status'      => [ 'type'=>'uint32', 'offset'=>900, 'size'=>4 ], // 0 not in use, 1 not subscribed, 2 subscribed; carved from analysis_pad
   ],
   'TriggerData' => [
     // SharedData grew from 896 to 912, so TriggerData shifts up by 16.
@@ -614,7 +615,7 @@ class Monitor extends ZM_Object {
         $args['user'] = isset($_SESSION['username']) ? $_SESSION['username'] : '';
         $args['pass'] = isset($_SESSION['password']) ? $_SESSION['password'] : '';
       } elseif ( ZM_AUTH_RELAY == 'none' ) {
-        $args['user'] = $_SESSION['username'];
+        $args['user'] = $_SESSION['username'] ?? '';
       }
     }
     if (ZM_RAND_STREAM) {
@@ -699,6 +700,10 @@ class Monitor extends ZM_Object {
       Warning('Attempt to control a monitor with no Id');
       return;
     }
+    if ($mode != 'stop' and $this->Deleted()) {
+      Warning('Attempt to control deleted monitor '.$this->{'Id'});
+      return;
+    }
     if ((!defined('ZM_SERVER_ID')) or ( property_exists($this, 'ServerId') and (ZM_SERVER_ID==$this->{'ServerId'}) )) {
       if ($this->Type() == 'Local') {
         $zmcArgs = '-d '.escapeshellarg($this->{'Device'});
@@ -724,6 +729,38 @@ class Monitor extends ZM_Object {
       Error('Server not assigned to Monitor '.$this->{'Id'}.' in a multi-server setup. Please assign a server to the Monitor.');
     }
   } // end function zmcControl
+
+  // zmtrack.pl aims the camera at motion. zmpkg.pl starts it only for a
+  // controllable monitor that is capturing, analysing and has TrackMotion set,
+  // so start under those same conditions and stop otherwise.
+  public function zmtrackControl($mode=false) {
+    if (!(property_exists($this,'Id') and $this->{'Id'})) {
+      Warning('Attempt to control a monitor with no Id');
+      return;
+    }
+    if (($mode != 'stop') and (
+        (!defined('ZM_OPT_CONTROL') or !ZM_OPT_CONTROL)
+        or ($this->Type() == 'WebSite')
+        or ($this->Capturing() == 'None')
+        or !$this->Controllable()
+        or !$this->TrackMotion()
+        or ($this->Analysing() == 'None'))) {
+      $mode = 'stop';
+    }
+    if ((!defined('ZM_SERVER_ID')) or ( property_exists($this, 'ServerId') and (ZM_SERVER_ID==$this->{'ServerId'}) )) {
+      // Most monitors do not track motion, so zmdc.pl would log "Can't find
+      // process" on every save/delete if we asked it to stop something that was
+      // never started. Only stop a local zmtrack.pl that is actually running.
+      if (($mode == 'stop') and !daemonStatus('zmtrack.pl', '-m '.$this->{'Id'})) {
+        return;
+      }
+      daemonControl($mode, 'zmtrack.pl', '-m '.$this->{'Id'});
+    } else if ($this->ServerId()) {
+      $result = $this->Server()->SendToApi('/monitors/daemonControl/'.$this->{'Id'}.'/'.$mode.'/zmtrack.pl.json');
+    } else {
+      Error('Server not assigned to Monitor '.$this->{'Id'}.' in a multi-server setup. Please assign a server to the Monitor.');
+    }
+  } // end function zmtrackControl
 
   public function GroupIds($new='') {
     if ($new != '') {
@@ -752,6 +789,7 @@ class Monitor extends ZM_Object {
       if ($this->Controllable()) {
         $this->sendControlCommand('stop');
       }
+      $this->zmtrackControl('stop');
     }
     // Hand back whether it actually saved. This is a soft delete, so a failing
     // UPDATE (an out of range Importance, for one) leaves the monitor in place,
@@ -772,6 +810,7 @@ class Monitor extends ZM_Object {
     if ($this->Controllable()) {
       $this->sendControlCommand('stop');
     }
+    $this->zmtrackControl('stop');
 
     // With lots of events this step may well time out before completing, in
     // which case zmaudit will still tidy up
@@ -914,13 +953,19 @@ class Monitor extends ZM_Object {
       if (@socket_connect($socket, $sockFile)) {
         if (!socket_write($socket, $optionString)) {
           Error('Can\'t write to control socket: '.socket_strerror(socket_last_error($socket)));
+          socket_close($socket);
           return false;
         }
       } else if ($command != 'quit') {
         $command = ZM_PATH_BIN.'/zmcontrol.pl '.$command.' --id '.$this->{'Id'};
 
         // Can't connect so use script
-        $ctrlOutput = exec(escapeshellcmd($command));
+        exec(escapeshellcmd($command), $output, $rc);
+        if ($rc != 0) {
+          socket_close($socket);
+          Error('zmcontrol.pl exited with status '.$rc.' for command: '.$command);
+          return false;
+        }
       }
       socket_close($socket);
     } else if ($this->ServerId()) {
@@ -1063,6 +1108,8 @@ class Monitor extends ZM_Object {
       Debug('Can\'t view monitor '.$this->{'Id'}.' because of monitor permission '.$monitor_permission->Permission());
       return false;
     }
+    # The user's own View or Edit on this monitor decides before groups and role, as visibleMonitor() does.
+    if ($monitor_permission and in_array($monitor_permission->Permission(), array('View', 'Edit'))) return true;
 
     $group_permissions = $u->Group_Permissions();
 
@@ -1465,8 +1512,8 @@ class Monitor extends ZM_Object {
       }
       $gp_permissions[$gp->Permission()] = 1;
     }
-    if (isset($gp_permissions['View'])) return 'View';
     if (isset($gp_permissions['Edit'])) return 'Edit';
+    if (isset($gp_permissions['View'])) return 'View';
 
     // Same order as visibleMonitor() and editableMonitor(): the role's monitor permission,
     // its groups, then the higher of the user's and the role's Monitors permission.
@@ -1484,8 +1531,8 @@ class Monitor extends ZM_Object {
         }
         $role_gp_permissions[$gp->Permission()] = 1;
       }
-      if (isset($role_gp_permissions['View'])) return 'View';
       if (isset($role_gp_permissions['Edit'])) return 'Edit';
+      if (isset($role_gp_permissions['View'])) return 'View';
       $levels = array('None'=>0, 'View'=>1, 'Edit'=>2, 'Create'=>3);
       return ($levels[$role->Monitors()] > $levels[$u->Monitors()]) ? $role->Monitors() : $u->Monitors();
     }
@@ -1624,6 +1671,14 @@ class Monitor extends ZM_Object {
   public function audioLevel() {
     if (!$this->connect()) return null;
     return $this->shared_read('SharedData', 'audio_level');
+  }
+
+  // State of the ONVIF event subscription as zmc last published it: 0 not in
+  // use, 1 enabled but not subscribed, 2 subscribed. Null when there is no
+  // shared memory to read (zmc not running).
+  public function OnvifStatus() {
+    if (!$this->connect()) return null;
+    return intval($this->shared_read('SharedData', 'onvif_status'));
   }
 
   public function audioAlarm() {

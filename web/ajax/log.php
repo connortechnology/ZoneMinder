@@ -30,7 +30,9 @@ if (!isset($_REQUEST['task'])) {
     if (!empty($_REQUEST['ids'])) {
       $ids = array_map('intval', (array)$_REQUEST['ids']);
       $placeholders = implode(',', array_fill(0, count($ids), '?'));
-      dbQuery('DELETE FROM Logs WHERE Id IN (' . $placeholders . ')', $ids);
+      if (dbQuery('DELETE FROM Logs WHERE Id IN (' . $placeholders . ')', $ids) === null) {
+        $message = 'Failed to delete the selected log entries';
+      }
     } else if (!empty($_REQUEST['all'])) {
       // Deleting by id needs one request per 100 rows, which is unusable at the
       // hundreds of thousands of rows people accumulate, and the table's
@@ -113,8 +115,9 @@ function createRequest() {
   }
 
   $levels = array_flip(ZM\Logger::$codes);
-  // OFF has no priority to log under.
-  unset($levels['OFF']);
+  // OFF has no priority to log under, and AUD is for the server's own audit
+  // records, so a request can't forge one.
+  unset($levels['OFF'], $levels['AUD']);
   if (!isset($levels[$level])) {
     ZM\Error('Unexpected logger level '.$level); // already sanitized above
     $level = 'ERR';
@@ -293,8 +296,10 @@ function logFilter() {
     $end_time = is_string($_REQUEST['EndDateTime']) ? strtotime($_REQUEST['EndDateTime']) : false;
     if ($end_time) {
       if ($where) $where .= ' AND ';
-      $where .= 'TimeKey <= ?';
-      $query['values'][] = $end_time;
+      // TimeKey carries fractions of a second but the view shows whole seconds,
+      // so the End time covers its whole second.
+      $where .= 'TimeKey < ?';
+      $query['values'][] = $end_time + 1;
     } else {
       ZM\Warning("Unable to parse EndDateTime ".print_r($_REQUEST['EndDateTime'], true). " into a timestamp");
     }
@@ -418,7 +423,8 @@ function queryRequest() {
     $row['DateTime'] = empty($row['TimeKey']) ? '' : $dateTimeFormatter->format(intval($row['TimeKey']));
     $Server = $row['ServerId'] ? ZM\Server::find_one(array('Id'=>$row['ServerId'])) : null;
 
-    $row['Server'] = $Server ? $Server->Name() : '';
+    $row['Server'] = $Server ? htmlspecialchars($Server->Name(), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : '';
+    $row['Component'] = htmlspecialchars((string)($row['Component'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     $row['Message'] = htmlspecialchars($row['Message'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     // Strip out all characters that are not ASCII 32-126 (yes, 126)
     $row['File'] = preg_replace('/[^\x20-\x7E]/', '', strip_tags($row['File']));

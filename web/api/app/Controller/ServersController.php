@@ -84,25 +84,33 @@ class ServersController extends AppController {
  * @return void
  */
   public function add() {
-    if ( $this->request->is('post') ) {
-
-      global $user;
-      $canEdit = (!$user) || ($user->System() == 'Edit');
-      if ( !$canEdit ) {
-        throw new UnauthorizedException(__('Insufficient privileges'));
-        return;
-      }
-
-      $this->pinRequestId($this->Server, null);
-      $this->Server->create();
-      if ( $this->Server->save($this->request->data) ) {
-        return $this->flash(__('The server has been saved.'), array('action' => 'index'));
-      }
-      $this->set(array(
-        'message' => $this->Server->validationErrors ? $this->Server->validationErrors : 'Error',
-        '_serialize' => array('message')
-      ));
+    if ( !$this->request->is('post') ) {
+      throw new BadRequestException(__('Invalid method. Should be post'));
     }
+
+    global $user;
+    $canEdit = (!$user) || ($user->System() == 'Edit');
+    if ( !$canEdit ) {
+      throw new UnauthorizedException(__('Insufficient privileges'));
+      return;
+    }
+
+    $this->pinRequestId($this->Server, null);
+    $this->Server->create();
+    if ( $this->Server->save($this->request->data) ) {
+      $this->set(array(
+        'message' => 'Saved',
+        'id' => $this->Server->id,
+        '_serialize' => array('message', 'id')
+      ));
+      return;
+    }
+    $this->response->statusCode(400);
+    $this->set(array(
+      'message' => $this->Server->validationErrors ? $this->Server->validationErrors : 'Error',
+      'id' => null,
+      '_serialize' => array('message', 'id')
+    ));
   }
 
 /**
@@ -125,11 +133,13 @@ class ServersController extends AppController {
     if ( !$this->Server->exists($id) ) {
       throw new NotFoundException(__('Invalid server'));
     }
+    $this->request->allowMethod('post', 'put');
     $this->pinRequestId($this->Server, $id);
     if ( $this->Server->save($this->request->data) ) {
       $message = 'Saved';
     } else {
       $message = $this->Server->validationErrors ? $this->Server->validationErrors : 'Error';
+      $this->response->statusCode(400);
     }
 
     $this->set(array(
@@ -158,6 +168,12 @@ class ServersController extends AppController {
       throw new NotFoundException(__('Invalid server'));
     }
     $this->request->allowMethod('post', 'delete');
+
+    require_once __DIR__ .'/../../../includes/Server.php';
+    $inUse = ZM\Server::InUseSummary((int)$id);
+    if ( $inUse ) {
+      throw new BadRequestException(__('The server is still used by %s', $inUse));
+    }
 
     if ( $this->Server->delete() ) {
       $this->set(array(

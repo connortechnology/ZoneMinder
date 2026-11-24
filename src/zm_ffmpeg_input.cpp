@@ -105,6 +105,7 @@ int FFmpeg_Input::Open(const char *filepath) {
     }
 
     streams[i].frame_count = 0;
+    streams[i].drained = false;
 
     streams[i].context = nullptr;
     std::list<const CodecData *>codec_data = get_decoder_data(input_format_context->streams[i]->codecpar->codec_id, "auto");
@@ -115,7 +116,17 @@ int FFmpeg_Input::Open(const char *filepath) {
       streams[i].codec = avcodec_find_decoder_by_name(chosen_codec_data->codec_name);
 
       streams[i].context = avcodec_alloc_context3(streams[i].codec);
-      avcodec_parameters_to_context(streams[i].context, input_format_context->streams[i]->codecpar);
+      if (!streams[i].context) {
+        Error("Could not allocate codec context for stream %d", i);
+        continue;
+      }
+      int ret = avcodec_parameters_to_context(streams[i].context, input_format_context->streams[i]->codecpar);
+      if (ret < 0) {
+        Error("Could not copy codec parameters for stream %d (error '%s')",
+            i, av_make_error_string(ret).c_str());
+        avcodec_free_context(&(streams[i].context));
+        continue;
+      }
 
       if (setup_hwaccel(streams[i].context,
             chosen_codec_data, hw_device_ctx, "",
@@ -210,10 +221,18 @@ AVFrame *FFmpeg_Input::get_frame(int stream_id) {
     return nullptr;
   }
 
+  bool frameComplete = false;
+  av_packet_ptr packet{av_packet_alloc()};
+
+  if (!packet) {
+    Error("Unable to allocate packet.");
+    return nullptr;
+  }
 
   AVCodecContext *context = streams[stream_id].context;
 
-  while (!zm_terminate) {
+  while (!frameComplete) {
+
     frame = av_frame_ptr{av_frame_alloc()};
     if (!frame) {
       Error("Unable to allocate frame.");
@@ -225,54 +244,59 @@ AVFrame *FFmpeg_Input::get_frame(int stream_id) {
     Debug(1, "Ret from receive_frame ret: %d %s", ret, av_make_error_string(ret).c_str());
     if (ret == AVERROR(EAGAIN)) {
       // Perfectly normal
+    } else if (ret == AVERROR_EOF) {
+      Debug(1, "Decoder drained for stream %d", stream_id);
+      return nullptr;
     } else if (ret < 0) {
       Error("Ret from receive_frame ret: %d %s", ret, av_make_error_string(ret).c_str());
-      return nullptr; // FIXME should likely just continue, but not if we are EOF
+      return nullptr;
     } else {
-      zm_dump_frame(frame.get(), "resulting frame");
-      return frame.get();
+      frameComplete = true;
+      if (is_video_stream(input_format_context->streams[stream_id])) {
+        zm_dump_video_frame(frame.get(), "resulting video frame");
+      } else {
+        zm_dump_frame(frame.get(), "resulting frame");
+      }
+      break;
     }
 
-    av_packet_ptr packet{av_packet_alloc()};
-    if (!packet) {
-      Error("Unable to allocate packet.");
+    if (streams[stream_id].drained) {
+      // Already sent the flush packet; nothing more to read.
       return nullptr;
     }
 
-    while (!zm_terminate) {
-      ret = av_read_frame(input_format_context, packet.get());
-      if (ret < 0) {
-        if (
-            // Check if EOF.
-            (ret == AVERROR_EOF || (input_format_context->pb && input_format_context->pb->eof_reached)) ||
-            // Check for Connection failure.
-            (ret == -110)
-           ) {
-          // Need to try flushing the codec. Sigh
-          Info("av_read_frame returned %s.", av_make_error_string(ret).c_str());
-          break;
+    ret = av_read_frame(input_format_context, packet.get());
+    if (ret < 0) {
+      if (ret == AVERROR_EOF || (input_format_context->pb && input_format_context->pb->eof_reached)) {
+        Info("av_read_frame returned %s, draining decoder.", av_make_error_string(ret).c_str());
+        streams[stream_id].drained = true;
+        ret = avcodec_send_packet(context, nullptr);
+        if (ret < 0 && ret != AVERROR_EOF) {
+          Debug(1, "Unable to send flush packet %d %s", ret, av_make_error_string(ret).c_str());
         }
-        Error("Unable to read packet from stream %d: error %d %s.", packet->stream_index, ret, av_make_error_string(ret).c_str());
-        return nullptr;
-      }
-      ZM_DUMP_STREAM_PACKET(input_format_context->streams[packet->stream_index], packet, "Received packet");
-
-      if ((stream_id >= 0) && (packet->stream_index != stream_id)) {
-        Debug(4, "Packet is not for our stream. Want %d got %d", stream_id, packet->stream_index);
-        // Before FFmpeg 7, av_read_frame() resets the packet it is given
-        // without unreferencing it, so a skipped packet would leak its buffer.
-        av_packet_unref(packet.get());
         continue;
       }
-      break;
-    }  // end while !got_packet
-
-    if (ret < 0) {
-      // EOF or connection timeout — flush the decoder
-      ret = avcodec_send_packet(context, nullptr);
-    } else {
-      ret = avcodec_send_packet(context, packet.get());
+      if (
+        // Check for Connection failure.
+        (ret == -110)
+      ) {
+        Info("av_read_frame returned %s.", av_make_error_string(ret).c_str());
+        return nullptr;
+      }
+      Error("Unable to read packet from stream %d: error %d \"%s\".",
+            packet->stream_index, ret, av_make_error_string(ret).c_str());
+      return nullptr;
     }
+    ZM_DUMP_STREAM_PACKET(input_format_context->streams[packet->stream_index], packet, "Received packet");
+
+    av_packet_guard pkt_guard{packet};
+
+    if ((stream_id >= 0) && (packet->stream_index != stream_id)) {
+      Debug(4, "Packet is not for our stream (%d)", packet->stream_index );
+      continue;
+    }
+
+    ret = avcodec_send_packet(context, packet.get());
     if (ret == AVERROR(EAGAIN)) {
       Debug(2, "Unable to send packet %d %s", ret, av_make_error_string(ret).c_str());
       continue;
@@ -294,6 +318,12 @@ AVFrame *FFmpeg_Input::get_frame(int stream_id, double at) {
     return nullptr;
   }
   Debug(1, "Getting frame from stream %d at %f", stream_id, at);
+  // Open() leaves the context null when no decoder opened for the stream; the
+  // seeks below flush it, so stop here as the sequential get_frame() does.
+  if (stream_id < 0 or !streams or !streams[stream_id].context) {
+    Error("No context for stream %d", stream_id);
+    return nullptr;
+  }
 
   int64_t seek_target = (int64_t)(at * AV_TIME_BASE);
   Debug(1, "Getting frame from stream %d at seektarget: %" PRId64, stream_id, seek_target);
@@ -306,9 +336,15 @@ AVFrame *FFmpeg_Input::get_frame(int stream_id, double at) {
     // Don't have a frame yet, so get a keyframe before the timestamp
     ret = av_seek_frame(input_format_context, stream_id, seek_target, AVSEEK_FLAG_FRAME);
     if (ret < 0) {
+      // No keyframe at or after the target (it is in the last GOP), so use the one before it.
+      ret = av_seek_frame(input_format_context, stream_id, seek_target, AVSEEK_FLAG_FRAME | AVSEEK_FLAG_BACKWARD);
+    }
+    if (ret < 0) {
       Error("Unable to seek in stream");
       //return nullptr;
     }
+    avcodec_flush_buffers(streams[stream_id].context);
+    streams[stream_id].drained = false;
     // Have to grab a frame to update our current frame to know where we are
     get_frame(stream_id);
 
@@ -325,6 +361,8 @@ AVFrame *FFmpeg_Input::get_frame(int stream_id, double at) {
       ret = av_seek_frame(input_format_context, stream_id, seek_target,
                           AVSEEK_FLAG_BACKWARD);
       if (ret >= 0) {
+        avcodec_flush_buffers(streams[stream_id].context);
+        streams[stream_id].drained = false;
         get_frame(stream_id);
       }
     }
@@ -345,6 +383,8 @@ AVFrame *FFmpeg_Input::get_frame(int stream_id, double at) {
       Error("Unable to seek in stream %d", ret);
       return nullptr;
     }
+    avcodec_flush_buffers(streams[stream_id].context);
+    streams[stream_id].drained = false;
     // Have to grab a frame to update our current frame to know where we are
     get_frame(stream_id);
     if ( is_video_stream(input_format_context->streams[stream_id]) ) {
@@ -368,10 +408,16 @@ AVFrame *FFmpeg_Input::get_frame(int stream_id, double at) {
   if (frame->pts + seek_threshold < seek_target)
   {
     Debug(1, "Jumping ahead to %" PRId64, seek_target);
-    if (( ret = av_seek_frame(input_format_context, stream_id, seek_target, AVSEEK_FLAG_FRAME) ) < 0) {
+    ret = av_seek_frame(input_format_context, stream_id, seek_target, AVSEEK_FLAG_FRAME);
+    if (ret < 0) {
+      ret = av_seek_frame(input_format_context, stream_id, seek_target, AVSEEK_FLAG_FRAME | AVSEEK_FLAG_BACKWARD);
+    }
+    if (ret < 0) {
       Error("Unable to seek in stream %d", ret);
       return nullptr;
     }
+    avcodec_flush_buffers(streams[stream_id].context);
+    streams[stream_id].drained = false;
     // Have to grab a frame to update our current frame to know where we are
     get_frame(stream_id);
     zm_dump_frame(frame, "got");
@@ -382,6 +428,8 @@ AVFrame *FFmpeg_Input::get_frame(int stream_id, double at) {
         Error("Unable to seek in stream %d", ret);
         return nullptr;
       }
+      avcodec_flush_buffers(streams[stream_id].context);
+      streams[stream_id].drained = false;
       get_frame(stream_id);
       zm_dump_frame(frame, "Had to seek backwards");
     }

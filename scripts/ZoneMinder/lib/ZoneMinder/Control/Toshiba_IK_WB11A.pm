@@ -74,11 +74,15 @@ sub sendCmd
 
     #my $result = undef;
 
-    printMsg( $cmd, "Tx" );
+    $self->printMsg( $cmd, "Tx" );
 
     my $req = HTTP::Request->new( GET=>"http://".$self->{Monitor}->{ControlAddress}."$cmd" );
     my $res = $self->{ua}->request($req);
-    return( !undef );
+    if ( $res->is_success ) {
+        return( !undef );
+    }
+    Error( "Error check failed: '".$res->status_line()."'" );
+    return( undef );
 }
 
 sub reset

@@ -40,6 +40,7 @@ require File::Find;
 require File::Path;
 require File::Copy;
 require File::Basename;
+require File::Glob;
 require Number::Bytes::Human;
 require Date::Parse;
 require POSIX;
@@ -278,7 +279,9 @@ sub GenerateVideo {
   chdir($event_path);
   # Name is user editable; keep the output file inside the event directory.
   ( my $video_name = $self->{Name} ) =~ s/[^-A-Za-z0-9_.]/_/g;
-  $video_name =~ s/^\./_/;
+  $video_name =~ s/^[-.]/_/;
+  # An empty name would make the output file start with '-', which ffmpeg reads as an option.
+  $video_name = 'Event' if $video_name eq '';
 
   my @file_parts;
   if ( $rate ) {
@@ -756,6 +759,12 @@ sub CopyTo {
     return 'No permission to copy event.';
   }
 
+  # An event with no EndDateTime is still being recorded: zmc keeps writing
+  # frames into the source directory, which MoveTo then deletes.
+  if ( !$$self{EndDateTime} ) {
+    return "Event $$self{Id} has no EndDateTime, it is still being recorded.";
+  }
+
   my $OldStorage = $self->Storage(undef);
   my ( $OldPath ) = ( $self->Path() =~ /^(.*)$/ ); # De-taint
   if ( ! -e $OldPath ) {
@@ -803,7 +812,9 @@ sub CopyTo {
     my $bucket = $NewStorage->bucket();
     if ($s3 and $bucket) {
       my $event_path = $NewStorage->aws_subpath().$self->RelativePath();
-      my @files = glob("$OldPath/*");
+      # Not glob(): it splits its pattern on whitespace, so a storage path with a
+      # space in it matches none of the event's files.
+      my @files = File::Glob::bsd_glob("$OldPath/*");
       Debug("Files to move @files");
       eval {
         foreach my $file (@files) {
@@ -971,8 +982,9 @@ sub recover_timestamps {
   if ( @capture_jpgs ) {
     $$Event{Frames} = scalar @capture_jpgs;
     $$Event{SaveJPEGs} |= 1;
-    # can get start and end times from stat'ing first and last jpg
-    @capture_jpgs = sort { $a cmp $b } @capture_jpgs;
+    # can get start and end times from stat'ing first and last jpg,
+    # in frame order: numbers past the zero padding do not sort as text
+    @capture_jpgs = sort { ($a =~ /^(\d+)/)[0] <=> ($b =~ /^(\d+)/)[0] } @capture_jpgs;
     my $first_file = "$path/$capture_jpgs[0]";
     ( $first_file ) = $first_file =~ /^(.*)$/;
     my $first_timestamp = (stat($first_file))[9];

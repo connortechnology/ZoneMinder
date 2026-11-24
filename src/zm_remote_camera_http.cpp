@@ -23,6 +23,7 @@
 #include "zm_signal.h"
 #include "zm_regexp.h"
 #include <arpa/inet.h>
+#include <cctype>
 #include <netdb.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -40,6 +41,9 @@ static RegExpr *status_expr = nullptr;
 static RegExpr *connection_expr = nullptr;
 static RegExpr *content_length_expr = nullptr;
 static RegExpr *content_type_expr = nullptr;
+static RegExpr *subheader_expr = nullptr;
+static RegExpr *content_expr = nullptr;
+static std::string multipart_boundary;
 #endif
 
 RemoteCameraHttp::RemoteCameraHttp(
@@ -340,6 +344,15 @@ bool RemoteCameraHttp::IsBoundaryLine(const char *line, const char *boundary, si
   return dashes >= 2 && strncasecmp(line + dashes, boundary, len) == 0;
 }
 
+std::string RemoteCameraHttp::QuoteRegex(const std::string &text) {
+  std::string quoted;
+  for (const char c : text) {
+    if (!isalnum(static_cast<unsigned char>(c))) quoted += '\\';
+    quoted += c;
+  }
+  return quoted;
+}
+
 int RemoteCameraHttp::ParseContentLength(const char *text, unsigned long long image_size) {
   // The length is read from the camera link, usually plain HTTP, and decides how much is
   // buffered for one frame. No encoding of a frame is larger than twice its raw size, so a
@@ -479,6 +492,13 @@ int RemoteCameraHttp::GetResponse() {
               Error( "No content boundary found in header '%s'", header );
               return( -1 );
             }
+            if ( multipart_boundary != content_boundary ) {
+              multipart_boundary = content_boundary;
+              delete subheader_expr;
+              subheader_expr = nullptr;
+              delete content_expr;
+              content_expr = nullptr;
+            }
             mode = MULTI_IMAGE;
             state = SUBHEADER;
           }
@@ -498,14 +518,12 @@ int RemoteCameraHttp::GetResponse() {
         break;
       }
       case SUBHEADER : {
-        static RegExpr *subheader_expr = nullptr;
         static RegExpr *subcontent_length_expr = nullptr;
         static RegExpr *subcontent_type_expr = nullptr;
 
         if ( !subheader_expr ) {
-          char subheader_pattern[256] = "";
-          snprintf( subheader_pattern, sizeof(subheader_pattern), "^((?:\r?\n){0,2}?(?:--)?%s\r?\n.+?\r?\n\r?\n)", content_boundary );
-          subheader_expr = new RegExpr( subheader_pattern, PCRE2_DOTALL );
+          const std::string subheader_pattern = stringtf("^((?:\r?\n){0,2}?(?:--)?%s\r?\n.+?\r?\n\r?\n)", QuoteRegex(multipart_boundary).c_str());
+          subheader_expr = new RegExpr( subheader_pattern.c_str(), PCRE2_DOTALL );
         }
         if ( subheader_expr->Match( (char *)buffer, (int)buffer ) == 2 ) {
           subheader = subheader_expr->MatchString( 1 );
@@ -584,12 +602,10 @@ int RemoteCameraHttp::GetResponse() {
               return -1;
             }
             bytes += buffer_len;
-            static RegExpr *content_expr = 0;
             if (mode == MULTI_IMAGE) {
               if (!content_expr) {
-                char content_pattern[256] = "";
-                snprintf(content_pattern, sizeof(content_pattern), "^(.+?)(?:\r?\n)*(?:--)?%s\r?\n", content_boundary);
-                content_expr = new RegExpr(content_pattern, PCRE2_DOTALL);
+                const std::string content_pattern = stringtf("^(.+?)(?:\r?\n)*(?:--)?%s\r?\n", QuoteRegex(multipart_boundary).c_str());
+                content_expr = new RegExpr(content_pattern.c_str(), PCRE2_DOTALL);
               }
               if (content_expr->Match( buffer, buffer.size()) == 2) {
                 content_length = content_expr->MatchLength( 1 );
@@ -1049,6 +1065,7 @@ int RemoteCameraHttp::GetResponse() {
           Debug(3, "Got end of image by length, content-length = %d", content_length);
         } else {
           // Read until we find the end of image or the stream closes.
+          const TimePoint empty_start = std::chrono::steady_clock::now();
           while (!content_length && !zm_terminate) {
             Debug(4, "!content_length, ReadData");
             int buffer_len = ReadData(buffer);
@@ -1086,6 +1103,15 @@ int RemoteCameraHttp::GetResponse() {
                   Debug(2, "Trimmed end of image, new content-length = %d", content_length);
                 }
               } // end if SINGLE_IMAGE
+
+              if (!content_length) {
+                // Empty body: wait for data, but give up like GetData() does instead of spinning forever.
+                if (zm_terminate or std::chrono::steady_clock::now() - empty_start > FPSeconds(config.watch_max_delay)) {
+                  Error("Empty image body, no data received");
+                  return -1;
+                }
+                std::this_thread::sleep_for(Milliseconds(100));
+              }
             } // end if read some data
           } // end while ! content_length
         } // end if content_length

@@ -43,6 +43,7 @@ namespace ZM {
     public function Id($v = null) { return isset($this->f['Id']) ? $this->f['Id'] : null; }
     public function Storage() { return new Storage(); }
     public function zmcControl($m) {}
+    public function zmtrackControl($m) {}
     public function sendControlCommand($m) {}
     public function commandFieldChangesNotAllowed($d) { return array(); }
     public function changes($new) {
@@ -90,7 +91,9 @@ namespace {
   }
   function dbQuery($sql, $args = array()) {
     if (strpos($sql, 'UPDATE Zones') === 0) ZM\Rec::$queries[] = array($sql, $args);
+    return true;
   }
+  function dbLastError() { return ''; }
   function coordsToPoints($c) { return array(); }
   function pointsToCoords($p) { return ''; }
   function getFormChanges($old, $new, $types = false) {

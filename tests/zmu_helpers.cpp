@@ -32,6 +32,22 @@ static std::vector<std::string> Columns(const std::string &line) {
   return cols;
 }
 
+TEST_CASE("zmu: integer option arguments", "[zmu]") {
+  int v = 99;
+  REQUIRE(zmu_parse_int("50", &v));
+  REQUIRE(v == 50);
+  REQUIRE(zmu_parse_int("-5", &v));
+  REQUIRE(v == -5);
+  v = 99;
+  // atoi() turned these into 0 and 12, which would set brightness 0
+  REQUIRE_FALSE(zmu_parse_int("abc", &v));
+  REQUIRE_FALSE(zmu_parse_int("12x", &v));
+  REQUIRE_FALSE(zmu_parse_int("", &v));
+  REQUIRE_FALSE(zmu_parse_int(nullptr, &v));
+  REQUIRE_FALSE(zmu_parse_int("99999999999", &v));
+  REQUIRE(v == 99);
+}
+
 TEST_CASE("zmu: monitor id argument", "[zmu]") {
   REQUIRE(zmu_parse_monitor_id("3") == 3);
   REQUIRE(zmu_parse_monitor_id("abc") == -1);
@@ -48,6 +64,19 @@ TEST_CASE("zmu: monitor functions need a monitor", "[zmu]") {
   REQUIRE(zmu_check_options(ZMU_LIST, 0).empty());
   REQUIRE(zmu_check_options(ZMU_QUERY, 0).empty());
   REQUIRE(zmu_check_options(ZMU_BOGUS, 0).empty());
+}
+
+TEST_CASE("zmu: alarm and cancel need Monitors edit", "[zmu]") {
+  // mon_id 0 skips the per-monitor check, which would read the database
+  const char *view_row[] = {"3", "viewer", "x", "1", "3", "3", "3", "2", "3", "0"};
+  const char *edit_row[] = {"4", "editor", "x", "1", "3", "3", "3", "3", "3", "0"};
+  User viewer(const_cast<char **>(view_row));
+  User editor(const_cast<char **>(edit_row));
+  REQUIRE_FALSE(ValidateAccess(&viewer, 0, ZMU_ALARM));
+  REQUIRE_FALSE(ValidateAccess(&viewer, 0, ZMU_CANCEL));
+  REQUIRE(ValidateAccess(&editor, 0, ZMU_ALARM));
+  REQUIRE(ValidateAccess(&editor, 0, ZMU_CANCEL));
+  REQUIRE(ValidateAccess(&viewer, 0, ZMU_STATE));
 }
 
 TEST_CASE("zmu: single line output separator", "[zmu]") {

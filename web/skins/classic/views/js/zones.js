@@ -60,6 +60,8 @@ document.onvisibilitychange = () => {
       }
     }, 15*1000);
   } else {
+    // Back before the 15 s ran out: the pending stop would kill a visible stream
+    TimerHideShow = clearTimeout(TimerHideShow);
     //Start monitors when show page — refresh auth first so the img src
     //rebuilds with a current hash (avoids a stale-hash reject on resume).
     refreshAuthHash(function() {
