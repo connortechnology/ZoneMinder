@@ -46,8 +46,24 @@
 
 typedef std::vector<std::string> StringVector;
 
-unsigned int getcpu();
+// Record the calling thread's current CPU in our_cpu and return it, or -1 if
+// it could not be determined (sched_getcpu failure, or unsupported platform).
+int getcpu();
+// Pin thread to the set of CPUs that share the capture CPU's last-level cache,
+// so a monitor's worker threads stay cache-local to capture without being
+// capped on a single core. No-op returning false when the capture CPU is
+// unknown, when that cache is private to a single core (nothing shared to
+// exploit), or on platforms without CPU affinity.
 bool set_cpu_affinity(std::thread &thread);
+// Parse a Linux cpu list such as "0-3,8,10-11" into CPU indices. Exposed for
+// testing.
+std::vector<int> parse_cpu_list(const std::string &list);
+// The subset of a last-level-cache CPU set that is worth pinning to: the set
+// unchanged when it spans more than one CPU, else empty ("do not pin") because
+// a one-CPU set means the capture CPU's last-level cache is private to that
+// core, so pinning there would only serialize a monitor's threads onto one
+// core with no shared cache to exploit. Pure and exposed for testing.
+std::vector<int> cpu_set_for_pinning(const std::vector<int> &shared_set);
 
 // Bounded string copy into a fixed-size buffer that ALWAYS null-terminates
 // (unlike strcpy, which overflows, and strncpy, which skips the terminator on
@@ -131,7 +147,9 @@ std::string TimevalToString(timeval tv);
 
 extern unsigned int sse_version;
 extern unsigned int neonversion;
-extern unsigned int our_cpu;
+// The CPU the capture process was running on when getcpu() was last called,
+// or -1 if it could not be determined.
+extern int our_cpu;
 
 void HwCapsDetect();
 void *sse2_aligned_memcpy(void *dest, const void *src, size_t bytes);
