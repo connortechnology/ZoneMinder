@@ -349,7 +349,13 @@ namespace {
 
 class SecondPathMonitor : public Monitor {
  public:
-  explicit SecondPathMonitor(const std::string &path) : Monitor() { second_path = path; }
+  // ai_server keeps a primary stream's audio only when the monitor records
+  // audio (is_audio_stream() is discarded otherwise); audio from a second
+  // input is always kept. These tests exercise the audio stream, so record it.
+  explicit SecondPathMonitor(const std::string &path) : Monitor() {
+    second_path = path;
+    record_audio = true;
+  }
 };
 
 const char *kVideoOnly = "data/mp4/video-only.mp4";
@@ -395,6 +401,26 @@ TEST_CASE("FfmpegCamera: a failed secondary reopen leaves no audio stream behind
   REQUIRE(camera->getAudioStreamId() == -1);
 
   camera.reset();
+}
+
+TEST_CASE("FfmpegCamera: a re-prime onto a stream without audio drops the old audio stream") {
+  const std::string primary = "data/mp4/reprime-primary.mp4";
+  std::filesystem::copy_file(kWithAudio, primary, std::filesystem::copy_options::overwrite_existing);
+  SecondPathMonitor monitor("");
+  auto camera = std::make_unique<FfmpegCamera>(&monitor, primary, "", "", "", "", "",
+                                               160, 120, ZM_COLOUR_RGB24, -1, -1, -1, -1, true, true);
+
+  REQUIRE(camera->PrimeCapture() == 1);
+  REQUIRE(camera->getAudioStream() != nullptr);
+  REQUIRE(camera->getAudioStreamId() >= 0);
+
+  std::filesystem::copy_file(kVideoOnly, primary, std::filesystem::copy_options::overwrite_existing);
+  REQUIRE(camera->PrimeCapture() == 1);
+  REQUIRE(camera->getAudioStream() == nullptr);
+  REQUIRE(camera->getAudioStreamId() == -1);
+
+  camera.reset();
+  std::filesystem::remove(primary);
 }
 
 TEST_CASE("FfmpegCamera: video packets from the secondary input are not delivered as video") {

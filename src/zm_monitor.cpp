@@ -901,8 +901,8 @@ void Monitor::LoadCamera() {
     case VNC: {
 #if HAVE_LIBVNC
       camera = zm::make_unique<VncCamera>(
-          this, host.c_str(), port.c_str(), user.c_str(), pass.c_str(), width,
-          height, colours, brightness, contrast, hue, colour,
+          this, host.c_str(), port.c_str(), user.c_str(), pass.c_str(), camera_width,
+          camera_height, colours, brightness, contrast, hue, colour,
           purpose == CAPTURE, record_audio);
 #else   // HAVE_LIBVNC
       Fatal(
@@ -1560,7 +1560,8 @@ void Monitor::AddPrivacyBitmask() {
   for (const Zone &zone : zones) {
     if (zone.IsPrivacy()) {
       if (!privacy_image) {
-        privacy_image = zm::make_unique<Image>(width, height, 1, ZM_SUBPIX_ORDER_NONE);
+        // MaskPrivacy indexes the bitmask as y*width+x, so the rows must not be padded.
+        privacy_image = zm::make_unique<Image>(width, width, height, 1, ZM_SUBPIX_ORDER_NONE);
         privacy_image->Clear();
       }
       privacy_image->Fill(0xff, zone.GetPolygon());
@@ -5127,13 +5128,13 @@ std::string Monitor::Substitute(const std::string &format, SystemTimePoint ts_ti
 
   // Expand our own codes (%N, %Q, %f) before strftime. strftime copies unknown
   // conversions through on glibc but drops the % on BSD/macOS, so they have to
-  // be gone before it runs. When the code character is %, a literal % in an
-  // inserted value is doubled so strftime prints it as is.
+  // be gone before it runs. A literal % in an inserted value is doubled so
+  // strftime prints it as is, whichever character marks the codes.
   const char code_char = config.timestamp_code_char[0];
   const bool escape = (code_char == '%');
   auto append_value = [&](std::string &out, const std::string &value) {
     for (char c : value) {
-      if (escape && c == '%') out.push_back('%');
+      if (c == '%') out.push_back('%');
       out.push_back(c);
     }
   };
@@ -5856,6 +5857,8 @@ int Monitor::PrimeCapture() {
     packetqueue.addStream();
     shared_data->audio_frequency = camera->getFrequency();
     shared_data->audio_channels = camera->getChannels();
+  } else {
+    audio_stream_id = -1;
   }
 
   Debug(2,
@@ -6037,6 +6040,8 @@ int Monitor::Play() {
     packetqueue.addStream();
     shared_data->audio_frequency = camera->getFrequency();
     shared_data->audio_channels = camera->getChannels();
+  } else {
+    audio_stream_id = -1;
   }
 
   Debug(2,

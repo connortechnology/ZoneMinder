@@ -23,7 +23,8 @@ if ( canEdit('Monitors') ) {
   switch ( $_REQUEST['action'] ) {
   case 'sort' :
   {
-    saveMonitorSequence($_POST['monitor_ids']);
+    if ( ! saveMonitorSequence($_POST['monitor_ids']) )
+      ajaxError('Unable to save the monitor order: '.dbLastError());
     return;
   } // end case sort
   default:
@@ -44,6 +45,7 @@ function saveMonitorSequence($monitor_ids) {
   # LOCK TABLES commits any open transaction, so there is none to commit here.
   $dbConn = zmDbConn();
   $dbConn->exec('LOCK TABLES Monitors WRITE');
+  $ok = true;
   try {
     $ids = array();
     for ( $i = 0; $i < count($monitor_ids); $i += 1 ) {
@@ -51,6 +53,10 @@ function saveMonitorSequence($monitor_ids) {
       $monitor_id = preg_replace('/^monitor_id-/', '', $monitor_id);
       if ( ( !$monitor_id ) or ! ( is_integer($monitor_id) or ctype_digit($monitor_id) ) ) {
         \ZM\Warning('Got '.$monitor_id.' from '.$monitor_ids[$i]);
+        continue;
+      }
+      if ( !editableMonitor($monitor_id) ) {
+        \ZM\Warning('Not allowed to edit monitor '.$monitor_id.', skipping it in the sort');
         continue;
       }
       $ids[] = $monitor_id;
@@ -63,12 +69,16 @@ function saveMonitorSequence($monitor_ids) {
         $sequences = range($first, $first + count($ids) - 1);
       }
       foreach ( $ids as $i => $monitor_id ) {
-        dbQuery('UPDATE Monitors SET Sequence=? WHERE Id=?', array($sequences[$i], $monitor_id));
+        if ( ! dbQuery('UPDATE Monitors SET Sequence=? WHERE Id=?', array($sequences[$i], $monitor_id)) ) {
+          $ok = false;
+          break;
+        }
       }
     }
   } finally {
     $dbConn->exec('UNLOCK TABLES');
   }
+  return $ok;
 }
 
 // The legacy Function column is skipped: nothing maintains it any more.
@@ -697,6 +707,17 @@ function queryRequest() {
   return $data;
 }
 
+// Remove camera credentials from an exported monitor for users who cannot edit it.
+function exportStripCredentials(array $data) {
+  unset($data['User'], $data['Pass'], $data['ONVIF_Username'], $data['ONVIF_Password']);
+  foreach (array('Host', 'Path', 'SecondPath', 'ControlAddress', 'ONVIF_URL') as $field) {
+    if (isset($data[$field])) {
+      $data[$field] = ZM\removeUserinfo($data[$field]);
+    }
+  }
+  return $data;
+}
+
 function exportMonitorsJSON() {
   require_once('includes/Monitor.php');
   require_once('includes/Zone.php');
@@ -765,6 +786,10 @@ function exportMonitorsJSON() {
         unset($zone_data[$field]);
       }
       $monitor_data['Zones'][] = $zone_data;
+    }
+
+    if (!editableMonitor($db_row['Id'])) {
+      $monitor_data = exportStripCredentials($monitor_data);
     }
 
     $export['monitors'][] = $monitor_data;

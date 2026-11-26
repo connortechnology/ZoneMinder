@@ -27,6 +27,12 @@ if (!canEdit('Monitors', empty($_REQUEST['mid'])?0:$_REQUEST['mid'])) {
   $view = 'error';
   return;
 }
+// A clone copies the source monitor's settings, credentials included, so the
+// user needs the same permission on the source as for editing it.
+if (isset($_REQUEST['dupId']) and !canEdit('Monitors', validCardinal($_REQUEST['dupId']))) {
+  $view = 'error';
+  return;
+}
 
 $Server = null;
 if (defined('ZM_SERVER_ID')) {
@@ -105,7 +111,8 @@ if (isset($_REQUEST['newMonitor'])) {
     monitorFillUncheckedFields($_REQUEST['newMonitor']) : $_REQUEST['newMonitor']);
 
   if (ZM_OPT_X10)
-    $newX10Monitor = $_REQUEST['newX10Monitor'];
+    $newX10Monitor = (isset($_REQUEST['newX10Monitor']) and is_array($_REQUEST['newX10Monitor'])) ?
+      $_REQUEST['newX10Monitor'] + $x10Monitor : $x10Monitor;
 } else {
   if (ZM_OPT_X10)
     $newX10Monitor = $x10Monitor;
@@ -452,6 +459,10 @@ foreach ($tabs as $name=>$value) {
   ?>
     </ul>
   </nav> <!-- END PILL LIST -->
+<?php
+$events_url = '?view=events&amp;page=1&amp;filter%5BQuery%5D%5Bterms%5D%5B0%5D%5Battr%5D=Monitor&amp;filter%5BQuery%5D%5Bterms%5D%5B0%5D%5Bop%5D=%3D&amp;filter%5BQuery%5D%5Bterms%5D%5B0%5D%5Bval%5D='.$monitor->Id().'&amp;filter%5BQuery%5D%5Bsort_asc%5D=1&amp;filter%5BQuery%5D%5Bsort_field%5D=StartDateTime&amp;filter%5BQuery%5D%5Bskip_locked%5D=&amp;filter%5BQuery%5D%5Blimit%5D=0';
+$events_link = ($monitor->Id() && canView('Events')) ? '<a id="eventsBtn" class="btn btn-normal" data-toggle="tooltip" data-placement="top" title="'.translate('Events').'" href="'.$events_url.'"><i class="fa fa-calendar"></i></a>' : '';
+?>
   <div class="d-flex flex-column col-sm-offset-2 container-fluid">
     <!-- BEGIN MINI HEADER -->
     <div class="d-flex flex-row justify-content-between px-3 py-1">
@@ -461,6 +472,9 @@ foreach ($tabs as $name=>$value) {
       </div>
       
       <h2><?php echo translate('Monitor').' - '.($monitor->Id() ? $monitor->Id().' - ' : '').validHtmlStr($monitor->Name()) ?></h2>
+<?php if ($events_link) { ?>
+      <div><?php echo $events_link ?></div>
+<?php } ?>
 <?php
 if (canEdit('Monitors')) {
   if (isset($_REQUEST['dupId'])) {
@@ -1668,7 +1682,7 @@ echo htmlSelect('newMonitor[OutputContainer]', $videowriter_containers, $monitor
             </li>
             <li id="FunctionJanusProfileOverride">
               <label><?php echo translate('Janus Profile-ID Override') ?></label>
-              <input type="text" name="newMonitor[Janus_Profile_Override]" value="<?php echo $monitor->Janus_Profile_Override()?>"/>
+              <input type="text" name="newMonitor[Janus_Profile_Override]" value="<?php echo validHtmlStr($monitor->Janus_Profile_Override()) ?>" maxlength="30"/>
 <?php
   if ( isset($OLANG['FUNCTION_JANUS_PROFILE_OVERRIDE']) ) {
     echo '<div class="form-text">'.$OLANG['FUNCTION_JANUS_PROFILE_OVERRIDE']['Help'].'</div>';
@@ -1745,7 +1759,7 @@ $codecs = array(
             </li>
             <li>
 <?php
-  $stream_available = canView('Stream') and $monitor->Type()=='WebSite' or ($monitor->CaptureFPS() && $monitor->Capturing() != 'None');
+  $stream_available = canView('Stream') && ($monitor->Type()=='WebSite' || ($monitor->CaptureFPS() && $monitor->Capturing() != 'None'));
   $options = array();
 
   $ratio_factor = $monitor->ViewWidth() ? $monitor->ViewHeight() / $monitor->ViewWidth() : 1;

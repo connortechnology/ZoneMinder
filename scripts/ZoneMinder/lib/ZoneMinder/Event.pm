@@ -191,21 +191,26 @@ sub RelativePath {
         $$event{RelativePath} = '';
       }
     } elsif ( $$event{Scheme} eq 'Medium' ) {
-      if ( $event->Time() ) {
+      if ( $event->Time() and $$event{Id} ) {
         $$event{RelativePath} = join('/',
             $event->{MonitorId},
             POSIX::strftime('%Y-%m-%d', localtime($event->Time())),
             $event->{Id},
             );
       } else {
-        Error("Event $$event{Id} has no value for Time(), unable to determine path");
+        Error('Event has no Id or no value for Time(), unable to determine path');
         $$event{RelativePath} = '';
       }
     } else { # Shallow
-      $$event{RelativePath} = join('/',
-          $event->{MonitorId},
-          $event->{Id},
-          );
+      if ( $$event{Id} ) {
+        $$event{RelativePath} = join('/',
+            $event->{MonitorId},
+            $event->{Id},
+            );
+      } else {
+        Error('Event has no Id, unable to determine path');
+        $$event{RelativePath} = '';
+      }
     } # end if Scheme
   } # end if ! Path
 
@@ -516,8 +521,13 @@ sub delete {
       }
 
       if (!$err) {
-        $ZoneMinder::Database::dbh->commit() if !$in_transaction;
-        last;
+        last if $in_transaction;
+        # A failed commit rolls the deletes back, so the rows are still there; keep the files.
+        if ($ZoneMinder::Database::dbh->commit()) {
+          last;
+        }
+        $err = $ZoneMinder::Database::dbh->err() // 1;
+        $errstr = $ZoneMinder::Database::dbh->errstr() // 'commit failed';
       }
 
       $ZoneMinder::Database::dbh->rollback() if !$in_transaction;
@@ -968,7 +978,7 @@ sub recover_timestamps {
   Debug('Have ' . @contents . ' files in '.$path);
   closedir(DIR);
 
-  my @mp4_files = grep(/^\d+\-video\.(?:\w+\.)?mp4$/, @contents);
+  my @mp4_files = grep(/^\d+\-video\.(?:\w+\.)?(?:mp4|mkv|webm)$/, @contents);
   if ( @mp4_files ) {
     $$Event{DefaultVideo} = $mp4_files[0];
   }
@@ -1102,7 +1112,7 @@ sub fix_DefaultVideo {
     Debug('Have ' . @contents . ' files in '.$path);
     closedir(DIR);
 
-    my @mp4_files = grep(/^\d+\-video\.(?:\w+\.)?mp4$/, @contents);
+    my @mp4_files = grep(/^\d+\-video\.(?:\w+\.)?(?:mp4|mkv|webm)$/, @contents);
     if ( @mp4_files ) {
       $$event{DefaultVideo} = $mp4_files[0];
     }

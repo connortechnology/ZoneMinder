@@ -91,7 +91,11 @@ if ($action == 'save') {
 
   if (!$newMonitor['ModelId'] and ($newMonitor['Model'] != '')) {
     # Need to add a new Model entry
-    $newModel = ZM\Model::find_one(array('Name'=>$newMonitor['Model']));
+    # Model names are only unique per manufacturer, so look under this one.
+    $newModel = ZM\Model::find_one(array(
+      'Name'=>$newMonitor['Model'],
+      'ManufacturerId'=>$newMonitor['ManufacturerId'] ? $newMonitor['ManufacturerId'] : null
+    ));
     if (!$newModel) {
       $newModel = new ZM\Model();
       if (!$newModel->save(array(
@@ -106,6 +110,21 @@ if ($action == 'save') {
   }
 
   $monitor = new ZM\Monitor($mid);
+
+  # Refuse an Ffmpeg source path with no protocol. ffmpeg then fails in
+  # avformat_open_input with "Protocol not found" and zmdc restarts zmc in a
+  # loop without pointing at the field. Absolute paths and ffmpeg's scheme-less
+  # v4l2: form are valid, so allow those.
+  $type = isset($newMonitor['Type']) ? $newMonitor['Type'] : $monitor->Type();
+  if ($type == 'Ffmpeg') {
+    $path = array_key_exists('Path', $newMonitor) ? $newMonitor['Path'] : $monitor->Path();
+    if ($path !== null and $path !== '' and strpos($path, '://') === false and
+        substr($path, 0, 1) !== '/' and stripos($path, 'v4l2:') !== 0) {
+      $error_message .= translate('BadFfmpegPathProtocol').'</br>';
+      ZM\Warning('Refused to save monitor '.$mid.': Source Path must start with a protocol such as rtsp://');
+      return;
+    }
+  }
 
   // Define a field type for anything that's not simple text equivalent
   $types = monitorFormUncheckedDefaults();
@@ -190,7 +209,7 @@ if ($action == 'save') {
                 if (is_link($linkPath)) {
                   $absolutePath = realpath($linkPath);
                   if ($oldLinkPath == $linkPath) $oldLinkPathFound = true;
-                  if ($absolutePath == $Storage->Path().'/'.$mid) {
+                  if ($absolutePath == $storagePath.$mid) {
                     ZM\Debug("Deleting old link in storage '" . $Storage->Name() . "' " . $linkPath);
                     unlink($linkPath);
                   }
@@ -447,6 +466,14 @@ if ($action == 'save') {
           dbQuery('DELETE FROM MonitorActions WHERE Id=? AND MonitorId=?', array($action_id, $mid));
           $actionsChanged = true;
         }
+        continue;
+      }
+
+      # The same right ajax/control.php demands when an action is fired by hand.
+      # Without it a user who may edit this monitor could store an action whose
+      # alarms drive a light or speaker on a monitor they have no Control over.
+      if ( !canView('Control', $target) ) {
+        $error_message .= 'Ignoring action: no Control permission on monitor '.validInt($target).'.<br/>';
         continue;
       }
 

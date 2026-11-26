@@ -84,6 +84,7 @@ set(TEST_SOURCES
   zm_rtsp_deprecation.cpp
   zm_rtsp_server_keyframe.cpp
   zm_rtsp_server_main.cpp
+  zm_rtsp_server_authenticator.cpp
   zm_rtsp_server_pts_tracker.cpp
   zm_rtsp_server_marker.cpp
   zm_rtsp_server_nal_split.cpp
@@ -102,11 +103,13 @@ set(TEST_SOURCES
   zm_eventstream_hints.cpp
   zm_tag_row.cpp
   zm_eventstream_commands.cpp
+  zm_eventstream_frame.cpp
   zm_time.cpp
   zm_device_frames.cpp
   zm_user_default_password.cpp
   zm_user_group.cpp
   zm_remote_camera.cpp
+  zm_remote_camera_response_cap.cpp
   zm_uri.cpp
   zm_utils.cpp
   zm_mem_utils.cpp
